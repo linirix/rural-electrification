@@ -9,6 +9,7 @@ pub const MIN_DISTRIBUTION_PROJECT_CUSTOMERS: f64 = 80.0;
 pub const MAX_DISTRIBUTION_PROJECT_CUSTOMERS: f64 = 900.0;
 const BASE_ANNUAL_RATE: f64 = 0.052;
 const BASE_CREDIT_SPREAD: f64 = 0.018;
+const MAINTENANCE_REFERENCE_ASSET_BASE: f64 = 78_000.0;
 
 #[derive(Clone, Debug)]
 pub struct Game {
@@ -25,6 +26,11 @@ pub struct Game {
     pub last_report: Option<QuarterReport>,
     pub outcome: Option<Outcome>,
     rng: Rng,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct InitialVariance {
+    pub amplitude: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +123,7 @@ pub struct QuarterReport {
     pub lost_customers: f64,
     pub lost_customer_rate: f64,
     pub market_share: f64,
+    pub prior_market_share: f64,
     pub events: Vec<String>,
 }
 
@@ -150,19 +157,27 @@ struct Rng {
 
 impl Game {
     pub fn new() -> Self {
-        Self::with_seed(0xE1EC_0001)
+        Self::with_seed(fresh_seed())
     }
 
     pub fn with_seed(seed: u64) -> Self {
+        Self::with_seed_and_initial_variance(seed, InitialVariance::default())
+    }
+
+    pub fn with_seed_and_initial_variance(seed: u64, initial_variance: InitialVariance) -> Self {
+        let mut rng = Rng::new(seed);
         let market = Market {
             territory: "Core Market".to_string(),
             start_year: 1,
-            addressable_customers: 6_500.0,
-            electrification: 0.14,
-            avg_mwh_per_customer: 0.22,
-            variable_cost_per_mwh: 26.0,
-            standard_rate_cents: 10.4,
-            civic_patience: 0.76,
+            addressable_customers: varied_pct(&mut rng, 6_500.0, 0.08, initial_variance).round(),
+            electrification: varied_abs(&mut rng, 0.14, 0.018, initial_variance).clamp(0.10, 0.18),
+            avg_mwh_per_customer: varied_pct(&mut rng, 0.22, 0.08, initial_variance)
+                .clamp(0.18, 0.27),
+            variable_cost_per_mwh: varied_pct(&mut rng, 26.0, 0.07, initial_variance)
+                .clamp(21.0, 31.0),
+            standard_rate_cents: varied_abs(&mut rng, 10.4, 0.35, initial_variance)
+                .clamp(9.5, 11.3),
+            civic_patience: varied_abs(&mut rng, 0.76, 0.04, initial_variance).clamp(0.64, 0.88),
         };
 
         Self {
@@ -170,76 +185,83 @@ impl Game {
             campaign_quarters: DEFAULT_CAMPAIGN_QUARTERS,
             market,
             macro_state: MacroEnvironment {
-                annual_base_rate: BASE_ANNUAL_RATE,
-                credit_spread: BASE_CREDIT_SPREAD,
-                demand_index: 0.0,
-                cost_pressure: 0.0,
+                annual_base_rate: varied_abs(&mut rng, BASE_ANNUAL_RATE, 0.006, initial_variance)
+                    .clamp(0.038, 0.070),
+                credit_spread: varied_abs(&mut rng, BASE_CREDIT_SPREAD, 0.005, initial_variance)
+                    .clamp(0.008, 0.032),
+                demand_index: varied_abs(&mut rng, 0.0, 0.12, initial_variance).clamp(-0.22, 0.22),
+                cost_pressure: varied_abs(&mut rng, 0.0, 0.008, initial_variance)
+                    .clamp(-0.014, 0.018),
             },
-            player: Utility {
-                name: "Metro Consolidated".to_string(),
-                cash: 34_000.0,
-                debt: 20_000.0,
-                shares: 2_000.0,
-                stock_price: 24.0,
-                customers: 160.0,
-                generation_capacity_mwh: 72.0,
-                distribution_capacity: 275.0,
-                rate_cents: 10.5,
-                reputation: 55.0,
-                reliability: 0.82,
-                marketing_momentum: 0.08,
-                asset_base: 78_000.0,
-                last_quarter_customers: 160.0,
-            },
+            player: starting_utility(
+                "Metro Consolidated",
+                34_000.0,
+                20_000.0,
+                2_000.0,
+                24.0,
+                160.0,
+                72.0,
+                275.0,
+                10.5,
+                55.0,
+                0.82,
+                0.08,
+                78_000.0,
+                initial_variance,
+                &mut rng,
+            ),
             competitors: vec![
-                Utility {
-                    name: "North Loop Power".to_string(),
-                    cash: 18_500.0,
-                    debt: 12_000.0,
-                    shares: 0.0,
-                    stock_price: 0.0,
-                    customers: 260.0,
-                    generation_capacity_mwh: 118.0,
-                    distribution_capacity: 360.0,
-                    rate_cents: 10.1,
-                    reputation: 58.0,
-                    reliability: 0.81,
-                    marketing_momentum: 0.04,
-                    asset_base: 96_000.0,
-                    last_quarter_customers: 260.0,
-                },
-                Utility {
-                    name: "District Current".to_string(),
-                    cash: 12_000.0,
-                    debt: 8_000.0,
-                    shares: 0.0,
-                    stock_price: 0.0,
-                    customers: 210.0,
-                    generation_capacity_mwh: 95.0,
-                    distribution_capacity: 300.0,
-                    rate_cents: 9.8,
-                    reputation: 52.0,
-                    reliability: 0.76,
-                    marketing_momentum: 0.05,
-                    asset_base: 71_000.0,
-                    last_quarter_customers: 210.0,
-                },
-                Utility {
-                    name: "Metro Light".to_string(),
-                    cash: 7_500.0,
-                    debt: 6_500.0,
-                    shares: 0.0,
-                    stock_price: 0.0,
-                    customers: 110.0,
-                    generation_capacity_mwh: 50.0,
-                    distribution_capacity: 160.0,
-                    rate_cents: 11.2,
-                    reputation: 43.0,
-                    reliability: 0.71,
-                    marketing_momentum: 0.02,
-                    asset_base: 42_000.0,
-                    last_quarter_customers: 110.0,
-                },
+                starting_utility(
+                    "North Loop Power",
+                    18_500.0,
+                    12_000.0,
+                    0.0,
+                    0.0,
+                    260.0,
+                    118.0,
+                    360.0,
+                    10.1,
+                    58.0,
+                    0.81,
+                    0.04,
+                    96_000.0,
+                    initial_variance,
+                    &mut rng,
+                ),
+                starting_utility(
+                    "District Current",
+                    12_000.0,
+                    8_000.0,
+                    0.0,
+                    0.0,
+                    210.0,
+                    95.0,
+                    300.0,
+                    9.8,
+                    52.0,
+                    0.76,
+                    0.05,
+                    71_000.0,
+                    initial_variance,
+                    &mut rng,
+                ),
+                starting_utility(
+                    "Metro Light",
+                    7_500.0,
+                    6_500.0,
+                    0.0,
+                    0.0,
+                    110.0,
+                    50.0,
+                    160.0,
+                    11.2,
+                    43.0,
+                    0.71,
+                    0.02,
+                    42_000.0,
+                    initial_variance,
+                    &mut rng,
+                ),
             ],
             pending_projects: Vec::new(),
             acquisition_cooldown: 0,
@@ -247,7 +269,7 @@ impl Game {
             startup_index: 0,
             last_report: None,
             outcome: None,
-            rng: Rng::new(seed),
+            rng,
         }
     }
 
@@ -528,10 +550,11 @@ impl Game {
                 let spend = spend.clamp(1_500.0, 20_000.0);
                 self.require_cash(spend)?;
                 self.player.cash -= spend;
-                let gain = (spend / 22_000.0) * (1.05_f64 - self.player.reliability).max(0.05);
+                let gain = maintenance_reliability_gain(&self.player, spend);
                 self.player.reliability = (self.player.reliability + gain).clamp(0.35, 0.98);
-                self.player.reputation =
-                    (self.player.reputation + spend / 5_500.0).clamp(0.0, 100.0);
+                self.player.reputation = (self.player.reputation
+                    + maintenance_reputation_gain(&self.player, spend))
+                .clamp(0.0, 100.0);
                 Ok(format!(
                     "Spent {} on reliability work; gained {:.1} reliability points.",
                     money(spend),
@@ -553,6 +576,11 @@ impl Game {
                 lost_customers: 0.0,
                 lost_customer_rate: 0.0,
                 market_share: self.market_share(),
+                prior_market_share: self
+                    .last_report
+                    .as_ref()
+                    .map(|report| report.market_share)
+                    .unwrap_or_else(|| self.market_share()),
                 events: vec![format!("{} {}", outcome.headline, outcome.details)],
             };
             self.last_report = Some(report.clone());
@@ -561,6 +589,7 @@ impl Game {
 
         let label = self.date_label();
         let starting_customers = self.player.customers;
+        let starting_market_share = self.market_share();
         let mut events = Vec::new();
 
         self.advance_shocks(&mut events);
@@ -626,6 +655,7 @@ impl Game {
                 0.0
             },
             market_share: self.market_share(),
+            prior_market_share: starting_market_share,
             events,
         };
         self.last_report = Some(report.clone());
@@ -1073,7 +1103,7 @@ impl Game {
             if competitor.reliability < 0.78 && competitor.cash > 3_500.0 {
                 let spend = 4_000.0_f64.min(competitor.cash * 0.30);
                 competitor.cash -= spend;
-                let gain = (spend / 22_000.0) * (1.05_f64 - competitor.reliability).max(0.05);
+                let gain = maintenance_reliability_gain(competitor, spend);
                 competitor.reliability = (competitor.reliability + gain).clamp(0.35, 0.98);
             }
         }
@@ -1285,6 +1315,26 @@ impl Default for Game {
     }
 }
 
+impl InitialVariance {
+    pub const fn fixed() -> Self {
+        Self { amplitude: 0.0 }
+    }
+
+    pub const fn new(amplitude: f64) -> Self {
+        Self { amplitude }
+    }
+
+    fn scale(self) -> f64 {
+        self.amplitude.clamp(0.0, 2.0)
+    }
+}
+
+impl Default for InitialVariance {
+    fn default() -> Self {
+        Self::new(1.0)
+    }
+}
+
 impl Market {
     pub fn serviceable_customers(&self) -> f64 {
         self.addressable_customers * self.electrification
@@ -1432,6 +1482,83 @@ impl Rng {
     fn chance(&mut self, probability: f64) -> bool {
         self.next_f64() < probability.clamp(0.0, 1.0)
     }
+}
+
+fn fresh_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0xE1EC_0001)
+        ^ 0x9E37_79B9_7F4A_7C15
+}
+
+fn starting_utility(
+    name: &str,
+    cash: f64,
+    debt: f64,
+    shares: f64,
+    stock_price: f64,
+    customers: f64,
+    generation_capacity_mwh: f64,
+    distribution_capacity: f64,
+    rate_cents: f64,
+    reputation: f64,
+    reliability: f64,
+    marketing_momentum: f64,
+    asset_base: f64,
+    initial_variance: InitialVariance,
+    rng: &mut Rng,
+) -> Utility {
+    let varied_debt = varied_pct(rng, debt, 0.18, initial_variance).max(0.0);
+    let varied_customers = varied_pct(rng, customers, 0.12, initial_variance)
+        .round()
+        .max(20.0);
+    let varied_asset_base =
+        varied_pct(rng, asset_base, 0.12, initial_variance).max(varied_debt * 1.8);
+
+    Utility {
+        name: name.to_string(),
+        cash: varied_pct(rng, cash, 0.18, initial_variance).max(1_500.0),
+        debt: varied_debt,
+        shares,
+        stock_price: varied_pct(rng, stock_price, 0.12, initial_variance).max(stock_price.min(1.0)),
+        customers: varied_customers,
+        generation_capacity_mwh: varied_pct(rng, generation_capacity_mwh, 0.10, initial_variance)
+            .max(20.0),
+        distribution_capacity: varied_pct(rng, distribution_capacity, 0.12, initial_variance)
+            .max(50.0),
+        rate_cents: varied_abs(rng, rate_cents, 0.35, initial_variance).clamp(7.5, 14.5),
+        reputation: varied_abs(rng, reputation, 6.0, initial_variance).clamp(20.0, 85.0),
+        reliability: varied_abs(rng, reliability, 0.045, initial_variance).clamp(0.55, 0.94),
+        marketing_momentum: varied_abs(rng, marketing_momentum, 0.025, initial_variance)
+            .clamp(0.0, 0.18),
+        asset_base: varied_asset_base,
+        last_quarter_customers: varied_customers,
+    }
+}
+
+fn varied_pct(rng: &mut Rng, base: f64, percent: f64, initial_variance: InitialVariance) -> f64 {
+    base * (1.0 + rng.range(-percent, percent) * initial_variance.scale())
+}
+
+fn varied_abs(rng: &mut Rng, base: f64, amount: f64, initial_variance: InitialVariance) -> f64 {
+    base + rng.range(-amount, amount) * initial_variance.scale()
+}
+
+fn maintenance_reliability_gain(utility: &Utility, spend: f64) -> f64 {
+    (spend / 22_000.0)
+        * (1.05_f64 - utility.reliability).max(0.05)
+        * maintenance_asset_scale(utility)
+}
+
+fn maintenance_reputation_gain(utility: &Utility, spend: f64) -> f64 {
+    spend / 5_500.0 * maintenance_asset_scale(utility)
+}
+
+fn maintenance_asset_scale(utility: &Utility) -> f64 {
+    (MAINTENANCE_REFERENCE_ASSET_BASE / utility.asset_base.max(20_000.0))
+        .sqrt()
+        .clamp(0.35, 1.45)
 }
 
 fn settle_utility(
@@ -1654,6 +1781,43 @@ mod tests {
         assert!(game.player.cash < starting_cash + 20_000.0);
         assert!(game.player.shares > starting_shares);
         assert!(game.player.stock_price < starting_price);
+    }
+
+    #[test]
+    fn fixed_initial_variance_preserves_baseline_start() {
+        let game = Game::with_seed_and_initial_variance(1, InitialVariance::fixed());
+
+        assert!((game.player.cash - 34_000.0).abs() < 0.01);
+        assert!((game.player.debt - 20_000.0).abs() < 0.01);
+        assert!((game.player.customers - 160.0).abs() < 0.01);
+        assert!((game.player.reliability - 0.82).abs() < 0.0001);
+        assert!((game.market.addressable_customers - 6_500.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn seeded_initial_variance_changes_starting_conditions() {
+        let first = Game::with_seed_and_initial_variance(1, InitialVariance::default());
+        let second = Game::with_seed_and_initial_variance(2, InitialVariance::default());
+
+        assert_ne!(first.player.cash, second.player.cash);
+        assert_ne!(first.player.customers, second.player.customers);
+        assert_ne!(
+            first.market.addressable_customers,
+            second.market.addressable_customers
+        );
+    }
+
+    #[test]
+    fn default_initial_variance_stays_within_playable_bounds() {
+        for seed in 1..=250 {
+            let game = Game::with_seed_and_initial_variance(seed, InitialVariance::default());
+
+            assert!(game.player.cash >= 27_000.0 && game.player.cash <= 41_500.0);
+            assert!(game.player.debt >= 16_000.0 && game.player.debt <= 24_500.0);
+            assert!(game.player.customers >= 140.0 && game.player.customers <= 180.0);
+            assert!(game.player.reliability >= 0.77 && game.player.reliability <= 0.87);
+            assert!(game.player.capacity_headroom(&game.market) >= 45.0);
+        }
     }
 
     #[test]
@@ -1906,6 +2070,16 @@ mod tests {
     }
 
     #[test]
+    fn quarter_report_includes_prior_market_share() {
+        let mut game = Game::with_seed(48);
+        let starting_share = game.market_share();
+
+        let report = game.advance_quarter();
+
+        assert!((report.prior_market_share - starting_share).abs() < 0.0001);
+    }
+
+    #[test]
     fn churn_compares_player_rate_to_rival_rates_not_own_weighted_average() {
         let mut game = Game::with_seed(47);
         game.player.customers = 1_800.0;
@@ -2102,6 +2276,44 @@ mod tests {
         assert!(
             low_gain > high_gain * 2.0,
             "low reliability should gain much more: low {low_gain} vs high {high_gain}"
+        );
+    }
+
+    #[test]
+    fn maintenance_has_diminishing_returns_as_asset_base_grows() {
+        let mut small = Game::with_seed(72);
+        let mut large = Game::with_seed(72);
+        small.player.asset_base = 60_000.0;
+        large.player.asset_base = 300_000.0;
+        small.player.reliability = 0.76;
+        large.player.reliability = 0.76;
+        small.player.reputation = 55.0;
+        large.player.reputation = 55.0;
+
+        let small_reliability = small.player.reliability;
+        let large_reliability = large.player.reliability;
+        let small_reputation = small.player.reputation;
+        let large_reputation = large.player.reputation;
+
+        small
+            .apply_decision(Decision::Maintenance { spend: 6_000.0 })
+            .unwrap();
+        large
+            .apply_decision(Decision::Maintenance { spend: 6_000.0 })
+            .unwrap();
+
+        let small_reliability_gain = small.player.reliability - small_reliability;
+        let large_reliability_gain = large.player.reliability - large_reliability;
+        let small_reputation_gain = small.player.reputation - small_reputation;
+        let large_reputation_gain = large.player.reputation - large_reputation;
+
+        assert!(
+            small_reliability_gain > large_reliability_gain * 1.8,
+            "small asset base should gain more reliability: small {small_reliability_gain}, large {large_reliability_gain}"
+        );
+        assert!(
+            small_reputation_gain > large_reputation_gain * 1.8,
+            "small asset base should gain more reputation: small {small_reputation_gain}, large {large_reputation_gain}"
         );
     }
 

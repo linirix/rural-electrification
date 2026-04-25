@@ -1,22 +1,71 @@
 use electrification::{
-    DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game, OutcomeKind,
+    DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
+    InitialVariance, OutcomeKind,
 };
 
 fn main() {
     let options = parse_options();
-    let seeds = options.seeds;
+    if options.sweep_starts {
+        run_starting_variance_sweep(&options);
+    } else {
+        let variance = InitialVariance::new(options.variance.unwrap_or(1.0));
+        let summary = run_batch(options.seeds, options.verbose, variance);
+        print_summary(None, variance, &summary);
+    }
+}
+
+fn run_starting_variance_sweep(options: &Options) {
+    let profiles = [
+        ("fixed", InitialVariance::fixed()),
+        ("light", InitialVariance::new(0.55)),
+        ("moderate", InitialVariance::new(1.0)),
+        ("wide", InitialVariance::new(1.35)),
+        ("volatile", InitialVariance::new(1.70)),
+        ("max", InitialVariance::new(2.0)),
+    ];
+    println!(
+        "starting variance sweep; seeds per profile: {}",
+        options.seeds
+    );
+    for (name, variance) in profiles {
+        let summary = run_batch(options.seeds, options.verbose, variance);
+        print_summary(Some(name), variance, &summary);
+    }
+}
+
+fn run_batch(seeds: u32, verbose: bool, variance: InitialVariance) -> Summary {
+    let mut summary = Summary::default();
+    summary.runs = seeds;
     let mut victories = 0;
-    let mut total_share = 0.0;
-    let mut total_cash = 0.0;
-    let mut total_debt = 0.0;
-    let mut total_customers = 0.0;
 
     for seed in 1..=seeds {
-        let mut game = Game::with_seed(seed as u64 * 1_003);
+        let mut game = Game::with_seed_and_initial_variance(seed as u64 * 1_003, variance);
+        let start_share = game.market_share();
+        let start_cash = game.player.cash;
+        let start_debt = game.player.debt;
+        let start_customers = game.player.customers;
+        let start_reliability = game.player.reliability;
+        let start_rate = game.player.rate_cents;
+        let start_headroom = game.player.capacity_headroom(&game.market);
+        summary.start_share += start_share;
+        summary.start_cash += start_cash;
+        summary.start_debt += start_debt;
+        summary.start_customers += start_customers;
+        summary.start_reliability += start_reliability;
+        summary.start_rate += start_rate;
+        summary.start_headroom += start_headroom;
+        summary.start_share_range.observe(start_share);
+        summary.start_cash_range.observe(start_cash);
+        summary.start_debt_range.observe(start_debt);
+        summary.start_customers_range.observe(start_customers);
+        summary.start_reliability_range.observe(start_reliability);
+        summary.start_rate_range.observe(start_rate);
+        summary.start_headroom_range.observe(start_headroom);
+
         while game.outcome.is_none() {
             scripted_policy(&mut game);
             let report = game.advance_quarter();
-            if options.verbose {
+            if verbose {
                 println!(
                     "{} seed {}: share {:.1}%, customers {:.0}, cash {}, debt {}, reliability {:.0}%, profit {}",
                     report.label,
@@ -36,43 +85,146 @@ fn main() {
             Some(OutcomeKind::Victory)
         ) {
             victories += 1;
+        } else if let Some(outcome) = &game.outcome {
+            if outcome.headline.contains("Market Access") {
+                summary.market_access_defeats += 1;
+            } else if outcome.headline.contains("Receivership") {
+                summary.receivership_defeats += 1;
+            } else {
+                summary.board_defeats += 1;
+            }
         }
 
-        total_share += game.market_share();
-        total_cash += game.player.cash;
-        total_debt += game.player.debt;
-        total_customers += game.player.customers;
+        summary.finish_share += game.market_share();
+        summary.finish_cash += game.player.cash;
+        summary.finish_debt += game.player.debt;
+        summary.finish_customers += game.player.customers;
+        summary.finish_reliability += game.player.reliability;
     }
 
-    println!("runs: {seeds}");
+    summary.victories = victories;
+    summary
+}
+
+fn print_summary(profile: Option<&str>, variance: InitialVariance, summary: &Summary) {
+    if let Some(profile) = profile {
+        println!();
+        println!(
+            "profile: {profile} | variance amplitude {:.2}",
+            variance.amplitude
+        );
+    }
+    println!("runs: {}", summary.runs);
     println!(
-        "victories: {victories} ({:.0}%)",
-        victories as f64 / seeds as f64 * 100.0
+        "victories: {} ({:.1}%)",
+        summary.victories,
+        summary.victories as f64 / summary.runs as f64 * 100.0
+    );
+    if summary.victories < summary.runs {
+        println!(
+            "defeats: board {} | receivership {} | access {}",
+            summary.board_defeats, summary.receivership_defeats, summary.market_access_defeats
+        );
+    }
+    println!(
+        "avg start: share {:.1}%, customers {:.0}, cash {}, debt {}, reliability {:.0}%, rate {:.1}c, headroom {:.0}",
+        summary.start_share / summary.runs as f64 * 100.0,
+        summary.start_customers / summary.runs as f64,
+        electrification::sim::money(summary.start_cash / summary.runs as f64),
+        electrification::sim::money(summary.start_debt / summary.runs as f64),
+        summary.start_reliability / summary.runs as f64 * 100.0,
+        summary.start_rate / summary.runs as f64,
+        summary.start_headroom / summary.runs as f64
     );
     println!(
-        "avg market share: {:.1}%",
-        total_share / seeds as f64 * 100.0
+        "start ranges: share {:.1}-{:.1}%, customers {:.0}-{:.0}, cash {}-{}, debt {}-{}, reliability {:.0}-{:.0}%, rate {:.1}-{:.1}c, headroom {:.0}-{:.0}",
+        summary.start_share_range.min * 100.0,
+        summary.start_share_range.max * 100.0,
+        summary.start_customers_range.min,
+        summary.start_customers_range.max,
+        electrification::sim::money(summary.start_cash_range.min),
+        electrification::sim::money(summary.start_cash_range.max),
+        electrification::sim::money(summary.start_debt_range.min),
+        electrification::sim::money(summary.start_debt_range.max),
+        summary.start_reliability_range.min * 100.0,
+        summary.start_reliability_range.max * 100.0,
+        summary.start_rate_range.min,
+        summary.start_rate_range.max,
+        summary.start_headroom_range.min,
+        summary.start_headroom_range.max
     );
-    println!("avg customers: {:.0}", total_customers / seeds as f64);
     println!(
-        "avg cash: {}",
-        electrification::sim::money(total_cash / seeds as f64)
+        "avg finish: share {:.1}%, customers {:.0}, cash {}, debt {}, reliability {:.0}%",
+        summary.finish_share / summary.runs as f64 * 100.0,
+        summary.finish_customers / summary.runs as f64,
+        electrification::sim::money(summary.finish_cash / summary.runs as f64),
+        electrification::sim::money(summary.finish_debt / summary.runs as f64),
+        summary.finish_reliability / summary.runs as f64 * 100.0
     );
-    println!(
-        "avg debt: {}",
-        electrification::sim::money(total_debt / seeds as f64)
-    );
+}
+
+#[derive(Default)]
+struct Summary {
+    runs: u32,
+    victories: u32,
+    board_defeats: u32,
+    receivership_defeats: u32,
+    market_access_defeats: u32,
+    start_share: f64,
+    start_cash: f64,
+    start_debt: f64,
+    start_customers: f64,
+    start_reliability: f64,
+    start_rate: f64,
+    start_headroom: f64,
+    start_share_range: Range,
+    start_cash_range: Range,
+    start_debt_range: Range,
+    start_customers_range: Range,
+    start_reliability_range: Range,
+    start_rate_range: Range,
+    start_headroom_range: Range,
+    finish_share: f64,
+    finish_cash: f64,
+    finish_debt: f64,
+    finish_customers: f64,
+    finish_reliability: f64,
+}
+
+struct Range {
+    min: f64,
+    max: f64,
+}
+
+impl Range {
+    fn observe(&mut self, value: f64) {
+        self.min = self.min.min(value);
+        self.max = self.max.max(value);
+    }
+}
+
+impl Default for Range {
+    fn default() -> Self {
+        Self {
+            min: f64::INFINITY,
+            max: f64::NEG_INFINITY,
+        }
+    }
 }
 
 struct Options {
     seeds: u32,
     verbose: bool,
+    variance: Option<f64>,
+    sweep_starts: bool,
 }
 
 fn parse_options() -> Options {
     let mut args = std::env::args().skip(1);
     let mut seeds = 25;
     let mut verbose = false;
+    let mut variance = None;
+    let mut sweep_starts = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--seeds" => {
@@ -80,11 +232,20 @@ fn parse_options() -> Options {
                     seeds = value.max(1);
                 }
             }
+            "--variance" => {
+                variance = args.next().and_then(|raw| raw.parse::<f64>().ok());
+            }
+            "--sweep-starts" => sweep_starts = true,
             "--verbose" => verbose = true,
             _ => {}
         }
     }
-    Options { seeds, verbose }
+    Options {
+        seeds,
+        verbose,
+        variance,
+        sweep_starts,
+    }
 }
 
 fn scripted_policy(game: &mut Game) {
@@ -140,7 +301,8 @@ fn scripted_policy(game: &mut Game) {
     }
 
     if game.player.reliability < 0.80 && game.player.cash > 7_500.0 {
-        let _ = game.apply_decision(Decision::Maintenance { spend: 7_000.0 });
+        let spend = (5_500.0 + game.player.asset_base * 0.018).clamp(7_000.0, 20_000.0);
+        let _ = game.apply_decision(Decision::Maintenance { spend });
     }
 
     if let Some((index, price)) = cheapest_competitor(game) {

@@ -102,7 +102,7 @@ fn handle_command(game: &mut Game, command: &str) -> CommandResult {
     match first {
         "help" | "?" => CommandResult::ShowHelp,
         "status" | "s" => CommandResult::ShowStatus,
-        "advance" | "end" | "next" => CommandResult::Advanced(game.advance_quarter()),
+        "next" | "n" | "end" => CommandResult::Advanced(game.advance_quarter()),
         "quit" | "exit" => CommandResult::Quit,
         "build" => {
             let decision = match parts.get(1).copied() {
@@ -233,7 +233,7 @@ fn handle_command(game: &mut Game, command: &str) -> CommandResult {
             };
             apply(game, Decision::AdjustRate { delta_cents: delta })
         }
-        "maintenance" | "maintain" | "reliability" => {
+        "maintenance" | "maint" | "maintain" | "reliability" => {
             let spend = parts
                 .get(1)
                 .and_then(|value| parse_money(value))
@@ -268,8 +268,8 @@ fn print_help() {
             "repay [amount]         pay down debt with cash".to_string(),
             "buy <number>           acquire a listed competitor".to_string(),
             "rate up|down [cents]   change rate by cents, or 'rate 10.0' to set target".to_string(),
-            "maintenance [amount]   improve reliability and reputation".to_string(),
-            "advance                finish the quarter".to_string(),
+            "maintenance [amount]   improve reliability and reputation; alias: maint".to_string(),
+            "next                   finish the quarter; alias: n".to_string(),
             "quit                   leave the game".to_string(),
         ],
     );
@@ -343,7 +343,11 @@ fn print_report(report: &QuarterReport) {
             muted("Market share"),
             styled(
                 share_tone(report.market_share),
-                format!("{:.0}%", report.market_share * 100.0)
+                format!(
+                    "{:.0}% ({:.0}%)",
+                    report.market_share * 100.0,
+                    report.prior_market_share * 100.0
+                )
             )
         ),
     ];
@@ -361,15 +365,16 @@ fn print_outcome(outcome: &Outcome) {
         OutcomeKind::Victory => (BOLD_GREEN, "victory"),
         OutcomeKind::Defeat => (BOLD_RED, "defeat"),
     };
+    let mut lines = vec![styled(outcome_style, &outcome.headline)];
+    lines.extend(wrap_plain_text(&outcome.details, CONTENT_WIDTH));
+    lines.push(format!(
+        "{} {}",
+        muted("Result:"),
+        styled(outcome_style, result)
+    ));
+
     println!();
-    print_box(
-        "Outcome",
-        &[
-            styled(outcome_style, &outcome.headline),
-            outcome.details.clone(),
-            format!("{} {}", muted("Result:"), styled(outcome_style, result)),
-        ],
-    );
+    print_box("Outcome", &lines);
 }
 
 fn parse_money(value: &str) -> Option<f64> {
@@ -952,7 +957,7 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
         action_line("repay [amt]", "limited by cash and outstanding debt"),
         action_line(
             "maintenance",
-            "immediate reliability/reputation gain; best before outages compound",
+            "reliability/reputation gain; larger systems need larger budgets",
         ),
     ];
 
@@ -1314,6 +1319,33 @@ fn fit_line(line: &str, width: usize) -> String {
     truncated
 }
 
+fn wrap_plain_text(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.len() + 1 + word.len() <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(current);
+            current = word.to_string();
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines
+}
+
 fn visible_width(line: &str) -> usize {
     let mut width = 0;
     let mut chars = line.chars().peekable();
@@ -1359,6 +1391,53 @@ mod tests {
     }
 
     #[test]
+    fn next_advances_the_quarter() {
+        let mut game = Game::with_seed(100);
+
+        match handle_command(&mut game, "next") {
+            CommandResult::Advanced(report) => assert_eq!(report.label, "Year 1 Q1"),
+            _ => panic!("next should advance the quarter"),
+        }
+        assert_eq!(game.quarter, 1);
+    }
+
+    #[test]
+    fn n_alias_advances_the_quarter() {
+        let mut game = Game::with_seed(101);
+
+        match handle_command(&mut game, "n") {
+            CommandResult::Advanced(report) => assert_eq!(report.label, "Year 1 Q1"),
+            _ => panic!("n should advance the quarter"),
+        }
+        assert_eq!(game.quarter, 1);
+    }
+
+    #[test]
+    fn old_advance_command_is_not_the_turn_command() {
+        let mut game = Game::with_seed(102);
+
+        match handle_command(&mut game, "advance") {
+            CommandResult::Continue(message) => assert!(message.contains("Unknown command")),
+            _ => panic!("advance should no longer finish the quarter"),
+        }
+        assert_eq!(game.quarter, 0);
+    }
+
+    #[test]
+    fn maint_alias_runs_maintenance() {
+        let mut game = Game::with_seed(103);
+        let starting_cash = game.player.cash;
+        let starting_reliability = game.player.reliability;
+
+        match handle_command(&mut game, "maint 4500") {
+            CommandResult::Continue(message) => assert!(message.contains("reliability")),
+            _ => panic!("maint should apply maintenance"),
+        }
+        assert!(game.player.cash < starting_cash);
+        assert!(game.player.reliability > starting_reliability);
+    }
+
+    #[test]
     fn visible_width_ignores_ansi_escape_sequences() {
         let line = format!("{}Cash{} {}", DIM, RESET, styled(BOLD_GREEN, "$34.0k"));
         assert_eq!(visible_width(&line), "Cash $34.0k".len());
@@ -1374,5 +1453,15 @@ mod tests {
         let fitted = fit_line(&line, 24);
         assert_eq!(visible_width(&fitted), 24);
         assert!(fitted.contains(BOLD_CYAN));
+    }
+
+    #[test]
+    fn outcome_details_wrap_within_box_width() {
+        let details = "Repeated outages pushed regulators and lenders to move the company into managed restructuring.";
+
+        let lines = wrap_plain_text(details, 42);
+
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|line| visible_width(line) <= 42));
     }
 }

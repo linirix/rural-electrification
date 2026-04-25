@@ -30,9 +30,9 @@ repay 10000
 debt repay 10000
 rate up 2
 rate down 1
-maintenance 4500
+maint 4500
 buy 1
-advance
+n
 help
 quit
 ```
@@ -43,6 +43,7 @@ Capital action limits:
 - `buyback [amount]` has no fixed command cap, but it cannot spend cash you do not have and cannot retire the last public float.
 - `debt [amount]` is floating-rate and limited by borrowing room, which is based on the asset base, current debt, and current credit conditions.
 - `repay [amount]` is limited by cash on hand and outstanding debt.
+- `maintenance [amount]` has diminishing reliability and reputation impact as the asset base grows, so larger systems need larger maintenance budgets.
 
 Macroeconomic inputs change each quarter. Base rates, credit spreads, demand conditions, and cost pressure affect debt service, borrowing room, growth, operating costs, and equity financing appetite. Higher leverage now raises the annual floating rate paid on outstanding debt, so leveraged firms are more exposed when credit tightens.
 
@@ -51,6 +52,9 @@ Macroeconomic inputs change each quarter. Base rates, credit spreads, demand con
 ```sh
 cargo test
 cargo run --bin playtest -- --seeds 50
+cargo run --bin playtest -- --sweep-starts --seeds 10000
 ```
+
+Normal games start with seeded variance around the opening market, macro conditions, company balance sheet, service quality, rivals, and capacity position. The playtest sweep compares fixed, light, moderate, wide, volatile, and maximum starting variance profiles.
 
 The core simulation is separated from terminal rendering so the same model can later support a richer TUI, save files, or a web adaptation.
