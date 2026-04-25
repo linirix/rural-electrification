@@ -44,6 +44,7 @@ pub struct Game {
     pub acquisition_cooldown: u32,
     pub active_shocks: Vec<ActiveShock>,
     pub startup_index: u32,
+    pub review_completed: bool,
     pub last_report: Option<QuarterReport>,
     pub outcome: Option<Outcome>,
     rng: Rng,
@@ -52,6 +53,21 @@ pub struct Game {
 #[derive(Clone, Copy, Debug)]
 pub struct InitialVariance {
     pub amplitude: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CustomerAllocationKind {
+    NewConnections,
+    SwitchedAccounts,
+}
+
+impl CustomerAllocationKind {
+    fn label(self) -> &'static str {
+        match self {
+            CustomerAllocationKind::NewConnections => "new connections",
+            CustomerAllocationKind::SwitchedAccounts => "switched accounts",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +202,7 @@ pub struct Outcome {
     pub kind: OutcomeKind,
     pub headline: String,
     pub details: String,
+    pub can_continue: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -313,6 +330,7 @@ impl Game {
             acquisition_cooldown: 0,
             active_shocks: Vec::new(),
             startup_index: 0,
+            review_completed: false,
             last_report: None,
             outcome: None,
             rng,
@@ -327,7 +345,10 @@ impl Game {
 
     pub fn apply_decision(&mut self, decision: Decision) -> Result<String, String> {
         if self.outcome.is_some() {
-            return Err("The market review is already over.".to_string());
+            return Err(
+                "The market review is paused on a final result. Use 'continue' to keep playing if the review allows it."
+                    .to_string(),
+            );
         }
 
         match decision {
@@ -632,7 +653,7 @@ impl Game {
                     .map(|report| report.market_share)
                     .unwrap_or_else(|| self.market_share()),
                 attributions: vec![
-                    "The market review is already over; no new operating quarter was processed."
+                    "The market review is paused on a final result; no new operating quarter was processed."
                         .to_string(),
                 ],
                 events: vec![format!("{} {}", outcome.headline, outcome.details)],
@@ -741,6 +762,24 @@ impl Game {
         };
         self.last_report = Some(report.clone());
         report
+    }
+
+    pub fn continue_after_review(&mut self) -> Result<String, String> {
+        let Some(outcome) = &self.outcome else {
+            return Err("There is no completed market review to continue from.".to_string());
+        };
+
+        if !outcome.can_continue {
+            return Err(
+                "This outcome is terminal; the company cannot continue operating.".to_string(),
+            );
+        }
+
+        let headline = outcome.headline.clone();
+        self.outcome = None;
+        Ok(format!(
+            "Continuing after {headline}. The formal review is complete; operations now continue without a fixed end date."
+        ))
     }
 
     pub fn market_share(&self) -> f64 {
@@ -1065,20 +1104,34 @@ impl Game {
 
         let player_loss = churn_for(&self.player, player_alternative_rate);
         self.player.customers -= player_loss;
+        let mut player_switch_gain = self.allocate_customers_from(
+            player_loss,
+            CustomerAllocationKind::SwitchedAccounts,
+            Some(0),
+        );
 
-        let mut churn_pool = player_loss;
-        for (competitor, alternative_rate) in self
+        let competitor_losses = self
             .competitors
-            .iter_mut()
+            .iter()
             .zip(competitor_alternative_rates)
-        {
-            let loss = churn_for(competitor, alternative_rate);
-            competitor.customers -= loss;
-            churn_pool += loss;
+            .map(|(competitor, alternative_rate)| churn_for(competitor, alternative_rate))
+            .collect::<Vec<_>>();
+
+        for (index, loss) in competitor_losses.into_iter().enumerate() {
+            self.competitors[index].customers -= loss;
+            player_switch_gain += self.allocate_customers_from(
+                loss,
+                CustomerAllocationKind::SwitchedAccounts,
+                Some(index + 1),
+            );
         }
 
-        if churn_pool > 0.0 {
-            self.allocate_customers(churn_pool, events, "switched accounts");
+        if player_switch_gain >= 8.0 {
+            events.push(format!(
+                "Your sales and service teams captured {:.0} {}.",
+                player_switch_gain,
+                CustomerAllocationKind::SwitchedAccounts.label()
+            ));
         }
 
         player_loss
@@ -1116,18 +1169,36 @@ impl Game {
         let base_prospects =
             (natural_demand * 0.36 + self.market.addressable_customers * 0.006).max(18.0);
         let prospects = base_prospects * self.demand_shock_multiplier();
-        self.allocate_customers(prospects, events, "new connections");
+        let player_gain =
+            self.allocate_customers_from(prospects, CustomerAllocationKind::NewConnections, None);
+        if player_gain >= 8.0 {
+            events.push(format!(
+                "Your sales and service teams captured {:.0} {}.",
+                player_gain,
+                CustomerAllocationKind::NewConnections.label()
+            ));
+        }
     }
 
-    fn allocate_customers(&mut self, prospects: f64, events: &mut Vec<String>, label: &str) {
+    fn allocate_customers_from(
+        &mut self,
+        prospects: f64,
+        allocation_kind: CustomerAllocationKind,
+        excluded_utility_index: Option<usize>,
+    ) -> f64 {
         if prospects <= 0.0 {
-            return;
+            return 0.0;
         }
 
-        let scores = self.competition_scores();
+        let mut scores = self.competition_scores(allocation_kind);
+        if let Some(index) = excluded_utility_index {
+            if index < scores.len() {
+                scores[index] = 0.0;
+            }
+        }
         let score_total: f64 = scores.iter().sum();
         if score_total <= 0.0 {
-            return;
+            return 0.0;
         }
 
         let mut won = Vec::with_capacity(scores.len());
@@ -1145,22 +1216,31 @@ impl Game {
             competitor.customers += gain;
         }
 
-        if player_gain >= 8.0 {
-            events.push(format!(
-                "Your sales and service teams captured {:.0} {label}.",
-                player_gain
-            ));
-        }
+        player_gain
     }
 
-    fn competition_scores(&self) -> Vec<f64> {
+    fn competition_scores(&self, allocation_kind: CustomerAllocationKind) -> Vec<f64> {
         let average_rate = self.average_rate();
         let mut scores = Vec::with_capacity(self.competitors.len() + 1);
-        scores.push(self.player.competition_score(&self.market, average_rate));
+        scores.push(
+            self.player
+                .competition_score(&self.market, average_rate, allocation_kind),
+        );
         for competitor in &self.competitors {
-            scores.push(competitor.competition_score(&self.market, average_rate));
+            scores.push(competitor.competition_score(&self.market, average_rate, allocation_kind));
         }
         scores
+    }
+
+    #[cfg(test)]
+    fn allocation_share(&self, allocation_kind: CustomerAllocationKind) -> f64 {
+        let scores = self.competition_scores(allocation_kind);
+        let score_total: f64 = scores.iter().sum();
+        if score_total <= 0.0 {
+            0.0
+        } else {
+            scores[0] / score_total
+        }
     }
 
     fn average_rate(&self) -> f64 {
@@ -1233,6 +1313,7 @@ impl Game {
                 headline: "Market Access Lost".to_string(),
                 details: "Repeated outages pushed regulators and lenders to move the company into managed restructuring."
                     .to_string(),
+                can_continue: false,
             });
             return;
         }
@@ -1243,13 +1324,15 @@ impl Game {
                 headline: "Bankers Forced Receivership".to_string(),
                 details: "The company could not finance expansion and interest at the same time."
                     .to_string(),
+                can_continue: false,
             });
             return;
         }
 
-        if self.quarter >= self.campaign_quarters {
+        if !self.review_completed && self.quarter >= self.campaign_quarters {
             let share = self.market_share();
             let healthy_balance_sheet = self.player.debt_to_assets() <= 0.95;
+            self.review_completed = true;
             if share >= 0.45 && self.player.reliability >= 0.72 && healthy_balance_sheet {
                 self.outcome = Some(Outcome {
                     kind: OutcomeKind::Victory,
@@ -1258,6 +1341,7 @@ impl Game {
                         "You finished with {:.0}% of connected accounts, solid reliability, and a balance sheet lenders can still underwrite.",
                         share * 100.0
                     ),
+                    can_continue: true,
                 });
             } else {
                 self.outcome = Some(Outcome {
@@ -1267,6 +1351,7 @@ impl Game {
                         "After Year 5 you held {:.0}% of connected accounts. The board wanted a clearer path to durable market leadership.",
                         share * 100.0
                     ),
+                    can_continue: true,
                 });
             }
         }
@@ -1404,18 +1489,44 @@ impl Utility {
         self.generation_capacity_mwh * self.reliability.max(0.45) - self.demanded_mwh(market)
     }
 
-    fn competition_score(&self, market: &Market, average_rate: f64) -> f64 {
-        let rate_component = ((average_rate - self.rate_cents) * 0.16).clamp(-0.60, 0.55);
-        let reliability_component = (self.reliability - 0.74) * 1.65;
-        let reputation_component = (self.reputation - 50.0) / 85.0;
+    fn competition_score(
+        &self,
+        market: &Market,
+        average_rate: f64,
+        allocation_kind: CustomerAllocationKind,
+    ) -> f64 {
+        let (
+            rate_sensitivity,
+            rate_cap,
+            reliability_sensitivity,
+            reputation_divisor,
+            marketing_cap,
+            utilization_bonus,
+            utilization_penalty,
+        ) = match allocation_kind {
+            CustomerAllocationKind::NewConnections => (0.20, 0.65, 1.85, 85.0, 0.85, 0.18, 0.35),
+            CustomerAllocationKind::SwitchedAccounts => (0.30, 0.85, 2.35, 110.0, 0.55, 0.24, 0.45),
+        };
+
+        let rate_component =
+            ((average_rate - self.rate_cents) * rate_sensitivity).clamp(-rate_cap, rate_cap);
+        let reliability_component = (self.reliability - 0.74) * reliability_sensitivity;
+        let reputation_component = (self.reputation - 50.0) / reputation_divisor;
         let capacity_component = (self.capacity_headroom(market)
             / (market.addressable_customers * 0.08))
             .clamp(-0.35, 0.45);
-        let marketing_component = self.marketing_momentum.clamp(0.0, 0.85);
+        let marketing_component = self.marketing_momentum.clamp(0.0, marketing_cap);
+        let utilization = self.utilization(market);
+        let utilization_component = if utilization <= 0.82 {
+            ((0.82 - utilization) / 0.82).clamp(0.0, 1.0) * utilization_bonus
+        } else {
+            -((utilization - 0.82) / 0.18).clamp(0.0, 1.0) * utilization_penalty
+        };
         (1.0 + rate_component
             + reliability_component
             + reputation_component
             + capacity_component
+            + utilization_component
             + marketing_component)
             .max(0.05)
     }

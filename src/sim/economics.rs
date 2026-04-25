@@ -6,6 +6,9 @@ use super::{
     Utility,
 };
 
+const SERVICE_REPUTATION_RELIABILITY_THRESHOLD: f64 = 0.84;
+const SERVICE_REPUTATION_UTILIZATION_LIMIT: f64 = 0.82;
+
 pub(super) fn maintenance_reliability_gain(utility: &Utility, spend: f64) -> f64 {
     (spend / 22_000.0)
         * (1.05_f64 - utility.reliability).max(0.05)
@@ -75,6 +78,17 @@ pub(super) fn settle_utility(
         utility.reliability = (utility.reliability + 0.004).clamp(0.35, 0.98);
     }
 
+    let service_reputation_gain = service_reputation_gain(utility, market, unmet_demand_ratio);
+    if service_reputation_gain > 0.0 {
+        utility.reputation = (utility.reputation + service_reputation_gain).clamp(0.0, 100.0);
+        if is_player {
+            events.push(format!(
+                "Reliable service with manageable utilization lifted Metro's reputation by {:.1} points.",
+                service_reputation_gain
+            ));
+        }
+    }
+
     FirmFinances {
         revenue,
         operating_cost,
@@ -83,6 +97,25 @@ pub(super) fn settle_utility(
         served_mwh,
         unmet_demand_ratio,
     }
+}
+
+fn service_reputation_gain(utility: &Utility, market: &Market, unmet_demand_ratio: f64) -> f64 {
+    if unmet_demand_ratio > 0.01
+        || utility.reliability < SERVICE_REPUTATION_RELIABILITY_THRESHOLD
+        || utility.utilization(market) > SERVICE_REPUTATION_UTILIZATION_LIMIT
+    {
+        return 0.0;
+    }
+
+    let reliability_quality =
+        ((utility.reliability - SERVICE_REPUTATION_RELIABILITY_THRESHOLD) / 0.12).clamp(0.0, 1.0);
+    let utilization_cushion = ((SERVICE_REPUTATION_UTILIZATION_LIMIT
+        - utility.utilization(market))
+        / SERVICE_REPUTATION_UTILIZATION_LIMIT)
+        .clamp(0.0, 1.0);
+    let reputation_headroom = ((88.0 - utility.reputation) / 33.0).clamp(0.10, 1.0);
+
+    (0.20 + reliability_quality * 0.35 + utilization_cushion * 0.15).min(0.70) * reputation_headroom
 }
 
 pub(super) fn churn_for(utility: &Utility, average_rate: f64) -> f64 {

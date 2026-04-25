@@ -364,6 +364,51 @@ fn quarter_report_explains_major_result_drivers() {
 }
 
 #[test]
+fn formal_review_can_be_continued_past_campaign_end() {
+    let mut game = Game::with_seed(52);
+    game.campaign_quarters = 1;
+    game.player.cash = 100_000.0;
+    game.player.debt = 0.0;
+    game.player.customers = 1_200.0;
+    game.player.generation_capacity_mwh = 600.0;
+    game.player.distribution_capacity = 1_800.0;
+    game.player.reliability = 0.92;
+    for competitor in &mut game.competitors {
+        competitor.customers = 25.0;
+    }
+
+    game.advance_quarter();
+
+    let outcome = game.outcome.as_ref().expect("expected formal review");
+    assert_eq!(outcome.kind, OutcomeKind::Victory);
+    assert!(outcome.can_continue);
+    assert!(game.review_completed);
+
+    let message = game.continue_after_review().unwrap();
+    assert!(message.contains("Continuing after"));
+    assert!(game.outcome.is_none());
+
+    let continued_quarter = game.quarter;
+    game.advance_quarter();
+
+    assert_eq!(game.quarter, continued_quarter + 1);
+    assert!(game.outcome.is_none());
+}
+
+#[test]
+fn terminal_operating_failures_cannot_be_continued() {
+    let mut game = Game::with_seed(53);
+    game.player.reliability = 0.40;
+
+    game.advance_quarter();
+
+    let outcome = game.outcome.as_ref().expect("expected terminal failure");
+    assert_eq!(outcome.headline, "Market Access Lost");
+    assert!(!outcome.can_continue);
+    assert!(game.continue_after_review().is_err());
+}
+
+#[test]
 fn churn_compares_player_rate_to_rival_rates_not_own_weighted_average() {
     let mut game = Game::with_seed(47);
     game.player.customers = 1_800.0;
@@ -684,6 +729,64 @@ fn maintenance_has_diminishing_returns_as_asset_base_grows() {
 }
 
 #[test]
+fn reliable_service_at_reasonable_utilization_lifts_reputation() {
+    let mut game = Game::with_seed(73);
+    game.player.cash = 80_000.0;
+    game.player.customers = 500.0;
+    game.player.generation_capacity_mwh = 180.0;
+    game.player.distribution_capacity = 800.0;
+    game.player.reliability = 0.92;
+    game.player.reputation = 55.0;
+    let starting_reputation = game.player.reputation;
+    let mut events = Vec::new();
+
+    settle_utility(
+        &mut game.player,
+        &game.market,
+        &game.macro_state,
+        1.0,
+        true,
+        &mut events,
+    );
+
+    assert!(game.player.reputation > starting_reputation);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("manageable utilization"))
+    );
+}
+
+#[test]
+fn high_utilization_blocks_passive_reputation_gain() {
+    let mut game = Game::with_seed(74);
+    game.player.cash = 80_000.0;
+    game.player.customers = 710.0;
+    game.player.generation_capacity_mwh = 180.0;
+    game.player.distribution_capacity = 900.0;
+    game.player.reliability = 0.92;
+    game.player.reputation = 55.0;
+    let starting_reputation = game.player.reputation;
+    let mut events = Vec::new();
+
+    settle_utility(
+        &mut game.player,
+        &game.market,
+        &game.macro_state,
+        1.0,
+        true,
+        &mut events,
+    );
+
+    assert!((game.player.reputation - starting_reputation).abs() < 0.001);
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.contains("manageable utilization"))
+    );
+}
+
+#[test]
 fn stock_price_can_exceed_old_eighty_five_cap_with_strong_fundamentals() {
     let mut game = Game::with_seed(81);
     game.player.stock_price = 200.0;
@@ -961,4 +1064,88 @@ fn market_allocation_rewards_marketing_and_capacity() {
     aggressive.advance_quarter();
 
     assert!(aggressive.player.customers > quiet.player.customers);
+}
+
+#[test]
+fn allocation_scores_reward_low_rates_and_reliable_service() {
+    let mut neutral = Game::with_seed(98);
+    configure_equal_customer_selection_market(&mut neutral);
+    let neutral_new_share = neutral.allocation_share(CustomerAllocationKind::NewConnections);
+
+    let mut advantaged = neutral.clone();
+    advantaged.player.rate_cents = 8.6;
+    advantaged.player.reliability = 0.94;
+    for competitor in &mut advantaged.competitors {
+        competitor.rate_cents = 10.8;
+        competitor.reliability = 0.76;
+    }
+
+    let new_share = advantaged.allocation_share(CustomerAllocationKind::NewConnections);
+    let switched_share = advantaged.allocation_share(CustomerAllocationKind::SwitchedAccounts);
+
+    assert!(
+        new_share > neutral_new_share + 0.07,
+        "low rates and high reliability should materially improve new-customer share: neutral {neutral_new_share}, advantaged {new_share}"
+    );
+    assert!(
+        switched_share > new_share + 0.02,
+        "switching customers should be more responsive than new customers: new {new_share}, switched {switched_share}"
+    );
+}
+
+#[test]
+fn high_utilization_reduces_customer_selection_advantage() {
+    let mut healthy = Game::with_seed(99);
+    configure_equal_customer_selection_market(&mut healthy);
+    healthy.player.rate_cents = 8.6;
+    healthy.player.reliability = 0.94;
+
+    let mut hot = healthy.clone();
+    hot.player.generation_capacity_mwh = 78.0;
+
+    let healthy_share = healthy.allocation_share(CustomerAllocationKind::NewConnections);
+    let hot_share = hot.allocation_share(CustomerAllocationKind::NewConnections);
+
+    assert!(
+        healthy_share > hot_share + 0.03,
+        "reasonable utilization should beat a hot-running network: healthy {healthy_share}, hot {hot_share}"
+    );
+}
+
+#[test]
+fn switching_accounts_do_not_return_to_source_utility() {
+    let mut game = Game::with_seed(100);
+    configure_equal_customer_selection_market(&mut game);
+    game.player.rate_cents = 8.6;
+    game.player.reliability = 0.94;
+    let starting_customers = game.player.customers;
+
+    let player_gain =
+        game.allocate_customers_from(40.0, CustomerAllocationKind::SwitchedAccounts, Some(0));
+
+    assert_eq!(player_gain, 0.0);
+    assert_eq!(game.player.customers, starting_customers);
+}
+
+fn configure_equal_customer_selection_market(game: &mut Game) {
+    game.market.addressable_customers = 8_000.0;
+    game.market.avg_mwh_per_customer = 0.22;
+    game.market.standard_rate_cents = 10.0;
+    game.player.customers = 300.0;
+    game.player.generation_capacity_mwh = 220.0;
+    game.player.distribution_capacity = 900.0;
+    game.player.rate_cents = 10.0;
+    game.player.reliability = 0.84;
+    game.player.reputation = 55.0;
+    game.player.marketing_momentum = 0.0;
+
+    for competitor in &mut game.competitors {
+        competitor.customers = 300.0;
+        competitor.generation_capacity_mwh = 220.0;
+        competitor.distribution_capacity = 900.0;
+        competitor.rate_cents = 10.0;
+        competitor.reliability = 0.84;
+        competitor.reputation = 55.0;
+        competitor.marketing_momentum = 0.0;
+    }
 }

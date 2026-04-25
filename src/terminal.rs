@@ -69,7 +69,9 @@ pub fn run() -> io::Result<()> {
                 print_report(&report);
                 if let Some(outcome) = &game.outcome {
                     print_outcome(outcome);
-                    break;
+                    if !outcome.can_continue {
+                        break;
+                    }
                 }
             }
             CommandResult::ShowStatus => {
@@ -136,6 +138,10 @@ fn handle_command(game: &mut Game, command: &str) -> CommandResult {
         "help" | "?" => CommandResult::ShowHelp,
         "status" | "s" => CommandResult::ShowStatus,
         "next" | "n" | "end" => CommandResult::Advanced(game.advance_quarter()),
+        "continue" | "resume" | "sandbox" => match game.continue_after_review() {
+            Ok(message) => CommandResult::Continue(message),
+            Err(message) => CommandResult::Continue(format!("Cannot continue: {message}")),
+        },
         "quit" | "exit" => CommandResult::Quit,
         "preview" | "quote" | "plan" => preview_command(game, &parts),
         "build" | "marketing" | "market" | "advertise" | "issue" | "stock" | "equity"
@@ -862,6 +868,7 @@ fn print_help() {
             "help       command reference".to_string(),
             "next       finish quarter".to_string(),
             "n          finish quarter".to_string(),
+            "continue   keep playing after review".to_string(),
             "quit       leave game".to_string(),
         ],
         "Input Notes",
@@ -1000,6 +1007,9 @@ fn print_outcome(outcome: &Outcome) {
         muted("Result:"),
         styled(outcome_style, result)
     ));
+    if outcome.can_continue {
+        lines.push("Type 'continue' to keep operating, or 'quit' to leave the game.".to_string());
+    }
 
     println!();
     print_box("Outcome", &lines);
@@ -1189,6 +1199,10 @@ fn progress_meter(current: f64, reference: f64, tone: &str) -> String {
 }
 
 fn quarters_remaining_label(game: &Game) -> String {
+    if game.review_completed {
+        return "review complete".to_string();
+    }
+
     let remaining = game.campaign_quarters.saturating_sub(game.quarter);
     match remaining {
         0 => "review due now".to_string(),
@@ -1364,6 +1378,16 @@ fn board_metric_line(label: &str, current: f64, target: f64, higher_is_better: b
 }
 
 fn next_board_target(game: &Game) -> BoardTarget {
+    if game.review_completed {
+        return BoardTarget {
+            label: "Continuation",
+            quarter: game.quarter,
+            share: SHARE_TARGET,
+            reliability: RELIABILITY_TARGET,
+            leverage: LEVERAGE_LIMIT,
+        };
+    }
+
     board_targets()
         .into_iter()
         .find(|target| game.quarter < target.quarter)
@@ -2615,6 +2639,30 @@ mod tests {
             CommandResult::ShowBoard => {}
             _ => panic!("board should show objectives"),
         }
+    }
+
+    #[test]
+    fn continue_command_resumes_after_formal_review() {
+        let mut game = Game::with_seed(116);
+        game.campaign_quarters = 1;
+        game.player.cash = 100_000.0;
+        game.player.debt = 0.0;
+        game.player.customers = 1_200.0;
+        game.player.generation_capacity_mwh = 600.0;
+        game.player.distribution_capacity = 1_800.0;
+        game.player.reliability = 0.92;
+        for competitor in &mut game.competitors {
+            competitor.customers = 25.0;
+        }
+        game.advance_quarter();
+
+        match handle_command(&mut game, "continue") {
+            CommandResult::Continue(message) => assert!(message.contains("Continuing after")),
+            _ => panic!("continue should clear a continuable formal review"),
+        }
+
+        assert!(game.outcome.is_none());
+        assert!(game.review_completed);
     }
 
     #[test]
