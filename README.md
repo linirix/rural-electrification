@@ -41,8 +41,10 @@ Capital action limits:
 
 - `stock issue [amount]` has no fixed proceeds cap. Larger issues are possible, but they face steeper issue discounts, fees, dilution, and reputation pressure.
 - `buyback [amount]` has no fixed command cap, but it cannot spend cash you do not have and cannot retire the last public float.
-- `debt [amount]` is limited by borrowing room, which is based on the asset base and current debt.
+- `debt [amount]` is floating-rate and limited by borrowing room, which is based on the asset base, current debt, and current credit conditions.
 - `repay [amount]` is limited by cash on hand and outstanding debt.
+
+Macroeconomic inputs change each quarter. Base rates, credit spreads, demand conditions, and cost pressure affect debt service, borrowing room, growth, operating costs, and equity financing appetite. Higher leverage now raises the annual floating rate paid on outstanding debt, so leveraged firms are more exposed when credit tightens.
 
 ## Test And Playtest
 

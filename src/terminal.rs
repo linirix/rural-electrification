@@ -1,8 +1,8 @@
 use std::io::{self, Write};
 
 use crate::sim::{
-    DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game, OutcomeKind,
-    QuarterReport, distribution_project_cost, distribution_project_duration,
+    DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game, Outcome,
+    OutcomeKind, QuarterReport, distribution_project_cost, distribution_project_duration,
     generation_project_cost, generation_project_duration, money,
 };
 
@@ -51,32 +51,18 @@ pub fn run() -> io::Result<()> {
         match handle_command(&mut game, command) {
             CommandResult::Continue(message) => {
                 clear_screen();
-                if !message.is_empty() {
-                    print_box("Notice", &[message]);
-                }
                 print_status(&game);
+                if !message.is_empty() {
+                    print_notice(&message);
+                }
             }
             CommandResult::Advanced(report) => {
                 clear_screen();
+                print_status(&game);
                 print_report(&report);
                 if let Some(outcome) = &game.outcome {
-                    let outcome_style = match outcome.kind {
-                        OutcomeKind::Victory => BOLD_GREEN,
-                        OutcomeKind::Defeat => BOLD_RED,
-                    };
-                    println!("\n{}", styled(outcome_style, &outcome.headline));
-                    println!("{}", outcome.details);
-                    match outcome.kind {
-                        OutcomeKind::Victory => {
-                            println!("{} {}", muted("Result:"), styled(BOLD_GREEN, "victory"))
-                        }
-                        OutcomeKind::Defeat => {
-                            println!("{} {}", muted("Result:"), styled(BOLD_RED, "defeat"))
-                        }
-                    }
+                    print_outcome(outcome);
                     break;
-                } else {
-                    print_status(&game);
                 }
             }
             CommandResult::ShowStatus => {
@@ -327,6 +313,11 @@ fn print_competitors(game: &Game) {
     print_box("Rivals", &competitor_lines(game));
 }
 
+fn print_notice(message: &str) {
+    println!();
+    print_box("Notice", &[message.to_string()]);
+}
+
 fn print_report(report: &QuarterReport) {
     let mut lines = vec![
         format!(
@@ -341,10 +332,14 @@ fn print_report(report: &QuarterReport) {
             styled(profit_tone(report.profit), money(report.profit))
         ),
         format!(
-            "{} {} gross, {} churn | {} {}",
+            "{} {} gross, {} churn ({}) | {} {}",
             muted("Customers:"),
             styled(BOLD_GREEN, format!("+{:.0}", report.new_customers)),
             styled(RED, format!("-{:.0}", report.lost_customers)),
+            styled(
+                churn_tone(report.lost_customer_rate),
+                format_churn_rate(report.lost_customer_rate)
+            ),
             muted("Market share"),
             styled(
                 share_tone(report.market_share),
@@ -359,6 +354,22 @@ fn print_report(report: &QuarterReport) {
     }
     println!();
     print_box(&format!("{} Results", report.label), &lines);
+}
+
+fn print_outcome(outcome: &Outcome) {
+    let (outcome_style, result) = match outcome.kind {
+        OutcomeKind::Victory => (BOLD_GREEN, "victory"),
+        OutcomeKind::Defeat => (BOLD_RED, "defeat"),
+    };
+    println!();
+    print_box(
+        "Outcome",
+        &[
+            styled(outcome_style, &outcome.headline),
+            outcome.details.clone(),
+            format!("{} {}", muted("Result:"), styled(outcome_style, result)),
+        ],
+    );
 }
 
 fn parse_money(value: &str) -> Option<f64> {
@@ -458,8 +469,9 @@ fn parse_rate_number(value: &str) -> Result<f64, String> {
 }
 
 fn financial_lines(game: &Game) -> Vec<String> {
-    let borrowing_room = (game.player.asset_base * 0.95 - game.player.debt).max(0.0);
+    let borrowing_room = game.borrowing_room();
     let leverage = game.player.debt_to_assets();
+    let debt_rate = game.player_annual_interest_rate();
     let mut lines = vec![
         format!(
             "{} {} | {} {} | {} {}",
@@ -487,6 +499,31 @@ fn financial_lines(game: &Game) -> Vec<String> {
             styled(BOLD, format!("{:>6.0}", game.player.shares)),
             muted("Market cap"),
             styled(BOLD, format!("{:>8}", money(game.player.market_cap())))
+        ),
+        format!(
+            "{} {} | {} {} | {} {} | {} {} | {} {}",
+            muted("Macro"),
+            styled(macro_credit_tone(game), game.macro_state.credit_label()),
+            muted("Base"),
+            styled(
+                interest_rate_tone(game.macro_state.annual_base_rate),
+                format!("{:.1}%", game.macro_state.annual_base_rate * 100.0)
+            ),
+            muted("Spread"),
+            styled(
+                spread_tone(game.macro_state.credit_spread),
+                format!("{:.1}%", game.macro_state.credit_spread * 100.0)
+            ),
+            muted("Debt rate"),
+            styled(
+                interest_rate_tone(debt_rate),
+                format!("{:.1}%", debt_rate * 100.0)
+            ),
+            muted("Debt cap"),
+            styled(
+                debt_cap_tone(game.macro_state.borrowing_limit_ratio()),
+                format!("{:.0}%", game.macro_state.borrowing_limit_ratio() * 100.0)
+            )
         ),
     ];
 
@@ -713,10 +750,14 @@ fn signal_lines(game: &Game) -> Vec<String> {
             "Trend",
             CYAN,
             format!(
-                "last quarter net customers {}, profit {}, share {}",
+                "last quarter net customers {}, churn {}, profit {}, share {}",
                 styled(
                     customer_tone(net_customers),
                     format!("{:+.0}", net_customers)
+                ),
+                styled(
+                    churn_tone(report.lost_customer_rate),
+                    format_churn_rate(report.lost_customer_rate)
                 ),
                 styled(profit_tone(report.profit), money(report.profit)),
                 styled(
@@ -732,6 +773,27 @@ fn signal_lines(game: &Game) -> Vec<String> {
             "no prior quarter yet; first decision sets growth posture.",
         ));
     }
+
+    lines.push(signal_line(
+        "Macro",
+        macro_credit_tone(game),
+        format!(
+            "credit {} | demand {} | costs {} | your debt rate {}",
+            styled(macro_credit_tone(game), game.macro_state.credit_label()),
+            styled(
+                demand_tone(game.macro_state.demand_index),
+                game.macro_state.demand_label()
+            ),
+            styled(
+                cost_pressure_tone(game.macro_state.cost_pressure),
+                game.macro_state.cost_label()
+            ),
+            styled(
+                interest_rate_tone(game.player_annual_interest_rate()),
+                format!("{:.1}%", game.player_annual_interest_rate() * 100.0)
+            )
+        ),
+    ));
 
     let average_rate = market_average_rate(game);
     let rate_gap = game.player.rate_cents - average_rate;
@@ -861,7 +923,7 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
         ),
         action_line(
             "debt [amt]",
-            "limited by borrowing room shown in Financials",
+            "floating-rate debt; room depends on credit and assets",
         ),
         action_line("repay [amt]", "limited by cash and outstanding debt"),
         action_line(
@@ -964,6 +1026,67 @@ fn signal_line(label: &str, tone: &str, body: impl std::fmt::Display) -> String 
     format!("{} {}", styled(tone, format!("{label}:")), body)
 }
 
+fn macro_credit_tone(game: &Game) -> &'static str {
+    let rate = game.macro_state.benchmark_credit_rate();
+    if rate >= 0.105 {
+        BOLD_RED
+    } else if rate >= 0.080 {
+        BOLD_YELLOW
+    } else {
+        BOLD_GREEN
+    }
+}
+
+fn interest_rate_tone(rate: f64) -> &'static str {
+    if rate >= 0.14 {
+        BOLD_RED
+    } else if rate >= 0.09 {
+        BOLD_YELLOW
+    } else {
+        BOLD_GREEN
+    }
+}
+
+fn spread_tone(spread: f64) -> &'static str {
+    if spread >= 0.045 {
+        BOLD_RED
+    } else if spread >= 0.028 {
+        BOLD_YELLOW
+    } else {
+        BOLD_GREEN
+    }
+}
+
+fn debt_cap_tone(limit: f64) -> &'static str {
+    if limit <= 0.75 {
+        BOLD_RED
+    } else if limit <= 0.88 {
+        BOLD_YELLOW
+    } else {
+        BOLD_GREEN
+    }
+}
+
+fn demand_tone(index: f64) -> &'static str {
+    if index <= -0.25 {
+        BOLD_RED
+    } else if index < 0.20 {
+        BOLD_YELLOW
+    } else {
+        BOLD_GREEN
+    }
+}
+
+fn cost_pressure_tone(pressure: f64) -> &'static str {
+    if pressure >= 0.030 {
+        BOLD_RED
+    } else if pressure > 0.004 {
+        BOLD_YELLOW
+    } else {
+        BOLD_GREEN
+    }
+}
+
 fn cash_tone(cash: f64) -> &'static str {
     if cash < 5_000.0 {
         BOLD_RED
@@ -998,6 +1121,20 @@ fn customer_tone(customers: f64) -> &'static str {
     if customers < 0.0 {
         BOLD_RED
     } else if customers < 15.0 {
+        BOLD_YELLOW
+    } else {
+        BOLD_GREEN
+    }
+}
+
+fn format_churn_rate(churn_rate: f64) -> String {
+    format!("{:.2}%", churn_rate * 100.0)
+}
+
+fn churn_tone(churn_rate: f64) -> &'static str {
+    if churn_rate >= 0.025 {
+        BOLD_RED
+    } else if churn_rate >= 0.012 {
         BOLD_YELLOW
     } else {
         BOLD_GREEN

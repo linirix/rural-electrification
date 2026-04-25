@@ -7,12 +7,15 @@ pub const MIN_GENERATION_PROJECT_MWH: f64 = 60.0;
 pub const MAX_GENERATION_PROJECT_MWH: f64 = 650.0;
 pub const MIN_DISTRIBUTION_PROJECT_CUSTOMERS: f64 = 80.0;
 pub const MAX_DISTRIBUTION_PROJECT_CUSTOMERS: f64 = 900.0;
+const BASE_ANNUAL_RATE: f64 = 0.052;
+const BASE_CREDIT_SPREAD: f64 = 0.018;
 
 #[derive(Clone, Debug)]
 pub struct Game {
     pub quarter: u32,
     pub campaign_quarters: u32,
     pub market: Market,
+    pub macro_state: MacroEnvironment,
     pub player: Utility,
     pub competitors: Vec<Utility>,
     pub pending_projects: Vec<Project>,
@@ -32,6 +35,14 @@ pub struct Market {
     pub variable_cost_per_mwh: f64,
     pub standard_rate_cents: f64,
     pub civic_patience: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct MacroEnvironment {
+    pub annual_base_rate: f64,
+    pub credit_spread: f64,
+    pub demand_index: f64,
+    pub cost_pressure: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +98,7 @@ pub struct QuarterReport {
     pub profit: f64,
     pub new_customers: f64,
     pub lost_customers: f64,
+    pub lost_customer_rate: f64,
     pub market_share: f64,
     pub events: Vec<String>,
 }
@@ -140,6 +152,12 @@ impl Game {
             quarter: 0,
             campaign_quarters: DEFAULT_CAMPAIGN_QUARTERS,
             market,
+            macro_state: MacroEnvironment {
+                annual_base_rate: BASE_ANNUAL_RATE,
+                credit_spread: BASE_CREDIT_SPREAD,
+                demand_index: 0.0,
+                cost_pressure: 0.0,
+            },
             player: Utility {
                 name: "Metro Consolidated".to_string(),
                 cash: 34_000.0,
@@ -281,10 +299,13 @@ impl Game {
                 let old_market_cap = self.player.market_cap().max(1.0);
                 let old_shares = self.player.shares.max(1.0);
                 let pressure = amount / old_market_cap;
-                let issue_discount = (0.03 + pressure * 0.08).clamp(0.03, 0.35);
+                let finance_pressure = self.macro_state.financing_pressure();
+                let issue_discount =
+                    (0.03 + pressure * 0.08 + finance_pressure * 0.055).clamp(0.03, 0.38);
                 let issue_price = (self.player.stock_price * (1.0 - issue_discount)).max(1.0);
                 let new_shares = amount / issue_price;
-                let underwriting_cost = amount * (0.025 + pressure.min(4.0) * 0.015);
+                let underwriting_cost =
+                    amount * (0.025 + pressure.min(4.0) * 0.015 + finance_pressure * 0.012);
                 let net_proceeds = amount - underwriting_cost;
                 let post_money_price = (old_market_cap + net_proceeds) / (old_shares + new_shares);
                 let signal_drag = (pressure * 0.025).clamp(0.0, 0.12);
@@ -342,22 +363,24 @@ impl Game {
             }
             Decision::Borrow { amount } => {
                 let amount = positive_amount(amount, "debt issuance")?;
-                let debt_capacity = self.player.asset_base * 0.95 - self.player.debt;
+                let debt_capacity = self.borrowing_room();
                 if amount > debt_capacity {
                     return Err(format!(
-                        "Bankers will only extend about {} more against the present asset base.",
-                        money(debt_capacity.max(0.0))
+                        "Bankers will only extend about {} more under current credit conditions.",
+                        money(debt_capacity)
                     ));
                 }
                 self.player.cash += amount;
                 self.player.debt += amount;
                 let leverage = self.player.debt_to_assets();
+                let annual_rate = self.macro_state.annual_interest_rate_for(&self.player);
                 if leverage > 0.72 {
                     self.player.reputation = (self.player.reputation - 1.8).clamp(0.0, 100.0);
                 }
                 Ok(format!(
-                    "Borrowed {} at a floating 7 percent annual rate. Debt/assets now {:.0}%.",
+                    "Borrowed {} at a current floating rate of {:.1}% annual. Debt/assets now {:.0}%.",
                     money(amount),
+                    annual_rate * 100.0,
                     leverage * 100.0
                 ))
             }
@@ -370,11 +393,16 @@ impl Game {
                 self.require_cash(payment)?;
                 self.player.cash -= payment;
                 self.player.debt -= payment;
-                Ok(format!(
-                    "Repaid {} of debt. Debt/assets now {:.0}%.",
-                    money(payment),
-                    self.player.debt_to_assets() * 100.0
-                ))
+                if self.player.debt > 0.0 {
+                    Ok(format!(
+                        "Repaid {} of debt. Debt/assets now {:.0}%; floating rate now {:.1}% annual.",
+                        money(payment),
+                        self.player.debt_to_assets() * 100.0,
+                        self.macro_state.annual_interest_rate_for(&self.player) * 100.0
+                    ))
+                } else {
+                    Ok("Repaid all outstanding debt.".to_string())
+                }
             }
             Decision::Acquire { competitor_index } => {
                 if self.acquisition_cooldown > 0 {
@@ -478,6 +506,7 @@ impl Game {
                 profit: 0.0,
                 new_customers: 0.0,
                 lost_customers: 0.0,
+                lost_customer_rate: 0.0,
                 market_share: self.market_share(),
                 events: vec![format!("{} {}", outcome.headline, outcome.details)],
             };
@@ -489,6 +518,7 @@ impl Game {
         let starting_customers = self.player.customers;
         let mut events = Vec::new();
 
+        self.advance_macro_environment(&mut events);
         self.complete_projects(&mut events);
         self.grow_market(&mut events);
         self.competitor_plans(&mut events);
@@ -501,11 +531,23 @@ impl Game {
         let lost_customers = self.customer_churn(&mut events);
         self.allocate_new_customers(&mut events);
 
-        let player_finances = settle_utility(&mut self.player, &self.market, true, &mut events);
+        let player_finances = settle_utility(
+            &mut self.player,
+            &self.market,
+            &self.macro_state,
+            true,
+            &mut events,
+        );
         let competitor_count = self.competitors.len();
         for index in 0..competitor_count {
             let competitor = &mut self.competitors[index];
-            settle_utility(competitor, &self.market, false, &mut events);
+            settle_utility(
+                competitor,
+                &self.market,
+                &self.macro_state,
+                false,
+                &mut events,
+            );
         }
 
         self.update_stock_price(&player_finances);
@@ -523,6 +565,11 @@ impl Game {
             profit: player_finances.profit,
             new_customers: (self.player.customers - starting_customers + lost_customers).max(0.0),
             lost_customers,
+            lost_customer_rate: if starting_customers > 0.0 {
+                lost_customers / starting_customers
+            } else {
+                0.0
+            },
             market_share: self.market_share(),
             events,
         };
@@ -556,6 +603,15 @@ impl Game {
         self.market.serviceable_customers()
     }
 
+    pub fn borrowing_room(&self) -> f64 {
+        (self.player.asset_base * self.macro_state.borrowing_limit_ratio() - self.player.debt)
+            .max(0.0)
+    }
+
+    pub fn player_annual_interest_rate(&self) -> f64 {
+        self.macro_state.annual_interest_rate_for(&self.player)
+    }
+
     pub fn acquisition_price(&self, competitor_index: usize) -> f64 {
         let competitor = &self.competitors[competitor_index];
         let customer_value = competitor.customers * 70.0;
@@ -577,6 +633,63 @@ impl Game {
             ))
         } else {
             Ok(())
+        }
+    }
+
+    fn advance_macro_environment(&mut self, events: &mut Vec<String>) {
+        let old = self.macro_state.clone();
+
+        self.macro_state.annual_base_rate = (self.macro_state.annual_base_rate
+            + self.rng.range(-0.004, 0.0055))
+        .clamp(0.032, 0.105);
+        self.macro_state.credit_spread = (self.macro_state.credit_spread * 0.78
+            + BASE_CREDIT_SPREAD * 0.22
+            + self.rng.range(-0.0035, 0.0048))
+        .clamp(0.008, 0.075);
+        self.macro_state.demand_index =
+            (self.macro_state.demand_index * 0.58 + self.rng.range(-0.32, 0.36)).clamp(-0.60, 0.70);
+        self.macro_state.cost_pressure = (self.macro_state.cost_pressure * 0.66
+            + self.rng.range(-0.014, 0.020))
+        .clamp(-0.030, 0.060);
+
+        if self.rng.chance(0.07) {
+            self.macro_state.credit_spread =
+                (self.macro_state.credit_spread + self.rng.range(0.010, 0.026)).clamp(0.008, 0.085);
+        }
+        if self.rng.chance(0.06) {
+            self.macro_state.demand_index =
+                (self.macro_state.demand_index - self.rng.range(0.20, 0.42)).clamp(-0.70, 0.70);
+        }
+        if self.rng.chance(0.06) {
+            self.macro_state.cost_pressure = (self.macro_state.cost_pressure
+                + self.rng.range(0.020, 0.045))
+            .clamp(-0.030, 0.080);
+        }
+
+        let old_credit = old.benchmark_credit_rate();
+        let new_credit = self.macro_state.benchmark_credit_rate();
+        if new_credit - old_credit > 0.012 {
+            events.push(format!(
+                "Credit markets tightened; benchmark debt now prices near {:.1}% before leverage premiums.",
+                new_credit * 100.0
+            ));
+        } else if old_credit - new_credit > 0.010 {
+            events.push(format!(
+                "Credit markets eased; benchmark debt now prices near {:.1}% before leverage premiums.",
+                new_credit * 100.0
+            ));
+        }
+
+        if self.macro_state.demand_index < -0.42 && old.demand_index >= -0.42 {
+            events.push("Demand conditions weakened across the service territory.".to_string());
+        } else if self.macro_state.demand_index > 0.45 && old.demand_index <= 0.45 {
+            events.push("Demand conditions strengthened across the service territory.".to_string());
+        }
+
+        if self.macro_state.cost_pressure > 0.045 && old.cost_pressure <= 0.045 {
+            events.push(
+                "Input costs moved sharply higher for fuel, labor, and equipment.".to_string(),
+            );
         }
     }
 
@@ -612,15 +725,22 @@ impl Game {
     }
 
     fn grow_market(&mut self, events: &mut Vec<String>) {
-        let address_growth = 1.006 + self.rng.range(0.0, 0.006);
+        let demand_cycle = self.macro_state.demand_index;
+        let address_growth = 1.006 + self.rng.range(0.0, 0.006) + demand_cycle * 0.003;
         self.market.addressable_customers *= address_growth;
 
-        let adoption_gain =
-            0.015 + self.rng.range(0.0, 0.007) + (self.player.reputation - 50.0).max(0.0) / 7_000.0;
+        let adoption_gain = (0.015
+            + self.rng.range(0.0, 0.007)
+            + (self.player.reputation - 50.0).max(0.0) / 7_000.0
+            + demand_cycle * 0.010)
+            .clamp(0.004, 0.034);
         self.market.electrification =
             (self.market.electrification + adoption_gain).clamp(0.05, 0.68);
-        self.market.avg_mwh_per_customer *= 1.004 + self.rng.range(0.0, 0.004);
-        self.market.variable_cost_per_mwh *= 1.0 + self.rng.range(-0.010, 0.014);
+        self.market.avg_mwh_per_customer *=
+            (1.004 + self.rng.range(0.0, 0.004) + demand_cycle * 0.002).clamp(0.996, 1.012);
+        self.market.variable_cost_per_mwh *=
+            (1.0 + self.rng.range(-0.008, 0.010) + self.macro_state.cost_pressure)
+                .clamp(0.965, 1.085);
 
         if self.rng.chance(0.18) {
             events.push(
@@ -660,13 +780,21 @@ impl Game {
     }
 
     fn customer_churn(&mut self, events: &mut Vec<String>) -> f64 {
-        let average_rate = self.average_rate();
-        let player_loss = churn_for(&self.player, average_rate);
+        let player_alternative_rate = self.rival_average_rate_for_player();
+        let competitor_alternative_rates = (0..self.competitors.len())
+            .map(|index| self.alternative_rate_for_competitor(index))
+            .collect::<Vec<_>>();
+
+        let player_loss = churn_for(&self.player, player_alternative_rate);
         self.player.customers -= player_loss;
 
         let mut churn_pool = player_loss;
-        for competitor in &mut self.competitors {
-            let loss = churn_for(competitor, average_rate);
+        for (competitor, alternative_rate) in self
+            .competitors
+            .iter_mut()
+            .zip(competitor_alternative_rates)
+        {
+            let loss = churn_for(competitor, alternative_rate);
             competitor.customers -= loss;
             churn_pool += loss;
         }
@@ -676,6 +804,31 @@ impl Game {
         }
 
         player_loss
+    }
+
+    fn rival_average_rate_for_player(&self) -> f64 {
+        weighted_rate(
+            self.competitors
+                .iter()
+                .map(|competitor| (competitor.rate_cents, competitor.customers)),
+            self.market.standard_rate_cents,
+        )
+    }
+
+    fn alternative_rate_for_competitor(&self, excluded_index: usize) -> f64 {
+        let rivals = std::iter::once((self.player.rate_cents, self.player.customers)).chain(
+            self.competitors
+                .iter()
+                .enumerate()
+                .filter_map(|(index, competitor)| {
+                    if index == excluded_index {
+                        None
+                    } else {
+                        Some((competitor.rate_cents, competitor.customers))
+                    }
+                }),
+        );
+        weighted_rate(rivals, self.market.standard_rate_cents)
     }
 
     fn allocate_new_customers(&mut self, events: &mut Vec<String>) {
@@ -751,9 +904,11 @@ impl Game {
         let growth_signal = (self.player.customers / 160.0 - 1.0).clamp(-0.10, 0.18) * 0.10;
         let leverage_drag = (self.player.debt_to_assets() - 0.65).max(0.0) * 0.08;
         let reliability_signal = (self.player.reliability - 0.80) * 0.05;
+        let macro_signal = self.macro_state.valuation_signal();
         let noise = self.rng.range(-0.018, 0.018);
         let change =
-            annualized_earnings_yield + growth_signal + reliability_signal + noise - leverage_drag;
+            annualized_earnings_yield + growth_signal + reliability_signal + macro_signal + noise
+                - leverage_drag;
         self.player.stock_price = (self.player.stock_price * (1.0 + change)).clamp(6.0, 85.0);
     }
 
@@ -817,6 +972,69 @@ impl Default for Game {
 impl Market {
     pub fn serviceable_customers(&self) -> f64 {
         self.addressable_customers * self.electrification
+    }
+}
+
+impl MacroEnvironment {
+    pub fn benchmark_credit_rate(&self) -> f64 {
+        self.annual_base_rate + self.credit_spread
+    }
+
+    pub fn annual_interest_rate_for(&self, utility: &Utility) -> f64 {
+        let leverage = utility.debt_to_assets();
+        let leverage_premium = (leverage - 0.45).max(0.0).powf(1.35) * 0.18;
+        let distress_premium = (leverage - 0.85).max(0.0) * 0.34;
+        (self.benchmark_credit_rate() + leverage_premium + distress_premium).clamp(0.035, 0.28)
+    }
+
+    pub fn borrowing_limit_ratio(&self) -> f64 {
+        let rate_stress = (self.annual_base_rate - BASE_ANNUAL_RATE).max(0.0) * 2.0;
+        let spread_stress = (self.credit_spread - BASE_CREDIT_SPREAD).max(0.0) * 3.0;
+        (0.97 - rate_stress - spread_stress).clamp(0.66, 0.98)
+    }
+
+    pub fn financing_pressure(&self) -> f64 {
+        let credit_pressure = (self.benchmark_credit_rate() - 0.07) / 0.10;
+        let demand_pressure = -self.demand_index * 0.30;
+        (credit_pressure + demand_pressure).clamp(0.0, 1.0)
+    }
+
+    pub fn valuation_signal(&self) -> f64 {
+        let rate_drag = (self.benchmark_credit_rate() - 0.07) * 0.35;
+        let demand_signal = self.demand_index * 0.025;
+        let cost_drag = self.cost_pressure * 0.35;
+        (demand_signal - rate_drag - cost_drag).clamp(-0.045, 0.035)
+    }
+
+    pub fn credit_label(&self) -> &'static str {
+        let rate = self.benchmark_credit_rate();
+        if rate >= 0.105 {
+            "tight"
+        } else if rate <= 0.055 {
+            "easy"
+        } else {
+            "normal"
+        }
+    }
+
+    pub fn demand_label(&self) -> &'static str {
+        if self.demand_index >= 0.25 {
+            "strong"
+        } else if self.demand_index <= -0.25 {
+            "soft"
+        } else {
+            "steady"
+        }
+    }
+
+    pub fn cost_label(&self) -> &'static str {
+        if self.cost_pressure >= 0.030 {
+            "rising"
+        } else if self.cost_pressure <= -0.012 {
+            "falling"
+        } else {
+            "stable"
+        }
     }
 }
 
@@ -903,6 +1121,7 @@ impl Rng {
 fn settle_utility(
     utility: &mut Utility,
     market: &Market,
+    macro_state: &MacroEnvironment,
     is_player: bool,
     events: &mut Vec<String>,
 ) -> FirmFinances {
@@ -925,7 +1144,7 @@ fn settle_utility(
         + 850.0
         + utility.customers * 2.65
         + utility.asset_base * 0.0105;
-    let interest = utility.debt * 0.0175;
+    let interest = utility.debt * macro_state.annual_interest_rate_for(utility) / 4.0;
     let profit = revenue - operating_cost - interest;
 
     utility.cash += profit;
@@ -959,11 +1178,33 @@ fn settle_utility(
 }
 
 fn churn_for(utility: &Utility, average_rate: f64) -> f64 {
-    let rate_pressure = (utility.rate_cents - average_rate).max(0.0) * 0.006;
+    utility.customers * churn_rate_for(utility, average_rate)
+}
+
+fn churn_rate_for(utility: &Utility, average_rate: f64) -> f64 {
+    let rate_gap = utility.rate_cents - average_rate;
+    let rate_pressure = rate_gap.max(0.0) * 0.006;
+    let rate_retention = (-rate_gap).max(0.0) * 0.0025;
     let outage_pressure = (0.78 - utility.reliability).max(0.0) * 0.055;
+    let reliability_retention = (utility.reliability - 0.84).max(0.0) * 0.020;
     let reputation_pressure = (48.0 - utility.reputation).max(0.0) * 0.0008;
+    let reputation_retention = (utility.reputation - 62.0).max(0.0) * 0.00012;
     let churn_rate = 0.010 + rate_pressure + outage_pressure + reputation_pressure;
-    utility.customers * churn_rate.clamp(0.006, 0.075)
+    (churn_rate - rate_retention - reliability_retention - reputation_retention).clamp(0.004, 0.075)
+}
+
+fn weighted_rate(rates: impl Iterator<Item = (f64, f64)>, fallback: f64) -> f64 {
+    let mut weighted = 0.0;
+    let mut customers = 0.0;
+    for (rate, customer_count) in rates {
+        weighted += rate * customer_count;
+        customers += customer_count;
+    }
+    if customers <= 0.0 {
+        fallback
+    } else {
+        weighted / customers
+    }
 }
 
 fn weighted_average(left: f64, left_weight: f64, right: f64, right_weight: f64) -> f64 {
@@ -1171,6 +1412,133 @@ mod tests {
             .unwrap();
 
         assert!((game.player.debt - 140_000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn interest_uses_current_macro_and_leverage_rate() {
+        let mut game = Game::with_seed(41);
+        game.player.asset_base = 100_000.0;
+        game.player.debt = 80_000.0;
+        game.macro_state.annual_base_rate = 0.070;
+        game.macro_state.credit_spread = 0.035;
+        let expected_interest = game.player.debt * game.player_annual_interest_rate() / 4.0;
+        let mut events = Vec::new();
+
+        let finances = settle_utility(
+            &mut game.player,
+            &game.market,
+            &game.macro_state,
+            true,
+            &mut events,
+        );
+
+        assert!((finances.interest - expected_interest).abs() < 0.01);
+        assert!(finances.interest > game.player.debt * 0.0175);
+    }
+
+    #[test]
+    fn high_leverage_pays_higher_debt_rate() {
+        let mut low = Game::with_seed(42);
+        let mut high = Game::with_seed(42);
+        low.player.asset_base = 100_000.0;
+        high.player.asset_base = 100_000.0;
+        low.player.debt = 25_000.0;
+        high.player.debt = 90_000.0;
+
+        assert!(
+            high.player_annual_interest_rate() > low.player_annual_interest_rate() + 0.06,
+            "high leverage should carry a meaningful floating-rate premium"
+        );
+    }
+
+    #[test]
+    fn tight_credit_reduces_borrowing_room() {
+        let mut normal = Game::with_seed(43);
+        let mut tight = Game::with_seed(43);
+        normal.player.asset_base = 160_000.0;
+        tight.player.asset_base = 160_000.0;
+        normal.player.debt = 60_000.0;
+        tight.player.debt = 60_000.0;
+        tight.macro_state.annual_base_rate = 0.095;
+        tight.macro_state.credit_spread = 0.060;
+
+        assert!(tight.borrowing_room() < normal.borrowing_room());
+        assert!(
+            tight.macro_state.borrowing_limit_ratio() < normal.macro_state.borrowing_limit_ratio()
+        );
+    }
+
+    #[test]
+    fn macro_environment_changes_each_quarter() {
+        let mut game = Game::with_seed(44);
+        let starting_rate = game.macro_state.benchmark_credit_rate();
+        let starting_demand = game.macro_state.demand_index;
+
+        game.advance_quarter();
+
+        assert!((game.macro_state.benchmark_credit_rate() - starting_rate).abs() > 0.0001);
+        assert!((game.macro_state.demand_index - starting_demand).abs() > 0.0001);
+    }
+
+    #[test]
+    fn lower_rates_and_strong_service_reduce_churn_rate() {
+        let mut high_rate = Game::with_seed(45);
+        let mut low_rate = high_rate.clone();
+        high_rate.player.rate_cents = 11.5;
+        low_rate.player.rate_cents = 8.8;
+        high_rate.player.reliability = 0.92;
+        low_rate.player.reliability = 0.92;
+        high_rate.player.reputation = 72.0;
+        low_rate.player.reputation = 72.0;
+        let market_average = 10.5;
+
+        let high_rate_churn = churn_rate_for(&high_rate.player, market_average);
+        let low_rate_churn = churn_rate_for(&low_rate.player, market_average);
+
+        assert!(low_rate_churn < high_rate_churn);
+        assert!(low_rate_churn < 0.010);
+    }
+
+    #[test]
+    fn quarter_report_includes_churn_rate() {
+        let mut game = Game::with_seed(46);
+        game.player.customers = 900.0;
+        game.player.distribution_capacity = 1_400.0;
+        game.player.generation_capacity_mwh = 420.0;
+        game.player.rate_cents = 8.8;
+        game.player.reliability = 0.92;
+        game.player.reputation = 72.0;
+        let starting_customers = game.player.customers;
+
+        let report = game.advance_quarter();
+
+        assert!(
+            (report.lost_customer_rate - report.lost_customers / starting_customers).abs() < 0.0001
+        );
+        assert!(report.lost_customer_rate < 0.010);
+    }
+
+    #[test]
+    fn churn_compares_player_rate_to_rival_rates_not_own_weighted_average() {
+        let mut game = Game::with_seed(47);
+        game.player.customers = 1_800.0;
+        game.player.distribution_capacity = 2_400.0;
+        game.player.generation_capacity_mwh = 700.0;
+        game.player.rate_cents = 8.4;
+        game.player.reliability = 0.94;
+        game.player.reputation = 74.0;
+        for competitor in &mut game.competitors {
+            competitor.rate_cents = 10.9;
+        }
+
+        let self_weighted_market_rate = game.average_rate();
+        let rival_rate = game.rival_average_rate_for_player();
+        let self_weighted_churn = churn_rate_for(&game.player, self_weighted_market_rate);
+        let rival_based_churn = churn_rate_for(&game.player, rival_rate);
+
+        assert!(rival_rate > self_weighted_market_rate + 1.0);
+        assert!(rival_based_churn < self_weighted_churn);
+        assert!(rival_based_churn <= 0.005);
     }
 
     #[test]
