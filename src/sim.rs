@@ -10,6 +10,32 @@ pub const MAX_DISTRIBUTION_PROJECT_CUSTOMERS: f64 = 900.0;
 const BASE_ANNUAL_RATE: f64 = 0.052;
 const BASE_CREDIT_SPREAD: f64 = 0.018;
 const MAINTENANCE_REFERENCE_ASSET_BASE: f64 = 78_000.0;
+const COMPETITOR_NAME_POOL: &[&str] = &[
+    "Arc Light Power",
+    "Blue River Electric",
+    "Bright Path Power",
+    "Civic Current",
+    "Clear Grid Partners",
+    "Commonwealth Power",
+    "Core Line Energy",
+    "Cross-Town Electric",
+    "District Current",
+    "First Service Power",
+    "Harbor Grid",
+    "Keystone Electric",
+    "Metro Light",
+    "New Current Co.",
+    "North Loop Power",
+    "Pioneer Utility",
+    "Public Circuit",
+    "Reliant Service",
+    "Signal Electric",
+    "Switchback Energy",
+    "Union Grid",
+    "Vector Power",
+    "Voltaic Cooperative",
+    "Westside Current",
+];
 
 #[derive(Clone, Debug)]
 pub struct Game {
@@ -124,6 +150,7 @@ pub struct QuarterReport {
     pub lost_customer_rate: f64,
     pub market_share: f64,
     pub prior_market_share: f64,
+    pub attributions: Vec<String>,
     pub events: Vec<String>,
 }
 
@@ -155,6 +182,30 @@ struct Rng {
     state: u64,
 }
 
+struct AttributionContext<'a> {
+    starting_customers: f64,
+    ending_customers: f64,
+    starting_total_connected: f64,
+    ending_total_connected: f64,
+    starting_market_share: f64,
+    ending_market_share: f64,
+    starting_reliability: f64,
+    ending_reliability: f64,
+    starting_headroom: f64,
+    ending_headroom: f64,
+    lost_customer_rate: f64,
+    rate_gap_to_rivals: f64,
+    finances: &'a FirmFinances,
+    active_shocks: &'a [ActiveShock],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupEntryReason {
+    ConcentratedMarket,
+    HighRates,
+    StagnantMarket,
+}
+
 impl Game {
     pub fn new() -> Self {
         Self::with_seed(fresh_seed())
@@ -166,6 +217,14 @@ impl Game {
 
     pub fn with_seed_and_initial_variance(seed: u64, initial_variance: InitialVariance) -> Self {
         let mut rng = Rng::new(seed);
+        let mut name_rng = Rng::new(seed ^ 0x9E37_79B9_7F4A_7C15);
+        let mut used_names = vec!["Metro Consolidated".to_string()];
+        let first_competitor_name = draw_competitor_name(&mut name_rng, &used_names, 1);
+        used_names.push(first_competitor_name.clone());
+        let second_competitor_name = draw_competitor_name(&mut name_rng, &used_names, 2);
+        used_names.push(second_competitor_name.clone());
+        let third_competitor_name = draw_competitor_name(&mut name_rng, &used_names, 3);
+
         let market = Market {
             territory: "Core Market".to_string(),
             start_year: 1,
@@ -212,7 +271,7 @@ impl Game {
             ),
             competitors: vec![
                 starting_utility(
-                    "North Loop Power",
+                    &first_competitor_name,
                     18_500.0,
                     12_000.0,
                     0.0,
@@ -229,7 +288,7 @@ impl Game {
                     &mut rng,
                 ),
                 starting_utility(
-                    "District Current",
+                    &second_competitor_name,
                     12_000.0,
                     8_000.0,
                     0.0,
@@ -246,7 +305,7 @@ impl Game {
                     &mut rng,
                 ),
                 starting_utility(
-                    "Metro Light",
+                    &third_competitor_name,
                     7_500.0,
                     6_500.0,
                     0.0,
@@ -581,6 +640,10 @@ impl Game {
                     .as_ref()
                     .map(|report| report.market_share)
                     .unwrap_or_else(|| self.market_share()),
+                attributions: vec![
+                    "The market review is already over; no new operating quarter was processed."
+                        .to_string(),
+                ],
                 events: vec![format!("{} {}", outcome.headline, outcome.details)],
             };
             self.last_report = Some(report.clone());
@@ -590,6 +653,9 @@ impl Game {
         let label = self.date_label();
         let starting_customers = self.player.customers;
         let starting_market_share = self.market_share();
+        let starting_total_connected = self.total_connected_customers();
+        let starting_reliability = self.player.reliability;
+        let starting_headroom = self.player.capacity_headroom(&self.market);
         let mut events = Vec::new();
 
         self.advance_shocks(&mut events);
@@ -641,21 +707,45 @@ impl Game {
         }
         self.check_outcome(&player_finances);
 
+        let ending_customers = self.player.customers;
+        let ending_total_connected = self.total_connected_customers();
+        let ending_market_share = self.market_share();
+        let ending_reliability = self.player.reliability;
+        let ending_headroom = self.player.capacity_headroom(&self.market);
+        let lost_customer_rate = if starting_customers > 0.0 {
+            lost_customers / starting_customers
+        } else {
+            0.0
+        };
+        let attributions = quarter_attributions(AttributionContext {
+            starting_customers,
+            ending_customers,
+            starting_total_connected,
+            ending_total_connected,
+            starting_market_share,
+            ending_market_share,
+            starting_reliability,
+            ending_reliability,
+            starting_headroom,
+            ending_headroom,
+            lost_customer_rate,
+            rate_gap_to_rivals: self.player.rate_cents - self.rival_average_rate_for_player(),
+            finances: &player_finances,
+            active_shocks: &self.active_shocks,
+        });
+
         let report = QuarterReport {
             label,
             revenue: player_finances.revenue,
             operating_cost: player_finances.operating_cost,
             interest: player_finances.interest,
             profit: player_finances.profit,
-            new_customers: (self.player.customers - starting_customers + lost_customers).max(0.0),
+            new_customers: (ending_customers - starting_customers + lost_customers).max(0.0),
             lost_customers,
-            lost_customer_rate: if starting_customers > 0.0 {
-                lost_customers / starting_customers
-            } else {
-                0.0
-            },
-            market_share: self.market_share(),
+            lost_customer_rate,
+            market_share: ending_market_share,
             prior_market_share: starting_market_share,
+            attributions,
             events,
         };
         self.last_report = Some(report.clone());
@@ -832,55 +922,140 @@ impl Game {
             return;
         }
 
-        let player_share = self.market_share();
         let market_avg_rate = self.average_rate();
-        let unserved_demand =
-            (self.market.serviceable_customers() - self.total_connected_customers()).max(0.0);
-        let consolidated = player_share > 0.55;
-        let high_rates = market_avg_rate > 11.2;
-        let unmet_demand = unserved_demand > self.market.addressable_customers * 0.05;
-
-        if !(consolidated || high_rates) || !unmet_demand {
+        let Some((reason, probability)) = self.startup_entry_signal() else {
             return;
-        }
-
-        let probability = if consolidated && high_rates {
-            0.16
-        } else if consolidated {
-            0.10
-        } else {
-            0.07
         };
 
         if !self.rng.chance(probability) {
             return;
         }
 
-        let undercut = (market_avg_rate - 0.6).clamp(8.5, 13.0);
+        let undercut = match reason {
+            StartupEntryReason::ConcentratedMarket => (market_avg_rate - 0.7).clamp(8.4, 12.8),
+            StartupEntryReason::HighRates => (market_avg_rate - 0.8).clamp(8.5, 12.9),
+            StartupEntryReason::StagnantMarket => {
+                (self.market.standard_rate_cents - 0.4).clamp(8.6, 11.6)
+            }
+        };
         self.startup_index += 1;
-        let name = startup_name(self.startup_index);
-        let starting_customers = 30.0 + self.rng.range(0.0, 25.0);
+        let mut used_names = vec![self.player.name.clone()];
+        used_names.extend(
+            self.competitors
+                .iter()
+                .map(|competitor| competitor.name.clone()),
+        );
+        let name = draw_competitor_name(&mut self.rng, &used_names, self.startup_index);
+        let scale = match reason {
+            StartupEntryReason::StagnantMarket => 1.35,
+            StartupEntryReason::ConcentratedMarket => 1.15,
+            StartupEntryReason::HighRates => 1.0,
+        };
+        let starting_customers = (30.0 + self.rng.range(0.0, 25.0)) * scale;
         let startup = Utility {
             name: name.clone(),
-            cash: 6_000.0 + self.rng.range(0.0, 2_500.0),
+            cash: 6_000.0 + self.rng.range(0.0, 2_500.0) * scale,
             debt: 3_500.0 + self.rng.range(0.0, 2_000.0),
             shares: 0.0,
             stock_price: 0.0,
             customers: starting_customers,
-            generation_capacity_mwh: 26.0 + self.rng.range(0.0, 14.0),
-            distribution_capacity: 90.0 + self.rng.range(0.0, 40.0),
+            generation_capacity_mwh: (26.0 + self.rng.range(0.0, 14.0)) * scale,
+            distribution_capacity: (90.0 + self.rng.range(0.0, 40.0)) * scale,
             rate_cents: undercut,
-            reputation: 47.0 + self.rng.range(0.0, 6.0),
-            reliability: 0.74 + self.rng.range(0.0, 0.05),
-            marketing_momentum: 0.10,
-            asset_base: 22_000.0 + self.rng.range(0.0, 5_000.0),
+            reputation: 47.0 + self.rng.range(0.0, 6.0) + if scale > 1.0 { 2.5 } else { 0.0 },
+            reliability: 0.74 + self.rng.range(0.0, 0.05) + if scale > 1.0 { 0.02 } else { 0.0 },
+            marketing_momentum: 0.10
+                + if reason == StartupEntryReason::StagnantMarket {
+                    0.08
+                } else {
+                    0.0
+                },
+            asset_base: (22_000.0 + self.rng.range(0.0, 5_000.0)) * scale,
             last_quarter_customers: starting_customers,
         };
         self.competitors.push(startup);
         events.push(format!(
-            "{} entered the market at {:.1}c/kWh, drawing rate-sensitive customers.",
-            name, undercut
+            "{} {} at {:.1}c/kWh.",
+            name,
+            startup_entry_message(reason),
+            undercut
         ));
+    }
+
+    fn startup_entry_signal(&self) -> Option<(StartupEntryReason, f64)> {
+        let player_share = self.market_share();
+        let market_avg_rate = self.average_rate();
+        let total_connected = self.total_connected_customers();
+        let addressable = self.market.addressable_customers.max(1.0);
+        let serviceable_gap = (self.market.serviceable_customers() - total_connected).max(0.0);
+        let addressable_gap = (addressable - total_connected).max(0.0);
+        let connected_penetration = total_connected / addressable;
+        let expected_penetration = (0.115 + self.quarter as f64 * 0.010).clamp(0.12, 0.38);
+        let average_reliability = self.market_average_reliability();
+
+        let concentrated = player_share > 0.55
+            || self.competitors.len() <= 2 && player_share > 0.42
+            || self.competitors.len() <= 1;
+        let high_rates =
+            market_avg_rate > 11.2 || market_avg_rate > self.market.standard_rate_cents + 0.75;
+        let stagnant = self.quarter >= 4
+            && connected_penetration < expected_penetration
+            && addressable_gap > addressable * 0.45
+            && (self.macro_state.demand_index < -0.15
+                || average_reliability < 0.77
+                || serviceable_gap < addressable * 0.015);
+        let open_opportunity = serviceable_gap > 45.0
+            || addressable_gap > addressable * 0.35
+            || high_rates
+            || concentrated;
+
+        if !open_opportunity || !(concentrated || high_rates || stagnant) {
+            return None;
+        }
+
+        let mut probability: f64 = 0.03;
+        if concentrated {
+            probability += 0.08;
+        }
+        if high_rates {
+            probability += 0.06;
+        }
+        if stagnant {
+            probability += 0.09;
+        }
+        if serviceable_gap > addressable * 0.05 {
+            probability += 0.04;
+        }
+        if self.competitors.len() <= 1 {
+            probability += 0.05;
+        }
+
+        let reason = if stagnant {
+            StartupEntryReason::StagnantMarket
+        } else if concentrated {
+            StartupEntryReason::ConcentratedMarket
+        } else {
+            StartupEntryReason::HighRates
+        };
+
+        Some((reason, probability.clamp(0.04, 0.26)))
+    }
+
+    fn market_average_reliability(&self) -> f64 {
+        let player_weight = self.player.customers.max(0.0);
+        let mut weighted = self.player.reliability * player_weight;
+        let mut customers = player_weight;
+        for competitor in &self.competitors {
+            let weight = competitor.customers.max(0.0);
+            weighted += competitor.reliability * weight;
+            customers += weight;
+        }
+
+        if customers <= 0.0 {
+            self.player.reliability
+        } else {
+            weighted / customers
+        }
     }
 
     fn advance_macro_environment(&mut self, events: &mut Vec<String>) {
@@ -1479,6 +1654,10 @@ impl Rng {
         min + (max - min) * self.next_f64()
     }
 
+    fn next_index(&mut self, len: usize) -> usize {
+        (self.next_u64() as usize) % len.max(1)
+    }
+
     fn chance(&mut self, probability: f64) -> bool {
         self.next_f64() < probability.clamp(0.0, 1.0)
     }
@@ -1624,6 +1803,144 @@ fn settle_utility(
     }
 }
 
+fn quarter_attributions(context: AttributionContext<'_>) -> Vec<String> {
+    let mut lines = Vec::new();
+    let net_customers = context.ending_customers - context.starting_customers;
+    let market_customer_change = context.ending_total_connected - context.starting_total_connected;
+    let share_change = context.ending_market_share - context.starting_market_share;
+
+    if share_change.abs() >= 0.001 {
+        let direction = if share_change > 0.0 { "rose" } else { "fell" };
+        lines.push(format!(
+            "Share {direction} {} as Metro added {} net customers while connected accounts in the market changed by {}.",
+            percentage_points(share_change.abs()),
+            signed_whole(net_customers),
+            signed_whole(market_customer_change)
+        ));
+    } else {
+        lines.push(format!(
+            "Share held roughly flat while Metro added {} net customers and the total market changed by {}.",
+            signed_whole(net_customers),
+            signed_whole(market_customer_change)
+        ));
+    }
+
+    let churn_reason = if context.rate_gap_to_rivals >= 0.4 && context.ending_reliability < 0.74 {
+        "premium pricing and service pressure"
+    } else if context.rate_gap_to_rivals >= 0.4 {
+        "premium pricing"
+    } else if context.ending_reliability < 0.74 {
+        "service pressure"
+    } else if context.rate_gap_to_rivals <= -0.4 {
+        "normal switching despite a price advantage"
+    } else {
+        "normal switching in a competitive market"
+    };
+    lines.push(format!(
+        "Churn was {:.2}% with your rate {}c versus rivals; main pressure was {churn_reason}.",
+        context.lost_customer_rate * 100.0,
+        signed_decimal(context.rate_gap_to_rivals)
+    ));
+
+    let margin = if context.finances.revenue > 0.0 {
+        context.finances.profit / context.finances.revenue
+    } else {
+        0.0
+    };
+    let cost_load = if context.finances.revenue > 0.0 {
+        context.finances.operating_cost / context.finances.revenue
+    } else {
+        0.0
+    };
+    let interest_load = if context.finances.revenue > 0.0 {
+        context.finances.interest / context.finances.revenue
+    } else {
+        0.0
+    };
+    lines.push(format!(
+        "Profit margin was {:.1}%; operating costs used {:.0}% of revenue and interest used {:.0}%.",
+        margin * 100.0,
+        cost_load * 100.0,
+        interest_load * 100.0
+    ));
+
+    let headroom_change = context.ending_headroom - context.starting_headroom;
+    if context.ending_headroom < 60.0 {
+        lines.push(format!(
+            "Capacity is tight: headroom moved from {:.0} to {:.0}, so growth spending may outrun the network.",
+            context.starting_headroom.max(0.0),
+            context.ending_headroom.max(0.0)
+        ));
+    } else if headroom_change.abs() >= 35.0 {
+        let direction = if headroom_change > 0.0 {
+            "opened"
+        } else {
+            "narrowed"
+        };
+        lines.push(format!(
+            "Capacity headroom {direction} by {:.0} customers, ending at {:.0}.",
+            headroom_change.abs(),
+            context.ending_headroom.max(0.0)
+        ));
+    }
+
+    let reliability_change = context.ending_reliability - context.starting_reliability;
+    if reliability_change <= -0.006 {
+        lines.push(format!(
+            "Reliability slipped {} from operating wear and load; maintenance is the direct offset.",
+            percentage_points(reliability_change.abs())
+        ));
+    } else if reliability_change >= 0.006 {
+        lines.push(format!(
+            "Reliability improved {} after service work and completed capacity relief.",
+            percentage_points(reliability_change)
+        ));
+    }
+
+    if context.finances.unmet_demand_ratio > 0.02 {
+        lines.push(format!(
+            "Unserved demand reached {:.0}%, hurting reliability and reputation.",
+            context.finances.unmet_demand_ratio * 100.0
+        ));
+    }
+
+    if !context.active_shocks.is_empty() {
+        let shocks = context
+            .active_shocks
+            .iter()
+            .map(|shock| shock_kind_label(&shock.kind))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "Active macro shock affecting the quarter: {shocks}."
+        ));
+    }
+
+    lines.truncate(6);
+    lines
+}
+
+fn percentage_points(value: f64) -> String {
+    format!("{:.1} pts", value * 100.0)
+}
+
+fn signed_whole(value: f64) -> String {
+    format!("{:+.0}", value)
+}
+
+fn signed_decimal(value: f64) -> String {
+    format!("{:+.1}", value)
+}
+
+fn shock_kind_label(kind: &ShockKind) -> &'static str {
+    match kind {
+        ShockKind::RateFreeze => "rate freeze",
+        ShockKind::DemandRecession => "demand recession",
+        ShockKind::DemandBoom => "demand boom",
+        ShockKind::InputCostShock => "input cost shock",
+    }
+}
+
 fn churn_for(utility: &Utility, average_rate: f64) -> f64 {
     utility.customers * churn_rate_for(utility, average_rate)
 }
@@ -1665,18 +1982,39 @@ fn shock_expired_message(kind: &ShockKind) -> String {
     }
 }
 
-fn startup_name(index: u32) -> String {
-    const NAMES: &[&str] = &[
-        "Bright Path Power",
-        "Voltaic Cooperative",
-        "Switchback Energy",
-        "Civic Spark",
-        "New Current Co.",
-        "Clear Grid Partners",
-        "Greenline Utility",
-        "Halcyon Power",
-    ];
-    NAMES[((index as usize).saturating_sub(1)) % NAMES.len()].to_string()
+fn startup_entry_message(reason: StartupEntryReason) -> &'static str {
+    match reason {
+        StartupEntryReason::ConcentratedMarket => {
+            "formed to challenge a concentrated market and entered"
+        }
+        StartupEntryReason::HighRates => "entered to chase rate-sensitive customers",
+        StartupEntryReason::StagnantMarket => {
+            "formed around under-served districts in a stagnant market and entered"
+        }
+    }
+}
+
+fn draw_competitor_name(rng: &mut Rng, used_names: &[String], fallback_index: u32) -> String {
+    let available = COMPETITOR_NAME_POOL
+        .iter()
+        .copied()
+        .filter(|candidate| !used_names.iter().any(|used| used == candidate))
+        .collect::<Vec<_>>();
+
+    if !available.is_empty() {
+        let index = rng.next_index(available.len());
+        return available[index].to_string();
+    }
+
+    let base = COMPETITOR_NAME_POOL[rng.next_index(COMPETITOR_NAME_POOL.len())];
+    let mut suffix = fallback_index.max(1);
+    loop {
+        let candidate = format!("{base} {suffix}");
+        if !used_names.iter().any(|used| used == &candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 fn weighted_average(left: f64, left_weight: f64, right: f64, right_weight: f64) -> f64 {
@@ -1805,6 +2143,38 @@ mod tests {
             first.market.addressable_customers,
             second.market.addressable_customers
         );
+    }
+
+    #[test]
+    fn opening_competitor_names_are_drawn_from_pool_without_duplicates() {
+        let game = Game::with_seed(7);
+        let names = game
+            .competitors
+            .iter()
+            .map(|competitor| competitor.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names.len(), 3);
+        for name in &names {
+            assert!(COMPETITOR_NAME_POOL.contains(name));
+        }
+        for (index, name) in names.iter().enumerate() {
+            assert!(!names[..index].contains(name));
+        }
+    }
+
+    #[test]
+    fn competitor_name_draw_avoids_active_names_until_pool_is_exhausted() {
+        let mut rng = Rng::new(12);
+        let used_names = COMPETITOR_NAME_POOL
+            .iter()
+            .take(COMPETITOR_NAME_POOL.len() - 1)
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>();
+
+        let name = draw_competitor_name(&mut rng, &used_names, 1);
+
+        assert_eq!(name, COMPETITOR_NAME_POOL[COMPETITOR_NAME_POOL.len() - 1]);
     }
 
     #[test]
@@ -2077,6 +2447,27 @@ mod tests {
         let report = game.advance_quarter();
 
         assert!((report.prior_market_share - starting_share).abs() < 0.0001);
+    }
+
+    #[test]
+    fn quarter_report_explains_major_result_drivers() {
+        let mut game = Game::with_seed(49);
+
+        let report = game.advance_quarter();
+
+        assert!(!report.attributions.is_empty());
+        assert!(
+            report
+                .attributions
+                .iter()
+                .any(|line| line.contains("Share"))
+        );
+        assert!(
+            report
+                .attributions
+                .iter()
+                .any(|line| line.contains("Churn"))
+        );
     }
 
     #[test]
@@ -2455,6 +2846,65 @@ mod tests {
             }
         }
         panic!("expected at least one startup to enter the market under these conditions");
+    }
+
+    #[test]
+    fn startup_signal_detects_stagnant_market() {
+        let mut game = Game::with_seed(96);
+        game.quarter = 8;
+        game.market.addressable_customers = 10_000.0;
+        game.market.electrification = 0.11;
+        game.macro_state.demand_index = -0.35;
+        game.player.customers = 250.0;
+        game.player.rate_cents = 10.0;
+        game.player.reliability = 0.70;
+        game.player.distribution_capacity = 500.0;
+        game.player.generation_capacity_mwh = 200.0;
+        for competitor in &mut game.competitors {
+            competitor.customers = 120.0;
+            competitor.rate_cents = 10.1;
+            competitor.reliability = 0.70;
+        }
+
+        let Some((reason, probability)) = game.startup_entry_signal() else {
+            panic!("expected stagnant market to create startup pressure");
+        };
+
+        assert_eq!(reason, StartupEntryReason::StagnantMarket);
+        assert!(probability >= 0.12);
+    }
+
+    #[test]
+    fn startup_can_enter_stagnant_market_without_high_rates() {
+        let mut game = Game::with_seed(97);
+        game.quarter = 8;
+        game.market.addressable_customers = 10_000.0;
+        game.market.electrification = 0.11;
+        game.market.standard_rate_cents = 10.2;
+        game.macro_state.demand_index = -0.35;
+        game.player.customers = 250.0;
+        game.player.rate_cents = 10.0;
+        game.player.reliability = 0.70;
+        game.player.distribution_capacity = 500.0;
+        game.player.generation_capacity_mwh = 200.0;
+        for competitor in &mut game.competitors {
+            competitor.customers = 120.0;
+            competitor.last_quarter_customers = 120.0;
+            competitor.rate_cents = 10.1;
+            competitor.reliability = 0.70;
+        }
+
+        let starting_competitors = game.competitors.len();
+        for _ in 0..60 {
+            let mut events = Vec::new();
+            game.maybe_spawn_startup(&mut events);
+            if game.competitors.len() > starting_competitors {
+                assert!(events.iter().any(|event| event.contains("stagnant market")));
+                return;
+            }
+        }
+
+        panic!("expected a stagnant-market startup entrant");
     }
 
     #[test]
