@@ -506,6 +506,24 @@ fn high_share_makes_acquisitions_non_linearly_pricier() {
 }
 
 #[test]
+fn acquisition_price_accounts_for_target_cash_and_debt() {
+    let base = Game::with_seed(51);
+    let mut cash_rich = base.clone();
+    let mut debt_heavy = base.clone();
+    cash_rich.competitors[0].cash += 40_000.0;
+    debt_heavy.competitors[0].debt += 40_000.0;
+
+    assert!(
+        cash_rich.acquisition_price(0) > base.acquisition_price(0) + 30_000.0,
+        "cash-rich targets should cost more because that cash is acquired"
+    );
+    assert!(
+        debt_heavy.acquisition_price(0) < base.acquisition_price(0) - 25_000.0,
+        "debt-heavy targets should have lower equity purchase prices because debt is assumed"
+    );
+}
+
+#[test]
 fn acquisition_absorbs_target_cash_and_debt() {
     let mut game = Game::with_seed(60);
     game.player.cash = 250_000.0;
@@ -520,6 +538,70 @@ fn acquisition_absorbs_target_cash_and_debt() {
 
     assert!(game.player.cash > starting_cash_after_payment_only + target.cash * 0.5);
     assert!(game.player.debt > starting_debt + target.debt * 0.5);
+}
+
+#[test]
+fn acquisition_terms_match_actual_close_effects() {
+    let mut game = Game::with_seed(62);
+    game.player.cash = 350_000.0;
+    let starting_customers = game.player.customers;
+    let starting_generation = game.player.generation_capacity_mwh;
+    let starting_distribution = game.player.distribution_capacity;
+    let terms = game.acquisition_terms(1).unwrap();
+
+    assert!((game.acquisition_price(1) - terms.price).abs() < 0.01);
+
+    game.apply_decision(Decision::Acquire {
+        competitor_index: 1,
+    })
+    .unwrap();
+
+    assert!((game.player.cash - terms.post_cash).abs() < 0.01);
+    assert!((game.player.debt - terms.post_debt).abs() < 0.01);
+    assert!((game.player.asset_base - terms.post_asset_base).abs() < 0.01);
+    assert!((game.player.customers - (starting_customers + terms.acquired_customers)).abs() < 0.01);
+    assert!(
+        (game.player.generation_capacity_mwh
+            - (starting_generation + terms.acquired_generation_capacity_mwh))
+            .abs()
+            < 0.01
+    );
+    assert!(
+        (game.player.distribution_capacity
+            - (starting_distribution + terms.acquired_distribution_capacity))
+            .abs()
+            < 0.01
+    );
+}
+
+#[test]
+fn acquisition_integration_uses_pre_acquisition_weights() {
+    let mut game = Game::with_seed(61);
+    game.player.cash = 400_000.0;
+    game.player.customers = 100.0;
+    game.player.generation_capacity_mwh = 100.0;
+    game.player.reputation = 80.0;
+    game.player.reliability = 0.92;
+    game.competitors[0].customers = 1_000.0;
+    game.competitors[0].generation_capacity_mwh = 1_000.0;
+    game.competitors[0].reputation = 40.0;
+    game.competitors[0].reliability = 0.60;
+    let target = game.competitors[0].clone();
+
+    let acquired_customers = target.customers * 0.92;
+    let expected_reputation =
+        weighted_average(80.0, 100.0, target.reputation, acquired_customers * 0.65) - 1.5;
+    let acquired_generation = target.generation_capacity_mwh * 0.86;
+    let expected_reliability =
+        weighted_average(0.92, 100.0, target.reliability, acquired_generation * 0.70) - 0.035;
+
+    game.apply_decision(Decision::Acquire {
+        competitor_index: 0,
+    })
+    .unwrap();
+
+    assert!((game.player.reputation - expected_reputation).abs() < 0.001);
+    assert!((game.player.reliability - expected_reliability).abs() < 0.001);
 }
 
 #[test]
@@ -639,6 +721,36 @@ fn stock_price_reflects_balance_sheet_equity() {
         "healthier balance sheet should produce a higher stock price: healthy {}, leveraged {}",
         healthy.player.stock_price,
         leveraged.player.stock_price
+    );
+}
+
+#[test]
+fn reputation_lifts_earnings_multiple() {
+    let mut weak = Game::with_seed(83);
+    let mut strong = weak.clone();
+    weak.player.reputation = 30.0;
+    strong.player.reputation = 85.0;
+
+    assert!(strong.earnings_multiple() > weak.earnings_multiple() + 1.0);
+}
+
+#[test]
+fn active_shocks_affect_stock_valuation_immediately() {
+    let mut normal = Game::with_seed(84);
+    let mut frozen = normal.clone();
+    frozen.active_shocks.push(ActiveShock {
+        kind: ShockKind::RateFreeze,
+        quarters_remaining: 3,
+    });
+
+    normal.advance_quarter();
+    frozen.advance_quarter();
+
+    assert!(
+        frozen.player.stock_price < normal.player.stock_price,
+        "rate freeze should create an immediate valuation drag: frozen {}, normal {}",
+        frozen.player.stock_price,
+        normal.player.stock_price
     );
 }
 

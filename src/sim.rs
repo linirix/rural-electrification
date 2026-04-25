@@ -10,6 +10,8 @@ pub const MAX_DISTRIBUTION_PROJECT_CUSTOMERS: f64 = 900.0;
 const BASE_ANNUAL_RATE: f64 = 0.052;
 const BASE_CREDIT_SPREAD: f64 = 0.018;
 const MAINTENANCE_REFERENCE_ASSET_BASE: f64 = 78_000.0;
+const ACQUISITION_CASH_ABSORPTION: f64 = 0.80;
+const ACQUISITION_DEBT_ASSUMPTION: f64 = 0.75;
 
 mod attribution;
 mod competitors;
@@ -155,6 +157,22 @@ pub struct FirmFinances {
     pub profit: f64,
     pub served_mwh: f64,
     pub unmet_demand_ratio: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AcquisitionTerms {
+    pub price: f64,
+    pub absorbed_cash: f64,
+    pub assumed_debt: f64,
+    pub net_cash_cost: f64,
+    pub acquired_customers: f64,
+    pub acquired_generation_capacity_mwh: f64,
+    pub acquired_distribution_capacity: f64,
+    pub acquired_asset_base: f64,
+    pub post_cash: f64,
+    pub post_debt: f64,
+    pub post_asset_base: f64,
+    pub post_debt_to_assets: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -505,42 +523,46 @@ impl Game {
                     );
                 }
 
-                let price = self.acquisition_price(competitor_index);
-                self.require_cash(price)?;
+                let terms = self
+                    .acquisition_terms(competitor_index)
+                    .expect("competitor index checked before acquisition");
+                self.require_cash(terms.price)?;
                 let acquired = self.competitors.remove(competitor_index);
                 let acquired_name = acquired.name.clone();
-                let absorbed_cash = acquired.cash * 0.80;
-                let assumed_debt = acquired.debt * 0.75;
-                self.player.cash -= price;
-                self.player.cash += absorbed_cash;
-                self.player.debt += assumed_debt;
-                // Integration losses keep roll-ups from being pure scale arbitrage.
-                self.player.customers += acquired.customers * 0.92;
-                self.player.generation_capacity_mwh += acquired.generation_capacity_mwh * 0.86;
-                self.player.distribution_capacity += acquired.distribution_capacity * 0.90;
-                self.player.asset_base += acquired.asset_base * 0.72;
-                self.player.reputation = weighted_average(
+                let starting_customers = self.player.customers;
+                let starting_generation_capacity = self.player.generation_capacity_mwh;
+                let combined_reputation = weighted_average(
                     self.player.reputation,
-                    self.player.customers,
+                    starting_customers,
                     acquired.reputation,
-                    acquired.customers * 0.65,
+                    terms.acquired_customers * 0.65,
                 )
                 .clamp(0.0, 100.0);
-                self.player.reliability = weighted_average(
+                let combined_reliability = weighted_average(
                     self.player.reliability,
-                    self.player.generation_capacity_mwh,
+                    starting_generation_capacity,
                     acquired.reliability,
-                    acquired.generation_capacity_mwh * 0.70,
+                    terms.acquired_generation_capacity_mwh * 0.70,
                 )
                 .clamp(0.35, 0.98);
+                self.player.cash -= terms.price;
+                self.player.cash += terms.absorbed_cash;
+                self.player.debt += terms.assumed_debt;
+                // Integration losses keep roll-ups from being pure scale arbitrage.
+                self.player.customers += terms.acquired_customers;
+                self.player.generation_capacity_mwh += terms.acquired_generation_capacity_mwh;
+                self.player.distribution_capacity += terms.acquired_distribution_capacity;
+                self.player.asset_base += terms.acquired_asset_base;
+                self.player.reputation = combined_reputation;
+                self.player.reliability = combined_reliability;
                 self.player.reliability = (self.player.reliability - 0.035).clamp(0.35, 0.98);
                 self.player.reputation = (self.player.reputation - 1.5).clamp(0.0, 100.0);
                 self.acquisition_cooldown = 3;
                 Ok(format!(
                     "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt).",
-                    money(price),
-                    money(absorbed_cash),
-                    money(assumed_debt)
+                    money(terms.price),
+                    money(terms.absorbed_cash),
+                    money(terms.assumed_debt)
                 ))
             }
             Decision::AdjustRate { delta_cents } => {
@@ -757,7 +779,17 @@ impl Game {
     }
 
     pub fn acquisition_price(&self, competitor_index: usize) -> f64 {
-        let competitor = &self.competitors[competitor_index];
+        self.acquisition_terms(competitor_index)
+            .expect("competitor index out of range")
+            .price
+    }
+
+    pub fn acquisition_terms(&self, competitor_index: usize) -> Option<AcquisitionTerms> {
+        let competitor = self.competitors.get(competitor_index)?;
+        let acquired_customers = competitor.customers * 0.92;
+        let acquired_generation_capacity_mwh = competitor.generation_capacity_mwh * 0.86;
+        let acquired_distribution_capacity = competitor.distribution_capacity * 0.90;
+        let acquired_asset_base = competitor.asset_base * 0.72;
         let customer_value = competitor.customers * 70.0;
         let generation_value = competitor.generation_capacity_mwh * 36.0;
         let line_value = competitor.distribution_capacity * 11.0;
@@ -765,8 +797,34 @@ impl Game {
         let premium = 8_000.0 + competitor.reliability * 4_000.0;
         let share = self.market_share();
         let consolidation_premium = 1.0 + share * 0.4 + share * share * 1.3;
-        (customer_value + generation_value + line_value + market_position_value + premium)
-            * consolidation_premium
+        let enterprise_value =
+            (customer_value + generation_value + line_value + market_position_value + premium)
+                * consolidation_premium;
+        let net_balance_sheet_adjustment = competitor.cash * ACQUISITION_CASH_ABSORPTION
+            - competitor.debt * ACQUISITION_DEBT_ASSUMPTION;
+        let price = (enterprise_value + net_balance_sheet_adjustment).max(1_000.0);
+        let absorbed_cash = competitor.cash * ACQUISITION_CASH_ABSORPTION;
+        let assumed_debt = competitor.debt * ACQUISITION_DEBT_ASSUMPTION;
+        let net_cash_cost = price - absorbed_cash;
+        let post_cash = self.player.cash - price + absorbed_cash;
+        let post_debt = self.player.debt + assumed_debt;
+        let post_asset_base = self.player.asset_base + acquired_asset_base;
+        let post_debt_to_assets = post_debt / post_asset_base.max(1.0);
+
+        Some(AcquisitionTerms {
+            price,
+            absorbed_cash,
+            assumed_debt,
+            net_cash_cost,
+            acquired_customers,
+            acquired_generation_capacity_mwh,
+            acquired_distribution_capacity,
+            acquired_asset_base,
+            post_cash,
+            post_debt,
+            post_asset_base,
+            post_debt_to_assets,
+        })
     }
 
     fn require_cash(&self, amount: f64) -> Result<(), String> {
@@ -1135,17 +1193,33 @@ impl Game {
         let reverted = self.player.stock_price + gap * 0.22;
 
         let macro_signal = self.macro_state.valuation_signal();
+        let shock_signal = self.active_shock_valuation_signal();
         let noise = self.rng.range(-0.025, 0.025);
-        self.player.stock_price = (reverted * (1.0 + macro_signal + noise)).max(1.0);
+        self.player.stock_price = (reverted * (1.0 + macro_signal + shock_signal + noise)).max(1.0);
     }
 
     fn earnings_multiple(&self) -> f64 {
         let base = 7.0;
         let growth_bonus = (self.player.customers / 250.0).clamp(0.0, 5.0);
         let reliability_bonus = (self.player.reliability - 0.78) * 4.0;
+        let reputation_bonus = ((self.player.reputation - 55.0) / 20.0).clamp(-1.25, 2.0);
         let leverage_drag = (self.player.debt_to_assets() - 0.65).max(0.0) * 5.0;
         let macro_drag = (self.macro_state.benchmark_credit_rate() - 0.07) * 30.0;
-        (base + growth_bonus + reliability_bonus - leverage_drag - macro_drag).clamp(2.5, 18.0)
+        (base + growth_bonus + reliability_bonus + reputation_bonus - leverage_drag - macro_drag)
+            .clamp(2.5, 18.0)
+    }
+
+    fn active_shock_valuation_signal(&self) -> f64 {
+        let mut signal: f64 = 0.0;
+        for shock in &self.active_shocks {
+            signal += match shock.kind {
+                ShockKind::RateFreeze => -0.018,
+                ShockKind::DemandRecession => -0.025,
+                ShockKind::DemandBoom => 0.012,
+                ShockKind::InputCostShock => -0.020,
+            };
+        }
+        signal.clamp(-0.065, 0.025)
     }
 
     fn check_outcome(&mut self, finances: &FirmFinances) {

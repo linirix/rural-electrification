@@ -594,16 +594,17 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
         )],
         Decision::Acquire { competitor_index } => {
             if let Some(competitor) = game.competitors.get(*competitor_index) {
+                let terms = game
+                    .acquisition_terms(*competitor_index)
+                    .expect("competitor exists for acquisition quote");
                 vec![format!(
-                    "{} buy {} for {}; +{:.0} cust, +{:.0} MWh/q pre-haircut.",
+                    "{} buy {} for {}; net cash {}, assumes debt {}, adds {:.0} customers.",
                     muted("Quote:"),
                     styled(BOLD, shorten_plain(&competitor.name, 16)),
-                    styled(
-                        BOLD_YELLOW,
-                        money(game.acquisition_price(*competitor_index))
-                    ),
-                    competitor.customers,
-                    competitor.generation_capacity_mwh
+                    styled(BOLD_YELLOW, money(terms.price)),
+                    styled(cash_tone(terms.post_cash), money(terms.net_cash_cost)),
+                    styled(YELLOW, money(terms.assumed_debt)),
+                    terms.acquired_customers
                 )]
             } else {
                 vec![format!(
@@ -855,7 +856,7 @@ fn print_help() {
         "Navigation",
         &[
             "status     show dashboard".to_string(),
-            "rivals     competitor detail".to_string(),
+            "rivals     competitor and M&A terms".to_string(),
             "board      objectives and milestones".to_string(),
             "quote      alias for preview".to_string(),
             "help       command reference".to_string(),
@@ -1734,6 +1735,7 @@ fn rival_detail_lines(game: &Game) -> Vec<String> {
             muted("buy"),
             styled(acquisition_tone, acquisition_note)
         ));
+        lines.extend(rival_acquisition_lines(game, index));
         if let Some(event) = recent_rival_event(game, &competitor.name) {
             for (line_index, wrapped) in wrap_plain_text(&event, CONTENT_WIDTH.saturating_sub(12))
                 .iter()
@@ -1749,6 +1751,91 @@ fn rival_detail_lines(game: &Game) -> Vec<String> {
         if index + 1 < game.competitors.len() {
             lines.push(String::new());
         }
+    }
+
+    lines
+}
+
+fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> Vec<String> {
+    let Some(terms) = game.acquisition_terms(competitor_index) else {
+        return Vec::new();
+    };
+
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "   {} {}   {} {}   {} {}",
+        muted("M&A price"),
+        styled(BOLD_YELLOW, money(terms.price)),
+        muted("net cash"),
+        styled(cash_tone(terms.post_cash), money(terms.net_cash_cost)),
+        muted("assume debt"),
+        styled(YELLOW, money(terms.assumed_debt))
+    ));
+    lines.push(format!(
+        "   {} {}   {} {}   {} {}",
+        muted("post cash"),
+        styled(cash_tone(terms.post_cash), money(terms.post_cash)),
+        muted("post debt/assets"),
+        styled(
+            leverage_tone(terms.post_debt_to_assets),
+            format!("{:.0}%", terms.post_debt_to_assets * 100.0)
+        ),
+        muted("post debt"),
+        styled(YELLOW, money(terms.post_debt))
+    ));
+    lines.push(format!(
+        "   {} +{:.0} cust, +{:.0} MWh/q, +{:.0} line capacity; integration haircuts included",
+        muted("adds"),
+        terms.acquired_customers,
+        terms.acquired_generation_capacity_mwh,
+        terms.acquired_distribution_capacity
+    ));
+
+    if game.competitors.len() == 1 {
+        lines.push(format!(
+            "   {} {}",
+            muted("status"),
+            styled(RED, "blocked: final independent rival is protected")
+        ));
+    } else if game.acquisition_cooldown > 0 {
+        lines.push(format!(
+            "   {} {}",
+            muted("status"),
+            styled(
+                YELLOW,
+                format!(
+                    "unavailable for {} more quarter(s) during integration",
+                    game.acquisition_cooldown
+                )
+            )
+        ));
+    } else if game.player.cash + 0.01 < terms.price {
+        lines.push(format!(
+            "   {} {}",
+            muted("funding"),
+            styled(
+                BOLD_RED,
+                format!(
+                    "need {} more cash to close",
+                    money(terms.price - game.player.cash)
+                )
+            )
+        ));
+    } else if terms.post_debt_to_assets > 0.95 {
+        lines.push(format!(
+            "   {} {}",
+            muted("funding"),
+            styled(
+                BOLD_YELLOW,
+                "would leave balance sheet above board leverage limit"
+            )
+        ));
+    } else {
+        lines.push(format!(
+            "   {} {}",
+            muted("funding"),
+            styled(BOLD_GREEN, "closeable with current cash")
+        ));
     }
 
     lines
@@ -2528,6 +2615,44 @@ mod tests {
             CommandResult::ShowBoard => {}
             _ => panic!("board should show objectives"),
         }
+    }
+
+    #[test]
+    fn rivals_command_shows_rival_screen() {
+        let mut game = Game::with_seed(113);
+
+        match handle_command(&mut game, "rivals") {
+            CommandResult::ShowRivals => {}
+            _ => panic!("rivals should show rival detail"),
+        }
+    }
+
+    #[test]
+    fn rival_detail_includes_acquisition_economics() {
+        let game = Game::with_seed(114);
+        let lines = rival_detail_lines(&game);
+
+        assert!(lines.iter().any(|line| line.contains("M&A price")));
+        assert!(lines.iter().any(|line| line.contains("net cash")));
+        assert!(lines.iter().any(|line| line.contains("assume debt")));
+        assert!(lines.iter().any(|line| line.contains("post debt/assets")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("integration haircuts included"))
+        );
+    }
+
+    #[test]
+    fn rival_detail_uses_cash_to_close_for_funding_status() {
+        let mut game = Game::with_seed(115);
+        let terms = game.acquisition_terms(0).unwrap();
+        game.player.cash = (terms.price - 1_000.0).max(0.0);
+
+        let lines = rival_acquisition_lines(&game, 0);
+
+        assert!(lines.iter().any(|line| line.contains("need")));
+        assert!(lines.iter().any(|line| line.contains("cash to close")));
     }
 
     #[test]
