@@ -1,0 +1,17 @@
+[package]
+name = "electrification"
+version = "0.1.0"
+edition = "2024"
+default-run = "electrification"
+
+[lib]
+name = "electrification"
+path = "src/lib.rs"
+
+[[bin]]
+name = "electrification"
+path = "src/main.rs"
+
+[[bin]]
+name = "playtest"
+path = "src/bin/playtest.rs"
