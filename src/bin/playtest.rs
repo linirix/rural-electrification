@@ -139,8 +139,8 @@ fn scripted_policy(game: &mut Game) {
         let _ = game.apply_decision(Decision::AdjustRate { delta_cents: -0.5 });
     }
 
-    if game.player.reliability < 0.73 && game.player.cash > 7_500.0 {
-        let _ = game.apply_decision(Decision::Maintenance { spend: 5_500.0 });
+    if game.player.reliability < 0.80 && game.player.cash > 7_500.0 {
+        let _ = game.apply_decision(Decision::Maintenance { spend: 7_000.0 });
     }
 
     if let Some((index, price)) = cheapest_competitor(game) {
