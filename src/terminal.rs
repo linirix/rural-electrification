@@ -1,9 +1,11 @@
 use std::io::{self, Write};
 
 use crate::sim::{
-    DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game, Outcome,
-    OutcomeKind, QuarterReport, ShockKind, distribution_project_cost,
-    distribution_project_duration, generation_project_cost, generation_project_duration, money,
+    DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
+    MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH,
+    MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, Outcome, OutcomeKind,
+    QuarterReport, ShockKind, distribution_project_cost, distribution_project_duration,
+    generation_project_cost, generation_project_duration, money,
 };
 
 const SCREEN_WIDTH: usize = 88;
@@ -86,6 +88,12 @@ pub fn run() -> io::Result<()> {
                 clear_screen();
                 print_board(&game);
             }
+            CommandResult::Preview(lines) => {
+                clear_screen();
+                print_status(&game);
+                println!();
+                print_box("Command Preview", &lines);
+            }
             CommandResult::Quit => break,
         }
     }
@@ -100,6 +108,7 @@ enum CommandResult {
     ShowHelp,
     ShowRivals,
     ShowBoard,
+    Preview(Vec<String>),
     Quit,
 }
 
@@ -110,6 +119,11 @@ struct BoardTarget {
     share: f64,
     reliability: f64,
     leverage: f64,
+}
+
+struct PreviewSegment {
+    command: String,
+    tokens: Vec<String>,
 }
 
 fn handle_command(game: &mut Game, command: &str) -> CommandResult {
@@ -123,141 +137,14 @@ fn handle_command(game: &mut Game, command: &str) -> CommandResult {
         "status" | "s" => CommandResult::ShowStatus,
         "next" | "n" | "end" => CommandResult::Advanced(game.advance_quarter()),
         "quit" | "exit" => CommandResult::Quit,
-        "build" => {
-            let decision = match parts.get(1).copied() {
-                Some("gen") | Some("generator") | Some("generation") => {
-                    let capacity_mwh = match optional_number(parts.get(2).copied()) {
-                        Ok(Some(size)) => size,
-                        Ok(None) => GENERATION_PROJECT_CAPACITY_MWH,
-                        Err(_) => {
-                            return CommandResult::Continue(
-                                "Use 'build gen' or 'build gen 300' where the number is MWh/q."
-                                    .to_string(),
-                            );
-                        }
-                    };
-                    Decision::BuildGeneration { capacity_mwh }
-                }
-                Some("lines") | Some("line") | Some("distribution") | Some("wires") => {
-                    let customer_capacity = match optional_number(parts.get(2).copied()) {
-                        Ok(Some(size)) => size,
-                        Ok(None) => DISTRIBUTION_PROJECT_CAPACITY,
-                        Err(_) => {
-                            return CommandResult::Continue(
-                                "Use 'build lines' or 'build lines 500' where the number is customer capacity."
-                                    .to_string(),
-                            );
-                        }
-                    };
-                    Decision::BuildDistribution { customer_capacity }
-                }
-                _ => {
-                    return CommandResult::Continue(
-                        "Build what? Try 'build gen [MWh]' or 'build lines [customers]'."
-                            .to_string(),
-                    );
-                }
-            };
-            apply(game, decision)
-        }
-        "marketing" | "market" | "advertise" => {
-            let spend = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(4_000.0);
-            apply(game, Decision::Marketing { spend })
-        }
-        "stock" | "equity" => match parts.get(1).copied() {
-            Some("issue" | "sell") => {
-                let amount = parts
-                    .get(2)
-                    .and_then(|value| parse_money(value))
-                    .unwrap_or(20_000.0);
-                apply(game, Decision::IssueStock { amount })
+        "preview" | "quote" | "plan" => preview_command(game, &parts),
+        "build" | "marketing" | "market" | "advertise" | "issue" | "stock" | "equity"
+        | "buyback" | "repurchase" | "debt" | "borrow" | "loan" | "repay" | "paydown" | "buy"
+        | "acquire" | "rate" | "maintenance" | "maint" | "maintain" | "reliability" => {
+            match parse_decision(game, &parts) {
+                Ok(decision) => apply(game, decision),
+                Err(message) => CommandResult::Continue(message),
             }
-            Some("buyback" | "repurchase" | "buy") => {
-                let amount = parts
-                    .get(2)
-                    .and_then(|value| parse_money(value))
-                    .unwrap_or(10_000.0);
-                apply(game, Decision::BuyBackStock { amount })
-            }
-            Some(value) if parse_money(value).is_some() => {
-                let amount = parse_money(value).unwrap_or(20_000.0);
-                apply(game, Decision::IssueStock { amount })
-            }
-            Some(_) => CommandResult::Continue(
-                "Use 'stock issue 20000', 'stock buyback 10000', or 'stock 20000'.".to_string(),
-            ),
-            _ => {
-                let amount = parts
-                    .get(1)
-                    .and_then(|value| parse_money(value))
-                    .unwrap_or(20_000.0);
-                apply(game, Decision::IssueStock { amount })
-            }
-        },
-        "buyback" | "repurchase" => {
-            let amount = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(10_000.0);
-            apply(game, Decision::BuyBackStock { amount })
-        }
-        "debt" | "borrow" | "loan" => {
-            if first == "debt" && matches!(parts.get(1).copied(), Some("repay" | "pay" | "down")) {
-                let amount = parts
-                    .get(2)
-                    .and_then(|value| parse_money(value))
-                    .unwrap_or(10_000.0);
-                return apply(game, Decision::RepayDebt { amount });
-            }
-            let amount = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(20_000.0);
-            apply(game, Decision::Borrow { amount })
-        }
-        "repay" | "paydown" => {
-            let amount = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(10_000.0);
-            apply(game, Decision::RepayDebt { amount })
-        }
-        "buy" | "acquire" => {
-            let Some(index) = parts.get(1).and_then(|value| value.parse::<usize>().ok()) else {
-                return CommandResult::Continue("Use 'buy 1', 'buy 2', etc.".to_string());
-            };
-            if index == 0 {
-                return CommandResult::Continue("Competitor numbers start at 1.".to_string());
-            }
-            apply(
-                game,
-                Decision::Acquire {
-                    competitor_index: index - 1,
-                },
-            )
-        }
-        "rate" => {
-            let delta = match parse_rate_delta(&parts, game.player.rate_cents) {
-                Ok(Some(delta)) => delta,
-                Ok(None) => {
-                    return CommandResult::Continue(format!(
-                        "Current rate is {:.1}c/kWh. Use 'rate up 2', 'rate down 1', or 'rate 10.0'.",
-                        game.player.rate_cents
-                    ));
-                }
-                Err(message) => return CommandResult::Continue(message),
-            };
-            apply(game, Decision::AdjustRate { delta_cents: delta })
-        }
-        "maintenance" | "maint" | "maintain" | "reliability" => {
-            let spend = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(4_500.0);
-            apply(game, Decision::Maintenance { spend })
         }
         "competitors" | "rivals" => CommandResult::ShowRivals,
         "board" | "goals" | "objectives" | "milestones" => CommandResult::ShowBoard,
@@ -272,6 +159,657 @@ fn apply(game: &mut Game, decision: Decision) -> CommandResult {
     }
 }
 
+fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, String> {
+    let Some(first) = parts.first().copied() else {
+        return Err("Use 'preview <command>' or enter a command.".to_string());
+    };
+
+    match first {
+        "build" => match parts.get(1).copied() {
+            Some("gen") | Some("generator") | Some("generation") => {
+                let capacity_mwh = match optional_number(parts.get(2).copied()) {
+                    Ok(Some(size)) => size,
+                    Ok(None) => GENERATION_PROJECT_CAPACITY_MWH,
+                    Err(_) => {
+                        return Err(
+                            "Use 'build gen' or 'build gen 300' where the number is MWh/q."
+                                .to_string(),
+                        );
+                    }
+                };
+                Ok(Decision::BuildGeneration { capacity_mwh })
+            }
+            Some("lines") | Some("line") | Some("distribution") | Some("wires") => {
+                let customer_capacity = match optional_number(parts.get(2).copied()) {
+                    Ok(Some(size)) => size,
+                    Ok(None) => DISTRIBUTION_PROJECT_CAPACITY,
+                    Err(_) => {
+                        return Err(
+                            "Use 'build lines' or 'build lines 500' where the number is customer capacity."
+                                .to_string(),
+                        );
+                    }
+                };
+                Ok(Decision::BuildDistribution { customer_capacity })
+            }
+            _ => Err("Build what? Try 'build gen [MWh]' or 'build lines [customers]'.".to_string()),
+        },
+        "marketing" | "market" | "advertise" => {
+            let spend = parts
+                .get(1)
+                .and_then(|value| parse_money(value))
+                .unwrap_or(4_000.0);
+            Ok(Decision::Marketing { spend })
+        }
+        "issue" => {
+            let amount = parts
+                .get(1)
+                .and_then(|value| parse_money(value))
+                .unwrap_or(20_000.0);
+            Ok(Decision::IssueStock { amount })
+        }
+        "stock" | "equity" => match parts.get(1).copied() {
+            Some("issue" | "sell") => {
+                let amount = parts
+                    .get(2)
+                    .and_then(|value| parse_money(value))
+                    .unwrap_or(20_000.0);
+                Ok(Decision::IssueStock { amount })
+            }
+            Some("buyback" | "repurchase" | "buy") => {
+                let amount = parts
+                    .get(2)
+                    .and_then(|value| parse_money(value))
+                    .unwrap_or(10_000.0);
+                Ok(Decision::BuyBackStock { amount })
+            }
+            Some(value) if parse_money(value).is_some() => {
+                let amount = parse_money(value).unwrap_or(20_000.0);
+                Ok(Decision::IssueStock { amount })
+            }
+            Some(_) => {
+                Err("Use 'stock issue 20000', 'stock buyback 10000', or 'stock 20000'.".to_string())
+            }
+            _ => Ok(Decision::IssueStock { amount: 20_000.0 }),
+        },
+        "buyback" | "repurchase" => {
+            let amount = parts
+                .get(1)
+                .and_then(|value| parse_money(value))
+                .unwrap_or(10_000.0);
+            Ok(Decision::BuyBackStock { amount })
+        }
+        "debt" | "borrow" | "loan" => {
+            if first == "debt" && matches!(parts.get(1).copied(), Some("repay" | "pay" | "down")) {
+                let amount = parts
+                    .get(2)
+                    .and_then(|value| parse_money(value))
+                    .unwrap_or(10_000.0);
+                return Ok(Decision::RepayDebt { amount });
+            }
+            let amount = parts
+                .get(1)
+                .and_then(|value| parse_money(value))
+                .unwrap_or(20_000.0);
+            Ok(Decision::Borrow { amount })
+        }
+        "repay" | "paydown" => {
+            let amount = parts
+                .get(1)
+                .and_then(|value| parse_money(value))
+                .unwrap_or(10_000.0);
+            Ok(Decision::RepayDebt { amount })
+        }
+        "buy" | "acquire" => {
+            let Some(index) = parts.get(1).and_then(|value| value.parse::<usize>().ok()) else {
+                return Err("Use 'buy 1', 'buy 2', etc.".to_string());
+            };
+            if index == 0 {
+                return Err("Competitor numbers start at 1.".to_string());
+            }
+            Ok(Decision::Acquire {
+                competitor_index: index - 1,
+            })
+        }
+        "rate" => {
+            let delta = match parse_rate_delta(parts, game.player.rate_cents) {
+                Ok(Some(delta)) => delta,
+                Ok(None) => {
+                    return Err(format!(
+                        "Current rate is {:.1}c/kWh. Use 'rate up 2', 'rate down 1', or 'rate 10.0'.",
+                        game.player.rate_cents
+                    ));
+                }
+                Err(message) => return Err(message),
+            };
+            Ok(Decision::AdjustRate { delta_cents: delta })
+        }
+        "maintenance" | "maint" | "maintain" | "reliability" => {
+            let spend = parts
+                .get(1)
+                .and_then(|value| parse_money(value))
+                .unwrap_or(4_500.0);
+            Ok(Decision::Maintenance { spend })
+        }
+        _ => Err(format!("Unknown command '{first}'. Type 'help'.")),
+    }
+}
+
+fn preview_command(game: &Game, parts: &[&str]) -> CommandResult {
+    if parts.len() <= 1 {
+        return CommandResult::Preview(vec![
+            styled(BOLD_CYAN, "Preview only; no action taken."),
+            "Use preview build gen 400, preview debt 20000, preview buy 2, or preview maint 6000."
+                .to_string(),
+        ]);
+    }
+
+    let command_parts = &parts[1..];
+    let command = command_parts.join(" ");
+    let segments = match preview_segments(command_parts) {
+        Ok(segments) => segments,
+        Err(message) => {
+            return CommandResult::Preview(vec![
+                styled(BOLD_RED, "Cannot preview command."),
+                message,
+                "Try preview build gen 400, preview debt 20000, or preview buy 1.".to_string(),
+            ]);
+        }
+    };
+
+    CommandResult::Preview(preview_lines(game, &segments, &command))
+}
+
+fn preview_lines(game: &Game, segments: &[PreviewSegment], command: &str) -> Vec<String> {
+    let mut lines = vec![
+        styled(BOLD_CYAN, "Preview only; no action taken."),
+        format!("{} {}", muted("Command:"), styled(BOLD, command)),
+    ];
+
+    let mut simulated = game.clone();
+    let multi_step = segments.len() > 1;
+    let mut failed = false;
+
+    for (index, segment) in segments.iter().enumerate() {
+        if multi_step {
+            lines.push(format!(
+                "{} {}",
+                muted(format!("Step {}:", index + 1)),
+                styled(BOLD, &segment.command)
+            ));
+        }
+
+        let token_refs = segment
+            .tokens
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let decision = match parse_decision(&simulated, &token_refs) {
+            Ok(decision) => decision,
+            Err(message) => {
+                push_labeled_wrapped(&mut lines, "Cannot preview:", BOLD_RED, &message);
+                failed = true;
+                break;
+            }
+        };
+
+        lines.extend(decision_preview_notes(&simulated, &decision));
+        match simulated.apply_decision(decision) {
+            Ok(message) => push_labeled_wrapped(&mut lines, "Would succeed:", BOLD_GREEN, &message),
+            Err(error) => {
+                push_labeled_wrapped(&mut lines, "Would fail:", BOLD_RED, &error);
+                failed = true;
+                break;
+            }
+        }
+    }
+
+    let effect_lines = immediate_effect_lines(game, &simulated);
+    if !failed || !only_no_immediate_effects(&effect_lines) {
+        lines.push(styled(
+            BOLD_CYAN,
+            if failed {
+                "Effects Through Successful Steps"
+            } else {
+                "Immediate Effects"
+            },
+        ));
+        lines.extend(effect_lines);
+        push_labeled_wrapped(
+            &mut lines,
+            "Note:",
+            DIM,
+            "Quarter-end demand, churn, rival response, macro movement, and project completion are not simulated.",
+        );
+    }
+
+    lines
+}
+
+fn preview_segments(parts: &[&str]) -> Result<Vec<PreviewSegment>, String> {
+    let mut segments = Vec::new();
+    let mut index = 0;
+
+    while index < parts.len() {
+        let length = preview_segment_len(&parts[index..])?;
+        let tokens = parts[index..index + length]
+            .iter()
+            .map(|token| (*token).to_string())
+            .collect::<Vec<_>>();
+        segments.push(PreviewSegment {
+            command: tokens.join(" "),
+            tokens,
+        });
+        index += length;
+    }
+
+    Ok(segments)
+}
+
+fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
+    let Some(first) = parts.first().copied() else {
+        return Err("Use 'preview <command>' or enter a command.".to_string());
+    };
+
+    match first {
+        "build" => {
+            let mut length = 1;
+            if parts.get(1).is_some() {
+                length = 2;
+            }
+            if parts
+                .get(2)
+                .is_some_and(|value| parse_number(value).is_some())
+            {
+                length = 3;
+            }
+            Ok(length)
+        }
+        "marketing" | "market" | "advertise" | "issue" | "buyback" | "repurchase" | "repay"
+        | "paydown" | "maintenance" | "maint" | "maintain" | "reliability" => {
+            Ok(1 + optional_money_argument(parts.get(1).copied()))
+        }
+        "stock" | "equity" => match parts.get(1).copied() {
+            Some("issue" | "sell" | "buyback" | "repurchase" | "buy") => {
+                Ok(2 + optional_money_argument(parts.get(2).copied()))
+            }
+            Some(value) if parse_money(value).is_some() => Ok(2),
+            Some(value) if is_preview_action_start(value) => Ok(1),
+            Some(_) => Ok(2),
+            None => Ok(1),
+        },
+        "debt" => match parts.get(1).copied() {
+            Some("repay" | "pay" | "down") => {
+                Ok(2 + optional_money_argument(parts.get(2).copied()))
+            }
+            Some(value) if parse_money(value).is_some() => Ok(2),
+            Some(value) if is_preview_action_start(value) => Ok(1),
+            Some(_) => Ok(2),
+            None => Ok(1),
+        },
+        "borrow" | "loan" => Ok(1 + optional_money_argument(parts.get(1).copied())),
+        "buy" | "acquire" => Ok(if parts.get(1).is_some() { 2 } else { 1 }),
+        "rate" => match parts.get(1).copied() {
+            Some("up" | "down" | "+" | "-") => {
+                Ok(2 + optional_rate_argument(parts.get(2).copied()))
+            }
+            Some(value) if is_rate_argument(value) => Ok(2),
+            Some(value) if is_preview_action_start(value) => Ok(1),
+            Some(_) => Ok(2),
+            None => Ok(1),
+        },
+        _ => Err(format!("Unknown command '{first}'. Type 'help'.")),
+    }
+}
+
+fn optional_money_argument(value: Option<&str>) -> usize {
+    value
+        .filter(|value| parse_money(value).is_some())
+        .map_or(0, |_| 1)
+}
+
+fn optional_rate_argument(value: Option<&str>) -> usize {
+    value
+        .filter(|value| is_rate_argument(value))
+        .map_or(0, |_| 1)
+}
+
+fn is_rate_argument(value: &str) -> bool {
+    if value.starts_with('+') && value.len() > 1 {
+        parse_rate_number(&value[1..]).is_ok()
+    } else if value.starts_with('-') && value.len() > 1 {
+        parse_rate_number(&value[1..]).is_ok()
+    } else {
+        parse_rate_number(value).is_ok()
+    }
+}
+
+fn is_preview_action_start(value: &str) -> bool {
+    matches!(
+        value,
+        "build"
+            | "marketing"
+            | "market"
+            | "advertise"
+            | "issue"
+            | "stock"
+            | "equity"
+            | "buyback"
+            | "repurchase"
+            | "debt"
+            | "borrow"
+            | "loan"
+            | "repay"
+            | "paydown"
+            | "buy"
+            | "acquire"
+            | "rate"
+            | "maintenance"
+            | "maint"
+            | "maintain"
+            | "reliability"
+    )
+}
+
+fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
+    match decision {
+        Decision::BuildGeneration { capacity_mwh } => {
+            let size = capacity_mwh.clamp(MIN_GENERATION_PROJECT_MWH, MAX_GENERATION_PROJECT_MWH);
+            let cost = generation_project_cost(size);
+            vec![format!(
+                "{} generation: {} for {:.0} MWh/q, {}q, {} per MWh/q.",
+                muted("Quote:"),
+                styled(BOLD_YELLOW, money(cost)),
+                size,
+                generation_project_duration(size),
+                money(cost / size)
+            )]
+        }
+        Decision::BuildDistribution { customer_capacity } => {
+            let size = customer_capacity.clamp(
+                MIN_DISTRIBUTION_PROJECT_CUSTOMERS,
+                MAX_DISTRIBUTION_PROJECT_CUSTOMERS,
+            );
+            let cost = distribution_project_cost(size);
+            vec![format!(
+                "{} distribution: {} for {:.0} customers, {}q, {} per customer.",
+                muted("Quote:"),
+                styled(BOLD_YELLOW, money(cost)),
+                size,
+                distribution_project_duration(size),
+                money(cost / size)
+            )]
+        }
+        Decision::Marketing { spend } => vec![format!(
+            "{} {} spend; clamped to {}-{} and mostly affects next quarter's customer capture.",
+            muted("Quote:"),
+            styled(BOLD_YELLOW, money(*spend)),
+            money(1_000.0),
+            money(25_000.0)
+        )],
+        Decision::IssueStock { amount } => vec![format!(
+            "{} issue {}; net proceeds reflect dilution, fees, and current valuation.",
+            muted("Quote:"),
+            styled(BOLD_YELLOW, money(*amount))
+        )],
+        Decision::BuyBackStock { amount } => vec![format!(
+            "{} repurchase request {}; actual spend is limited by cash and public float.",
+            muted("Quote:"),
+            styled(BOLD_YELLOW, money(*amount))
+        )],
+        Decision::Borrow { amount } => vec![format!(
+            "{} borrow {}; current room {} at {:.1}% floating.",
+            muted("Quote:"),
+            styled(BOLD_YELLOW, money(*amount)),
+            styled(
+                borrowing_room_tone(game.borrowing_room()),
+                money(game.borrowing_room())
+            ),
+            game.player_annual_interest_rate() * 100.0
+        )],
+        Decision::RepayDebt { amount } => vec![format!(
+            "{} repay {}; limited by cash {} and debt {}.",
+            muted("Quote:"),
+            styled(BOLD_YELLOW, money(*amount)),
+            money(game.player.cash),
+            money(game.player.debt)
+        )],
+        Decision::Acquire { competitor_index } => {
+            if let Some(competitor) = game.competitors.get(*competitor_index) {
+                vec![format!(
+                    "{} buy {} for {}; +{:.0} cust, +{:.0} MWh/q pre-haircut.",
+                    muted("Quote:"),
+                    styled(BOLD, shorten_plain(&competitor.name, 16)),
+                    styled(
+                        BOLD_YELLOW,
+                        money(game.acquisition_price(*competitor_index))
+                    ),
+                    competitor.customers,
+                    competitor.generation_capacity_mwh
+                )]
+            } else {
+                vec![format!(
+                    "{} No rival has that number.",
+                    styled(BOLD_RED, "Quote:")
+                )]
+            }
+        }
+        Decision::AdjustRate { delta_cents } => {
+            let target = (game.player.rate_cents + delta_cents).clamp(7.0, 15.0);
+            vec![format!(
+                "{} rate would move from {:.1}c to {:.1}c/kWh.",
+                muted("Quote:"),
+                game.player.rate_cents,
+                target
+            )]
+        }
+        Decision::Maintenance { spend } => vec![format!(
+            "{} {} maintenance; immediate reliability gain with scale diminishing returns.",
+            muted("Quote:"),
+            styled(BOLD_YELLOW, money(*spend))
+        )],
+    }
+}
+
+fn immediate_effect_lines(before: &Game, after: &Game) -> Vec<String> {
+    let mut lines = Vec::new();
+    push_money_delta(&mut lines, "Cash", before.player.cash, after.player.cash);
+    push_money_delta(&mut lines, "Debt", before.player.debt, after.player.debt);
+    push_percent_delta(
+        &mut lines,
+        "Debt/assets",
+        before.player.debt_to_assets(),
+        after.player.debt_to_assets(),
+    );
+    push_money_delta(
+        &mut lines,
+        "Interest/q",
+        quarterly_interest_payment(before),
+        quarterly_interest_payment(after),
+    );
+    push_rate_delta(
+        &mut lines,
+        "Rate",
+        before.player.rate_cents,
+        after.player.rate_cents,
+    );
+    push_percent_delta(
+        &mut lines,
+        "Reliability",
+        before.player.reliability,
+        after.player.reliability,
+    );
+    push_number_delta(
+        &mut lines,
+        "Reputation",
+        before.player.reputation,
+        after.player.reputation,
+    );
+    push_number_delta(
+        &mut lines,
+        "Customers",
+        before.player.customers,
+        after.player.customers,
+    );
+    push_number_delta(
+        &mut lines,
+        "Customer capacity",
+        before.player.customer_capacity(&before.market),
+        after.player.customer_capacity(&after.market),
+    );
+    push_mwh_delta(
+        &mut lines,
+        "Firm reserve",
+        before.player.firm_generation_reserve_mwh(&before.market),
+        after.player.firm_generation_reserve_mwh(&after.market),
+    );
+    push_number_delta(
+        &mut lines,
+        "Shares",
+        before.player.shares,
+        after.player.shares,
+    );
+    push_stock_delta(
+        &mut lines,
+        "Stock price",
+        before.player.stock_price,
+        after.player.stock_price,
+    );
+
+    let project_delta = after.pending_projects.len() as i32 - before.pending_projects.len() as i32;
+    if project_delta != 0 {
+        lines.push(format!(
+            "{} {} -> {} ({:+})",
+            muted("Projects"),
+            before.pending_projects.len(),
+            after.pending_projects.len(),
+            project_delta
+        ));
+    }
+
+    let rival_delta = after.competitors.len() as i32 - before.competitors.len() as i32;
+    if rival_delta != 0 {
+        lines.push(format!(
+            "{} {} -> {} ({:+})",
+            muted("Rivals"),
+            before.competitors.len(),
+            after.competitors.len(),
+            rival_delta
+        ));
+    }
+
+    if lines.is_empty() {
+        lines.push("No immediate dashboard metrics would change.".to_string());
+    }
+    lines
+}
+
+fn only_no_immediate_effects(lines: &[String]) -> bool {
+    matches!(lines, [line] if line == "No immediate dashboard metrics would change.")
+}
+
+fn quarterly_interest_payment(game: &Game) -> f64 {
+    game.player.debt * game.player_annual_interest_rate() / 4.0
+}
+
+fn push_money_delta(lines: &mut Vec<String>, label: &str, before: f64, after: f64) {
+    if changed(before, after, 0.5) {
+        lines.push(format!(
+            "{} {} -> {} ({})",
+            muted(label),
+            money(before),
+            money(after),
+            signed_money(after - before)
+        ));
+    }
+}
+
+fn push_number_delta(lines: &mut Vec<String>, label: &str, before: f64, after: f64) {
+    if changed(before, after, 0.05) {
+        let delta = after - before;
+        lines.push(format!(
+            "{} {:.0} -> {:.0} ({:+.0})",
+            muted(label),
+            before,
+            after,
+            if delta.abs() < 0.5 { 0.0 } else { delta }
+        ));
+    }
+}
+
+fn push_percent_delta(lines: &mut Vec<String>, label: &str, before: f64, after: f64) {
+    if changed(before, after, 0.0005) {
+        lines.push(format!(
+            "{} {:.1}% -> {:.1}% ({:+.1} pts)",
+            muted(label),
+            before * 100.0,
+            after * 100.0,
+            (after - before) * 100.0
+        ));
+    }
+}
+
+fn push_rate_delta(lines: &mut Vec<String>, label: &str, before: f64, after: f64) {
+    if changed(before, after, 0.005) {
+        lines.push(format!(
+            "{} {:.1}c -> {:.1}c ({:+.1}c)",
+            muted(label),
+            before,
+            after,
+            after - before
+        ));
+    }
+}
+
+fn push_mwh_delta(lines: &mut Vec<String>, label: &str, before: f64, after: f64) {
+    if changed(before, after, 0.5) {
+        lines.push(format!(
+            "{} {:+.0} MWh -> {:+.0} MWh ({:+.0})",
+            muted(label),
+            before,
+            after,
+            after - before
+        ));
+    }
+}
+
+fn push_stock_delta(lines: &mut Vec<String>, label: &str, before: f64, after: f64) {
+    if changed(before, after, 0.005) {
+        lines.push(format!(
+            "{} ${:.2} -> ${:.2} ({:+.2})",
+            muted(label),
+            before,
+            after,
+            after - before
+        ));
+    }
+}
+
+fn signed_money(value: f64) -> String {
+    if value >= 0.0 {
+        format!("+{}", money(value))
+    } else {
+        format!("-{}", money(value.abs()))
+    }
+}
+
+fn changed(before: f64, after: f64, epsilon: f64) -> bool {
+    (after - before).abs() > epsilon
+}
+
+fn push_labeled_wrapped(lines: &mut Vec<String>, label: &str, style: &str, text: &str) {
+    let label_width = label.chars().count();
+    let body_width = CONTENT_WIDTH.saturating_sub(label_width + 1).max(16);
+
+    for (index, wrapped) in wrap_plain_text(text, body_width).iter().enumerate() {
+        if index == 0 {
+            lines.push(format!("{} {wrapped}", styled(style, label)));
+        } else {
+            lines.push(format!("{} {wrapped}", " ".repeat(label_width)));
+        }
+    }
+}
+
 fn print_help() {
     println!("{}", styled(BOLD_CYAN, "Electrification Command Reference"));
     print_box_pair(
@@ -283,15 +821,16 @@ fn print_help() {
             "maintenance [amount]  alias: maint".to_string(),
             "rate up|down [cents]".to_string(),
             "rate 10.0             set target".to_string(),
+            "preview <command>     inspect first".to_string(),
         ],
         "Capital",
         &[
-            "stock issue [amount]".to_string(),
-            "stock [amount]        issue stock".to_string(),
-            "buyback [amount]".to_string(),
-            "debt [amount]         borrow".to_string(),
-            "repay [amount]        pay debt down".to_string(),
+            "issue [amount]       issue stock".to_string(),
+            "buyback [amount]     repurchase shares".to_string(),
+            "borrow [amount]      raise debt".to_string(),
+            "repay [amount]       pay debt down".to_string(),
             "buy <number>          acquire rival".to_string(),
+            "stock / debt forms remain aliases".to_string(),
         ],
     );
     print_box_pair(
@@ -300,6 +839,7 @@ fn print_help() {
             "status     show dashboard".to_string(),
             "rivals     competitor detail".to_string(),
             "board      objectives and milestones".to_string(),
+            "quote      alias for preview".to_string(),
             "help       command reference".to_string(),
             "next       finish quarter".to_string(),
             "n          finish quarter".to_string(),
@@ -1422,7 +1962,7 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
             "reliability gain scales down as the asset base grows",
         ),
         action_line(
-            "debt [amt]",
+            "borrow [amt]",
             format!(
                 "{} available at {} floating",
                 styled(
@@ -1436,10 +1976,14 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
             ),
         ),
         action_line(
-            "stock / buyback",
+            "issue / buyback",
             "equity raises cash with dilution; buybacks spend cash",
         ),
         action_line("rivals / board", "inspect competitors or milestone targets"),
+        action_line(
+            "preview <cmd>",
+            "show immediate effects without taking action",
+        ),
     ];
 
     if let Some((index, price)) = cheapest_competitor(game) {
@@ -1983,6 +2527,110 @@ mod tests {
     }
 
     #[test]
+    fn issue_single_word_runs_stock_issuance() {
+        let mut game = Game::with_seed(109);
+        let starting_cash = game.player.cash;
+        let starting_shares = game.player.shares;
+
+        match handle_command(&mut game, "issue 10000") {
+            CommandResult::Continue(message) => assert!(message.contains("Issued")),
+            _ => panic!("issue should apply stock issuance"),
+        }
+
+        assert!(game.player.cash > starting_cash);
+        assert!(game.player.shares > starting_shares);
+    }
+
+    #[test]
+    fn preview_debt_does_not_mutate_game() {
+        let mut game = Game::with_seed(105);
+        let starting_cash = game.player.cash;
+        let starting_debt = game.player.debt;
+
+        match handle_command(&mut game, "preview debt 10000") {
+            CommandResult::Preview(lines) => {
+                assert!(lines.iter().any(|line| line.contains("Would succeed")));
+                assert!(lines.iter().any(|line| line.contains("Cash")));
+                assert!(lines.iter().any(|line| line.contains("Debt")));
+                assert!(lines.iter().any(|line| line.contains("Interest/q")));
+            }
+            _ => panic!("preview debt should show preview output"),
+        }
+
+        assert_eq!(game.player.cash, starting_cash);
+        assert_eq!(game.player.debt, starting_debt);
+    }
+
+    #[test]
+    fn preview_can_chain_borrowing_and_acquisition_without_mutating_game() {
+        let mut game = Game::with_seed(107);
+        game.player.cash = 50_000.0;
+        let starting_cash = game.player.cash;
+        let starting_debt = game.player.debt;
+        let starting_competitors = game.competitors.len();
+
+        match handle_command(&mut game, "preview borrow 10000 buy 3") {
+            CommandResult::Preview(lines) => {
+                assert!(lines.iter().any(|line| line.contains("Step 1")));
+                assert!(lines.iter().any(|line| line.contains("Step 2")));
+                assert!(lines.iter().any(|line| line.contains("Interest/q")));
+                assert!(lines.iter().any(|line| line.contains("Rivals")));
+            }
+            _ => panic!("chained preview should show preview output"),
+        }
+
+        assert_eq!(game.player.cash, starting_cash);
+        assert_eq!(game.player.debt, starting_debt);
+        assert_eq!(game.competitors.len(), starting_competitors);
+    }
+
+    #[test]
+    fn preview_chain_keeps_stock_buyback_as_one_transaction() {
+        let mut game = Game::with_seed(108);
+        game.player.cash = 60_000.0;
+
+        match handle_command(&mut game, "preview issue 5000 buyback 5000 borrow 10000") {
+            CommandResult::Preview(lines) => {
+                assert!(
+                    lines
+                        .iter()
+                        .any(|line| line.contains("Step 1") && line.contains("issue 5000"))
+                );
+                assert!(
+                    lines
+                        .iter()
+                        .any(|line| line.contains("Step 2") && line.contains("buyback 5000"))
+                );
+                assert!(
+                    lines
+                        .iter()
+                        .any(|line| line.contains("Step 3") && line.contains("borrow 10000"))
+                );
+                assert!(!lines.iter().any(|line| line.contains("Step 4")));
+            }
+            _ => panic!("financial command chain should show preview output"),
+        }
+    }
+
+    #[test]
+    fn preview_maint_alias_does_not_mutate_game() {
+        let mut game = Game::with_seed(106);
+        let starting_cash = game.player.cash;
+        let starting_reliability = game.player.reliability;
+
+        match handle_command(&mut game, "quote maint 4500") {
+            CommandResult::Preview(lines) => {
+                assert!(lines.iter().any(|line| line.contains("Would succeed")));
+                assert!(lines.iter().any(|line| line.contains("Reliability")));
+            }
+            _ => panic!("quote maint should show preview output"),
+        }
+
+        assert_eq!(game.player.cash, starting_cash);
+        assert_eq!(game.player.reliability, starting_reliability);
+    }
+
+    #[test]
     fn visible_width_ignores_ansi_escape_sequences() {
         let line = format!("{}Cash{} {}", DIM, RESET, styled(BOLD_GREEN, "$34.0k"));
         assert_eq!(visible_width(&line), "Cash $34.0k".len());
@@ -1990,11 +2638,7 @@ mod tests {
 
     #[test]
     fn fit_line_preserves_ansi_sequences_without_counting_them() {
-        let line = format!(
-            "{} {}",
-            styled(BOLD_CYAN, "stock issue [amt]"),
-            "no fixed cap"
-        );
+        let line = format!("{} {}", styled(BOLD_CYAN, "issue [amt]"), "no fixed cap");
         let fitted = fit_line(&line, 24);
         assert_eq!(visible_width(&fitted), 24);
         assert!(fitted.contains(BOLD_CYAN));
