@@ -159,6 +159,22 @@ fn apply(game: &mut Game, decision: Decision) -> CommandResult {
     }
 }
 
+fn borrow_amount(game: &Game, value: Option<&str>) -> f64 {
+    match value {
+        Some("max") => game.borrowing_room(),
+        Some(value) => parse_money(value).unwrap_or(20_000.0),
+        None => 20_000.0,
+    }
+}
+
+fn repay_amount(game: &Game, value: Option<&str>) -> f64 {
+    match value {
+        Some("max") => game.player.debt.min(game.player.cash),
+        Some(value) => parse_money(value).unwrap_or(10_000.0),
+        None => 10_000.0,
+    }
+}
+
 fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, String> {
     let Some(first) = parts.first().copied() else {
         return Err("Use 'preview <command>' or enter a command.".to_string());
@@ -241,23 +257,14 @@ fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, String> {
         }
         "debt" | "borrow" | "loan" => {
             if first == "debt" && matches!(parts.get(1).copied(), Some("repay" | "pay" | "down")) {
-                let amount = parts
-                    .get(2)
-                    .and_then(|value| parse_money(value))
-                    .unwrap_or(10_000.0);
+                let amount = repay_amount(game, parts.get(2).copied());
                 return Ok(Decision::RepayDebt { amount });
             }
-            let amount = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(20_000.0);
+            let amount = borrow_amount(game, parts.get(1).copied());
             Ok(Decision::Borrow { amount })
         }
         "repay" | "paydown" => {
-            let amount = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(10_000.0);
+            let amount = repay_amount(game, parts.get(1).copied());
             Ok(Decision::RepayDebt { amount })
         }
         "buy" | "acquire" => {
@@ -425,10 +432,11 @@ fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
             }
             Ok(length)
         }
-        "marketing" | "market" | "advertise" | "issue" | "buyback" | "repurchase" | "repay"
-        | "paydown" | "maintenance" | "maint" | "maintain" | "reliability" => {
+        "marketing" | "market" | "advertise" | "issue" | "buyback" | "repurchase"
+        | "maintenance" | "maint" | "maintain" | "reliability" => {
             Ok(1 + optional_money_argument(parts.get(1).copied()))
         }
+        "repay" | "paydown" => Ok(1 + optional_money_or_max_argument(parts.get(1).copied())),
         "stock" | "equity" => match parts.get(1).copied() {
             Some("issue" | "sell" | "buyback" | "repurchase" | "buy") => {
                 Ok(2 + optional_money_argument(parts.get(2).copied()))
@@ -440,14 +448,14 @@ fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
         },
         "debt" => match parts.get(1).copied() {
             Some("repay" | "pay" | "down") => {
-                Ok(2 + optional_money_argument(parts.get(2).copied()))
+                Ok(2 + optional_money_or_max_argument(parts.get(2).copied()))
             }
-            Some(value) if parse_money(value).is_some() => Ok(2),
+            Some(value) if is_money_or_max_argument(value) => Ok(2),
             Some(value) if is_preview_action_start(value) => Ok(1),
             Some(_) => Ok(2),
             None => Ok(1),
         },
-        "borrow" | "loan" => Ok(1 + optional_money_argument(parts.get(1).copied())),
+        "borrow" | "loan" => Ok(1 + optional_money_or_max_argument(parts.get(1).copied())),
         "buy" | "acquire" => Ok(if parts.get(1).is_some() { 2 } else { 1 }),
         "rate" => match parts.get(1).copied() {
             Some("up" | "down" | "+" | "-") => {
@@ -466,6 +474,16 @@ fn optional_money_argument(value: Option<&str>) -> usize {
     value
         .filter(|value| parse_money(value).is_some())
         .map_or(0, |_| 1)
+}
+
+fn optional_money_or_max_argument(value: Option<&str>) -> usize {
+    value
+        .filter(|value| is_money_or_max_argument(value))
+        .map_or(0, |_| 1)
+}
+
+fn is_money_or_max_argument(value: &str) -> bool {
+    value == "max" || parse_money(value).is_some()
 }
 
 fn optional_rate_argument(value: Option<&str>) -> usize {
@@ -827,8 +845,8 @@ fn print_help() {
         &[
             "issue [amount]       issue stock".to_string(),
             "buyback [amount]     repurchase shares".to_string(),
-            "borrow [amount]      raise debt".to_string(),
-            "repay [amount]       pay debt down".to_string(),
+            "borrow [amount|max]  raise debt".to_string(),
+            "repay [amount|max]   pay debt down".to_string(),
             "buy <number>          acquire rival".to_string(),
             "stock / debt forms remain aliases".to_string(),
         ],
@@ -1962,7 +1980,7 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
             "reliability gain scales down as the asset base grows",
         ),
         action_line(
-            "borrow [amt]",
+            "borrow [amt|max]",
             format!(
                 "{} available at {} floating",
                 styled(
@@ -2542,6 +2560,37 @@ mod tests {
     }
 
     #[test]
+    fn borrow_max_uses_remaining_borrowing_room() {
+        let mut game = Game::with_seed(110);
+        let starting_cash = game.player.cash;
+        let starting_debt = game.player.debt;
+        let room = game.borrowing_room();
+
+        match handle_command(&mut game, "borrow max") {
+            CommandResult::Continue(message) => assert!(message.contains("Borrowed")),
+            _ => panic!("borrow max should apply borrowing"),
+        }
+
+        assert!((game.player.cash - (starting_cash + room)).abs() < 0.01);
+        assert!((game.player.debt - (starting_debt + room)).abs() < 0.01);
+    }
+
+    #[test]
+    fn repay_max_uses_lesser_of_cash_and_debt() {
+        let mut game = Game::with_seed(111);
+        game.player.cash = 7_500.0;
+        game.player.debt = 20_000.0;
+
+        match handle_command(&mut game, "repay max") {
+            CommandResult::Continue(message) => assert!(message.contains("Repaid")),
+            _ => panic!("repay max should apply repayment"),
+        }
+
+        assert!((game.player.cash - 0.0).abs() < 0.01);
+        assert!((game.player.debt - 12_500.0).abs() < 0.01);
+    }
+
+    #[test]
     fn preview_debt_does_not_mutate_game() {
         let mut game = Game::with_seed(105);
         let starting_cash = game.player.cash;
@@ -2609,6 +2658,28 @@ mod tests {
                 assert!(!lines.iter().any(|line| line.contains("Step 4")));
             }
             _ => panic!("financial command chain should show preview output"),
+        }
+    }
+
+    #[test]
+    fn preview_chain_keeps_max_with_borrow_and_repay() {
+        let mut game = Game::with_seed(112);
+
+        match handle_command(&mut game, "preview borrow max repay max") {
+            CommandResult::Preview(lines) => {
+                assert!(
+                    lines
+                        .iter()
+                        .any(|line| line.contains("Step 1") && line.contains("borrow max"))
+                );
+                assert!(
+                    lines
+                        .iter()
+                        .any(|line| line.contains("Step 2") && line.contains("repay max"))
+                );
+                assert!(!lines.iter().any(|line| line.contains("Step 3")));
+            }
+            _ => panic!("max financial command chain should show preview output"),
         }
     }
 
