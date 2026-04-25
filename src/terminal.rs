@@ -2,8 +2,8 @@ use std::io::{self, Write};
 
 use crate::sim::{
     DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game, Outcome,
-    OutcomeKind, QuarterReport, distribution_project_cost, distribution_project_duration,
-    generation_project_cost, generation_project_duration, money,
+    OutcomeKind, QuarterReport, ShockKind, distribution_project_cost,
+    distribution_project_duration, generation_project_cost, generation_project_duration, money,
 };
 
 const SCREEN_WIDTH: usize = 88;
@@ -888,7 +888,31 @@ fn signal_lines(game: &Game) -> Vec<String> {
         ));
     }
 
+    if !game.active_shocks.is_empty() {
+        let descriptors: Vec<String> = game
+            .active_shocks
+            .iter()
+            .map(|shock| {
+                format!(
+                    "{} ({}q)",
+                    shock_label(&shock.kind),
+                    shock.quarters_remaining
+                )
+            })
+            .collect();
+        lines.push(signal_line("Shocks", BOLD_RED, descriptors.join(" | ")));
+    }
+
     lines
+}
+
+fn shock_label(kind: &ShockKind) -> &'static str {
+    match kind {
+        ShockKind::RateFreeze => "rate freeze",
+        ShockKind::DemandRecession => "demand recession",
+        ShockKind::DemandBoom => "demand boom",
+        ShockKind::InputCostShock => "input cost shock",
+    }
 }
 
 fn action_effect_lines(game: &Game) -> Vec<String> {

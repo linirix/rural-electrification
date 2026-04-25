@@ -20,9 +20,25 @@ pub struct Game {
     pub competitors: Vec<Utility>,
     pub pending_projects: Vec<Project>,
     pub acquisition_cooldown: u32,
+    pub active_shocks: Vec<ActiveShock>,
+    pub startup_index: u32,
     pub last_report: Option<QuarterReport>,
     pub outcome: Option<Outcome>,
     rng: Rng,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveShock {
+    pub kind: ShockKind,
+    pub quarters_remaining: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ShockKind {
+    RateFreeze,
+    DemandRecession,
+    DemandBoom,
+    InputCostShock,
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +76,7 @@ pub struct Utility {
     pub reliability: f64,
     pub marketing_momentum: f64,
     pub asset_base: f64,
+    pub last_quarter_customers: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -172,6 +189,7 @@ impl Game {
                 reliability: 0.82,
                 marketing_momentum: 0.08,
                 asset_base: 78_000.0,
+                last_quarter_customers: 160.0,
             },
             competitors: vec![
                 Utility {
@@ -188,6 +206,7 @@ impl Game {
                     reliability: 0.81,
                     marketing_momentum: 0.04,
                     asset_base: 96_000.0,
+                    last_quarter_customers: 260.0,
                 },
                 Utility {
                     name: "District Current".to_string(),
@@ -203,6 +222,7 @@ impl Game {
                     reliability: 0.76,
                     marketing_momentum: 0.05,
                     asset_base: 71_000.0,
+                    last_quarter_customers: 210.0,
                 },
                 Utility {
                     name: "Metro Light".to_string(),
@@ -218,10 +238,13 @@ impl Game {
                     reliability: 0.71,
                     marketing_momentum: 0.02,
                     asset_base: 42_000.0,
+                    last_quarter_customers: 110.0,
                 },
             ],
             pending_projects: Vec::new(),
             acquisition_cooldown: 0,
+            active_shocks: Vec::new(),
+            startup_index: 0,
             last_report: None,
             outcome: None,
             rng: Rng::new(seed),
@@ -299,21 +322,31 @@ impl Game {
                 let old_market_cap = self.player.market_cap().max(1.0);
                 let old_shares = self.player.shares.max(1.0);
                 let pressure = amount / old_market_cap;
+                let pressure_squared = pressure * pressure;
                 let finance_pressure = self.macro_state.financing_pressure();
                 let issue_discount =
-                    (0.03 + pressure * 0.08 + finance_pressure * 0.055).clamp(0.03, 0.38);
+                    (0.03 + pressure * 0.05 + pressure_squared * 0.08 + finance_pressure * 0.055)
+                        .clamp(0.03, 0.65);
                 let issue_price = (self.player.stock_price * (1.0 - issue_discount)).max(1.0);
                 let new_shares = amount / issue_price;
-                let underwriting_cost =
-                    amount * (0.025 + pressure.min(4.0) * 0.015 + finance_pressure * 0.012);
+                let fee_rate =
+                    0.025 + pressure * 0.012 + pressure_squared * 0.020 + finance_pressure * 0.012;
+                if fee_rate >= 0.75 {
+                    return Err(format!(
+                        "The market cannot absorb that stock sale. Expected fees would consume {:.0}% of gross proceeds; try a smaller issue.",
+                        fee_rate * 100.0
+                    ));
+                }
+                let underwriting_cost = amount * fee_rate;
                 let net_proceeds = amount - underwriting_cost;
                 let post_money_price = (old_market_cap + net_proceeds) / (old_shares + new_shares);
-                let signal_drag = (pressure * 0.025).clamp(0.0, 0.12);
+                let signal_drag = (pressure * 0.020 + pressure_squared * 0.040).clamp(0.0, 0.30);
                 self.player.cash += net_proceeds;
                 self.player.shares += new_shares;
-                self.player.stock_price = (post_money_price * (1.0 - signal_drag)).clamp(6.0, 85.0);
+                self.player.stock_price = (post_money_price * (1.0 - signal_drag)).max(1.0);
                 self.player.reputation =
-                    (self.player.reputation - pressure.min(2.5) * 2.0).clamp(0.0, 100.0);
+                    (self.player.reputation - pressure * 1.5 - pressure_squared * 1.5)
+                        .clamp(0.0, 100.0);
                 Ok(format!(
                     "Issued {:.0} shares at ${:.2}. Gross {}, net cash {} after fees; dilution reset stock to ${:.2}.",
                     new_shares,
@@ -350,8 +383,7 @@ impl Game {
                 let confidence_lift = (pressure * 0.05).clamp(0.0, 0.10);
                 self.player.cash -= actual_spend;
                 self.player.shares = remaining_shares;
-                self.player.stock_price =
-                    (theoretical_price * (1.0 + confidence_lift)).clamp(6.0, 85.0);
+                self.player.stock_price = (theoretical_price * (1.0 + confidence_lift)).max(1.0);
                 Ok(format!(
                     "Bought back {:.0} shares at ${:.2}, spending {}. Shares outstanding now {:.0}; stock is ${:.2}.",
                     shares_bought,
@@ -427,8 +459,12 @@ impl Game {
                 self.require_cash(price)?;
                 let acquired = self.competitors.remove(competitor_index);
                 let acquired_name = acquired.name.clone();
+                let absorbed_cash = acquired.cash * 0.80;
+                let assumed_debt = acquired.debt * 0.75;
                 self.player.cash -= price;
-                self.player.debt += acquired.debt * 0.65;
+                self.player.cash += absorbed_cash;
+                self.player.debt += assumed_debt;
+                // Integration losses keep roll-ups from being pure scale arbitrage.
                 self.player.customers += acquired.customers * 0.92;
                 self.player.generation_capacity_mwh += acquired.generation_capacity_mwh * 0.86;
                 self.player.distribution_capacity += acquired.distribution_capacity * 0.90;
@@ -451,11 +487,19 @@ impl Game {
                 self.player.reputation = (self.player.reputation - 1.5).clamp(0.0, 100.0);
                 self.acquisition_cooldown = 3;
                 Ok(format!(
-                    "Acquired {acquired_name} for {}. Integration losses trimmed its customer book, but its capacity and accounts are now part of your network.",
-                    money(price)
+                    "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt).",
+                    money(price),
+                    money(absorbed_cash),
+                    money(assumed_debt)
                 ))
             }
             Decision::AdjustRate { delta_cents } => {
+                if delta_cents > 0.0 && self.rate_frozen() {
+                    return Err(
+                        "The market-wide rate freeze blocks any rate increase right now."
+                            .to_string(),
+                    );
+                }
                 let old = self.player.rate_cents;
                 self.player.rate_cents = (self.player.rate_cents + delta_cents).clamp(7.0, 15.0);
                 let actual_delta = self.player.rate_cents - old;
@@ -484,13 +528,14 @@ impl Game {
                 let spend = spend.clamp(1_500.0, 20_000.0);
                 self.require_cash(spend)?;
                 self.player.cash -= spend;
-                self.player.reliability =
-                    (self.player.reliability + spend / 28_000.0).clamp(0.35, 0.98);
+                let gain = (spend / 22_000.0) * (1.05_f64 - self.player.reliability).max(0.05);
+                self.player.reliability = (self.player.reliability + gain).clamp(0.35, 0.98);
                 self.player.reputation =
                     (self.player.reputation + spend / 5_500.0).clamp(0.0, 100.0);
                 Ok(format!(
-                    "Spent {} on reliability work, spare parts, and service response.",
-                    money(spend)
+                    "Spent {} on reliability work; gained {:.1} reliability points.",
+                    money(spend),
+                    gain * 100.0
                 ))
             }
         }
@@ -518,7 +563,9 @@ impl Game {
         let starting_customers = self.player.customers;
         let mut events = Vec::new();
 
+        self.advance_shocks(&mut events);
         self.advance_macro_environment(&mut events);
+        self.maybe_spawn_startup(&mut events);
         self.complete_projects(&mut events);
         self.grow_market(&mut events);
         self.competitor_plans(&mut events);
@@ -528,13 +575,20 @@ impl Game {
             competitor.marketing_momentum *= 0.62;
         }
 
+        self.player.last_quarter_customers = self.player.customers;
+        for competitor in &mut self.competitors {
+            competitor.last_quarter_customers = competitor.customers;
+        }
+
         let lost_customers = self.customer_churn(&mut events);
         self.allocate_new_customers(&mut events);
 
+        let cost_multiplier = self.cost_shock_multiplier();
         let player_finances = settle_utility(
             &mut self.player,
             &self.market,
             &self.macro_state,
+            cost_multiplier,
             true,
             &mut events,
         );
@@ -545,6 +599,7 @@ impl Game {
                 competitor,
                 &self.market,
                 &self.macro_state,
+                cost_multiplier,
                 false,
                 &mut events,
             );
@@ -619,7 +674,8 @@ impl Game {
         let line_value = competitor.distribution_capacity * 11.0;
         let market_position_value = competitor.reputation * 90.0;
         let premium = 8_000.0 + competitor.reliability * 4_000.0;
-        let consolidation_premium = 1.0 + self.market_share() * 0.55;
+        let share = self.market_share();
+        let consolidation_premium = 1.0 + share * 0.4 + share * share * 1.3;
         (customer_value + generation_value + line_value + market_position_value + premium)
             * consolidation_premium
     }
@@ -634,6 +690,167 @@ impl Game {
         } else {
             Ok(())
         }
+    }
+
+    pub fn rate_frozen(&self) -> bool {
+        self.shock_active(|kind| matches!(kind, ShockKind::RateFreeze))
+    }
+
+    pub fn cost_shock_multiplier(&self) -> f64 {
+        if self.shock_active(|kind| matches!(kind, ShockKind::InputCostShock)) {
+            1.18
+        } else {
+            1.0
+        }
+    }
+
+    pub fn demand_shock_multiplier(&self) -> f64 {
+        let mut multiplier = 1.0;
+        for shock in &self.active_shocks {
+            match shock.kind {
+                ShockKind::DemandRecession => multiplier *= 0.55,
+                ShockKind::DemandBoom => multiplier *= 1.65,
+                _ => {}
+            }
+        }
+        multiplier
+    }
+
+    fn shock_active(&self, predicate: impl Fn(&ShockKind) -> bool) -> bool {
+        self.active_shocks
+            .iter()
+            .any(|shock| predicate(&shock.kind))
+    }
+
+    fn advance_shocks(&mut self, events: &mut Vec<String>) {
+        let mut remaining = Vec::with_capacity(self.active_shocks.len());
+        for mut shock in self.active_shocks.drain(..) {
+            shock.quarters_remaining = shock.quarters_remaining.saturating_sub(1);
+            if shock.quarters_remaining == 0 {
+                events.push(shock_expired_message(&shock.kind));
+            } else {
+                remaining.push(shock);
+            }
+        }
+        self.active_shocks = remaining;
+
+        if self.rng.chance(0.045)
+            && !self.shock_active(|kind| matches!(kind, ShockKind::RateFreeze))
+        {
+            self.active_shocks.push(ActiveShock {
+                kind: ShockKind::RateFreeze,
+                quarters_remaining: 2 + (self.rng.next_u64() % 2) as u32,
+            });
+            events.push("A market-wide rate freeze took effect.".to_string());
+        }
+
+        if self.rng.chance(0.04)
+            && !self.shock_active(|kind| {
+                matches!(kind, ShockKind::DemandRecession | ShockKind::DemandBoom)
+            })
+        {
+            self.active_shocks.push(ActiveShock {
+                kind: ShockKind::DemandRecession,
+                quarters_remaining: 2 + (self.rng.next_u64() % 2) as u32,
+            });
+            events.push("A regional slowdown cut new connection prospects sharply.".to_string());
+        }
+
+        if self.rng.chance(0.035)
+            && !self.shock_active(|kind| {
+                matches!(kind, ShockKind::DemandBoom | ShockKind::DemandRecession)
+            })
+        {
+            self.active_shocks.push(ActiveShock {
+                kind: ShockKind::DemandBoom,
+                quarters_remaining: 1 + (self.rng.next_u64() % 2) as u32,
+            });
+            events.push(
+                "A surge in industrial demand opened a wave of new connection prospects."
+                    .to_string(),
+            );
+        }
+
+        if self.rng.chance(0.04)
+            && !self.shock_active(|kind| matches!(kind, ShockKind::InputCostShock))
+        {
+            self.active_shocks.push(ActiveShock {
+                kind: ShockKind::InputCostShock,
+                quarters_remaining: 2,
+            });
+            events.push(
+                "Fuel and equipment costs spiked; expect operating cost pressure.".to_string(),
+            );
+        }
+
+        if self.rng.chance(0.025) {
+            let capacity_loss = 0.08 + self.rng.range(0.0, 0.07);
+            let lost = self.player.generation_capacity_mwh * capacity_loss;
+            self.player.generation_capacity_mwh =
+                (self.player.generation_capacity_mwh - lost).max(20.0);
+            self.player.reliability = (self.player.reliability - 0.07).clamp(0.35, 0.98);
+            self.player.reputation = (self.player.reputation - 4.0).clamp(0.0, 100.0);
+            events.push(format!(
+                "An equipment fire knocked {:.0} MWh/quarter of generation offline.",
+                lost
+            ));
+        }
+    }
+
+    fn maybe_spawn_startup(&mut self, events: &mut Vec<String>) {
+        if self.competitors.len() >= 5 {
+            return;
+        }
+
+        let player_share = self.market_share();
+        let market_avg_rate = self.average_rate();
+        let unserved_demand =
+            (self.market.serviceable_customers() - self.total_connected_customers()).max(0.0);
+        let consolidated = player_share > 0.55;
+        let high_rates = market_avg_rate > 11.2;
+        let unmet_demand = unserved_demand > self.market.addressable_customers * 0.05;
+
+        if !(consolidated || high_rates) || !unmet_demand {
+            return;
+        }
+
+        let probability = if consolidated && high_rates {
+            0.16
+        } else if consolidated {
+            0.10
+        } else {
+            0.07
+        };
+
+        if !self.rng.chance(probability) {
+            return;
+        }
+
+        let undercut = (market_avg_rate - 0.6).clamp(8.5, 13.0);
+        self.startup_index += 1;
+        let name = startup_name(self.startup_index);
+        let starting_customers = 30.0 + self.rng.range(0.0, 25.0);
+        let startup = Utility {
+            name: name.clone(),
+            cash: 6_000.0 + self.rng.range(0.0, 2_500.0),
+            debt: 3_500.0 + self.rng.range(0.0, 2_000.0),
+            shares: 0.0,
+            stock_price: 0.0,
+            customers: starting_customers,
+            generation_capacity_mwh: 26.0 + self.rng.range(0.0, 14.0),
+            distribution_capacity: 90.0 + self.rng.range(0.0, 40.0),
+            rate_cents: undercut,
+            reputation: 47.0 + self.rng.range(0.0, 6.0),
+            reliability: 0.74 + self.rng.range(0.0, 0.05),
+            marketing_momentum: 0.10,
+            asset_base: 22_000.0 + self.rng.range(0.0, 5_000.0),
+            last_quarter_customers: starting_customers,
+        };
+        self.competitors.push(startup);
+        events.push(format!(
+            "{} entered the market at {:.1}c/kWh, drawing rate-sensitive customers.",
+            name, undercut
+        ));
     }
 
     fn advance_macro_environment(&mut self, events: &mut Vec<String>) {
@@ -750,31 +967,114 @@ impl Game {
     }
 
     fn competitor_plans(&mut self, events: &mut Vec<String>) {
-        for competitor in &mut self.competitors {
-            let headroom = competitor.capacity_headroom(&self.market);
-            let customer_pressure = headroom < self.market.addressable_customers * 0.025;
-            if customer_pressure && competitor.cash > 8_500.0 {
-                let line_cost = 6_000.0 + self.rng.range(0.0, 2_000.0);
+        let player_rate = self.player.rate_cents;
+        let player_share = self.market_share();
+        let market = self.market.clone();
+        let demand_signal = self.macro_state.demand_index;
+        let competitor_count = self.competitors.len();
+        let rate_frozen = self.rate_frozen();
+
+        let total_now = self.total_connected_customers().max(1.0);
+        let total_last = (self.player.last_quarter_customers
+            + self
+                .competitors
+                .iter()
+                .map(|competitor| competitor.last_quarter_customers)
+                .sum::<f64>())
+        .max(1.0);
+
+        for index in 0..competitor_count {
+            let routine_marketing_chance = self.rng.chance(0.24);
+            let routine_marketing_jitter = self.rng.range(0.0, 2_000.0);
+            let expansion_cost_jitter = self.rng.range(0.0, 2_000.0);
+            let expansion_lines_jitter = self.rng.range(0.0, 45.0);
+            let expansion_gen_jitter = self.rng.range(0.0, 30.0);
+            let proactive_expansion_chance = self.rng.chance(0.22);
+            let strategic_debt_chance = self.rng.chance(0.32);
+
+            let competitor = &mut self.competitors[index];
+
+            let share_now = competitor.customers / total_now;
+            let share_last = competitor.last_quarter_customers / total_last;
+            let lost_share =
+                competitor.last_quarter_customers > 0.0 && share_now < share_last - 0.005;
+            let player_undercutting = player_rate + 0.4 < competitor.rate_cents;
+            let player_premium_pricing = player_rate > competitor.rate_cents + 0.5;
+            let near_capacity = competitor.capacity_headroom(&market) < competitor.customers * 0.06;
+
+            if lost_share && player_undercutting && competitor.rate_cents > 8.4 {
+                let cut = 0.4_f64.min(competitor.rate_cents - 8.4);
+                if cut > 0.0 {
+                    competitor.rate_cents -= cut;
+                    events.push(format!(
+                        "{} cut rates to {:.1}c/kWh to defend share.",
+                        competitor.name, competitor.rate_cents
+                    ));
+                }
+            } else if !rate_frozen
+                && player_premium_pricing
+                && near_capacity
+                && competitor.rate_cents < 13.4
+            {
+                let raise = 0.3_f64.min(13.5 - competitor.rate_cents);
+                if raise > 0.0 {
+                    competitor.rate_cents += raise;
+                    events.push(format!(
+                        "{} raised rates to {:.1}c/kWh, riding strong demand.",
+                        competitor.name, competitor.rate_cents
+                    ));
+                }
+            }
+
+            if lost_share && competitor.cash > 4_500.0 {
+                let spend = (competitor.cash * 0.18).clamp(2_500.0, 6_500.0);
+                competitor.cash -= spend;
+                competitor.marketing_momentum += spend / 12_000.0;
+                competitor.reputation = (competitor.reputation + spend / 5_500.0).clamp(0.0, 100.0);
+                events.push(format!(
+                    "{} launched a retention campaign to win back customers.",
+                    competitor.name
+                ));
+            } else if routine_marketing_chance && competitor.cash > 2_500.0 {
+                let spend = 1_600.0 + routine_marketing_jitter;
+                competitor.cash -= spend;
+                competitor.marketing_momentum += spend / 18_000.0;
+                competitor.reputation = (competitor.reputation + spend / 7_000.0).clamp(0.0, 100.0);
+            }
+
+            let headroom = competitor.capacity_headroom(&market);
+            let reactive_pressure = headroom < market.addressable_customers * 0.025;
+            let proactive_growth =
+                proactive_expansion_chance && (demand_signal > 0.10 || player_share > 0.40);
+            if (reactive_pressure || proactive_growth) && competitor.cash > 8_500.0 {
+                let line_cost = 6_000.0 + expansion_cost_jitter;
                 competitor.cash -= line_cost;
                 competitor.asset_base += line_cost;
-                competitor.distribution_capacity += 115.0 + self.rng.range(0.0, 45.0);
-                competitor.generation_capacity_mwh += 42.0 + self.rng.range(0.0, 30.0);
+                competitor.distribution_capacity += 115.0 + expansion_lines_jitter;
+                competitor.generation_capacity_mwh += 42.0 + expansion_gen_jitter;
                 events.push(format!(
                     "{} expanded generation and distribution capacity.",
                     competitor.name
                 ));
             }
 
-            if self.rng.chance(0.28) && competitor.cash > 2_500.0 {
-                let spend = 1_600.0 + self.rng.range(0.0, 2_000.0);
-                competitor.cash -= spend;
-                competitor.marketing_momentum += spend / 18_000.0;
-                competitor.reputation = (competitor.reputation + spend / 7_000.0).clamp(0.0, 100.0);
+            let leverage = competitor.debt / competitor.asset_base.max(1.0);
+            let losing_to_player = player_share > 0.45 && lost_share;
+            if losing_to_player && leverage < 0.65 && strategic_debt_chance {
+                let raise = 12_000.0 + competitor.asset_base * 0.05;
+                competitor.cash += raise;
+                competitor.debt += raise;
+                events.push(format!(
+                    "{} raised debt to fund a counter-expansion.",
+                    competitor.name
+                ));
             }
 
-            if competitor.reliability < 0.68 && competitor.cash > 3_000.0 {
-                competitor.cash -= 3_000.0;
-                competitor.reliability = (competitor.reliability + 0.08).clamp(0.35, 0.96);
+            if competitor.reliability < 0.78 && competitor.cash > 3_500.0 {
+                let spend = 4_000.0_f64.min(competitor.cash * 0.30);
+                competitor.cash -= spend;
+                let gain = (spend / 22_000.0) * (1.05_f64 - competitor.reliability).max(0.05);
+                competitor.reliability = (competitor.reliability + gain).clamp(0.35, 0.98);
             }
         }
     }
@@ -835,8 +1135,9 @@ impl Game {
         let serviceable = self.serviceable_customers();
         let connected = self.total_connected_customers();
         let natural_demand = (serviceable - connected).max(0.0);
-        let prospects =
+        let base_prospects =
             (natural_demand * 0.36 + self.market.addressable_customers * 0.006).max(18.0);
+        let prospects = base_prospects * self.demand_shock_multiplier();
         self.allocate_customers(prospects, events, "new connections");
     }
 
@@ -899,17 +1200,32 @@ impl Game {
     }
 
     fn update_stock_price(&mut self, finances: &FirmFinances) {
-        let market_cap = self.player.market_cap().max(1.0);
-        let annualized_earnings_yield = (finances.profit * 4.0 / market_cap).clamp(-0.10, 0.12);
-        let growth_signal = (self.player.customers / 160.0 - 1.0).clamp(-0.10, 0.18) * 0.10;
-        let leverage_drag = (self.player.debt_to_assets() - 0.65).max(0.0) * 0.08;
-        let reliability_signal = (self.player.reliability - 0.80) * 0.05;
+        let shares = self.player.shares.max(1.0);
+        let book_equity =
+            (self.player.asset_base + self.player.cash - self.player.debt).max(shares);
+        let book_value_per_share = book_equity / shares;
+
+        let annualized_profit = finances.profit * 4.0;
+        let multiple = self.earnings_multiple();
+        let earnings_value_per_share = annualized_profit.max(0.0) * multiple / shares;
+
+        let fundamental_price =
+            (book_value_per_share * 0.5 + earnings_value_per_share * 0.5).max(1.0);
+        let gap = fundamental_price - self.player.stock_price;
+        let reverted = self.player.stock_price + gap * 0.22;
+
         let macro_signal = self.macro_state.valuation_signal();
-        let noise = self.rng.range(-0.018, 0.018);
-        let change =
-            annualized_earnings_yield + growth_signal + reliability_signal + macro_signal + noise
-                - leverage_drag;
-        self.player.stock_price = (self.player.stock_price * (1.0 + change)).clamp(6.0, 85.0);
+        let noise = self.rng.range(-0.025, 0.025);
+        self.player.stock_price = (reverted * (1.0 + macro_signal + noise)).max(1.0);
+    }
+
+    fn earnings_multiple(&self) -> f64 {
+        let base = 7.0;
+        let growth_bonus = (self.player.customers / 250.0).clamp(0.0, 5.0);
+        let reliability_bonus = (self.player.reliability - 0.78) * 4.0;
+        let leverage_drag = (self.player.debt_to_assets() - 0.65).max(0.0) * 5.0;
+        let macro_drag = (self.macro_state.benchmark_credit_rate() - 0.07) * 30.0;
+        (base + growth_bonus + reliability_bonus - leverage_drag - macro_drag).clamp(2.5, 18.0)
     }
 
     fn check_outcome(&mut self, finances: &FirmFinances) {
@@ -1122,6 +1438,7 @@ fn settle_utility(
     utility: &mut Utility,
     market: &Market,
     macro_state: &MacroEnvironment,
+    cost_multiplier: f64,
     is_player: bool,
     events: &mut Vec<String>,
 ) -> FirmFinances {
@@ -1140,10 +1457,11 @@ fn settle_utility(
     } else {
         1.0
     };
-    let operating_cost = served_mwh * market.variable_cost_per_mwh * maintenance_load
+    let operating_cost = (served_mwh * market.variable_cost_per_mwh * maintenance_load
         + 850.0
         + utility.customers * 2.65
-        + utility.asset_base * 0.0105;
+        + utility.asset_base * 0.0105)
+        * cost_multiplier;
     let interest = utility.debt * macro_state.annual_interest_rate_for(utility) / 4.0;
     let profit = revenue - operating_cost - interest;
 
@@ -1153,6 +1471,8 @@ fn settle_utility(
         utility.cash = 0.0;
         utility.reputation = (utility.reputation - 1.8).clamp(0.0, 100.0);
     }
+
+    utility.reliability = (utility.reliability - 0.014).clamp(0.35, 0.98);
 
     if unmet_demand_ratio > 0.04 {
         utility.reliability = (utility.reliability - unmet_demand_ratio * 0.22).clamp(0.35, 0.98);
@@ -1164,7 +1484,7 @@ fn settle_utility(
             ));
         }
     } else {
-        utility.reliability = (utility.reliability + 0.008).clamp(0.35, 0.98);
+        utility.reliability = (utility.reliability + 0.004).clamp(0.35, 0.98);
     }
 
     FirmFinances {
@@ -1205,6 +1525,31 @@ fn weighted_rate(rates: impl Iterator<Item = (f64, f64)>, fallback: f64) -> f64 
     } else {
         weighted / customers
     }
+}
+
+fn shock_expired_message(kind: &ShockKind) -> String {
+    match kind {
+        ShockKind::RateFreeze => "The market-wide rate freeze expired.".to_string(),
+        ShockKind::DemandRecession => {
+            "Demand conditions normalized after the slowdown.".to_string()
+        }
+        ShockKind::DemandBoom => "The industrial demand surge tapered off.".to_string(),
+        ShockKind::InputCostShock => "Fuel and equipment cost pressure eased.".to_string(),
+    }
+}
+
+fn startup_name(index: u32) -> String {
+    const NAMES: &[&str] = &[
+        "Bright Path Power",
+        "Voltaic Cooperative",
+        "Switchback Energy",
+        "Civic Spark",
+        "New Current Co.",
+        "Clear Grid Partners",
+        "Greenline Utility",
+        "Halcyon Power",
+    ];
+    NAMES[((index as usize).saturating_sub(1)) % NAMES.len()].to_string()
 }
 
 fn weighted_average(left: f64, left_weight: f64, right: f64, right_weight: f64) -> f64 {
@@ -1319,8 +1664,49 @@ mod tests {
         game.apply_decision(Decision::IssueStock { amount: 120_000.0 })
             .unwrap();
 
-        assert!(game.player.cash > starting_cash + 100_000.0);
+        assert!(game.player.cash > starting_cash + 90_000.0);
         assert!(game.player.shares > 2_000.0);
+    }
+
+    #[test]
+    fn excessive_dilution_yields_less_cash_per_dollar() {
+        let mut small = Game::with_seed(101);
+        let mut large = small.clone();
+
+        let small_starting_cash = small.player.cash;
+        let large_starting_cash = large.player.cash;
+
+        small
+            .apply_decision(Decision::IssueStock { amount: 20_000.0 })
+            .unwrap();
+        large
+            .apply_decision(Decision::IssueStock { amount: 120_000.0 })
+            .unwrap();
+
+        let small_yield = (small.player.cash - small_starting_cash) / 20_000.0;
+        let large_yield = (large.player.cash - large_starting_cash) / 120_000.0;
+
+        assert!(
+            small_yield > large_yield + 0.10,
+            "small yield {small_yield} should beat large yield {large_yield}"
+        );
+    }
+
+    #[test]
+    fn oversized_stock_issue_is_rejected_before_negative_proceeds() {
+        let mut game = Game::with_seed(102);
+        let starting_cash = game.player.cash;
+        let starting_shares = game.player.shares;
+
+        let error = game
+            .apply_decision(Decision::IssueStock {
+                amount: 1_000_000.0,
+            })
+            .unwrap_err();
+
+        assert!(error.contains("cannot absorb"));
+        assert!((game.player.cash - starting_cash).abs() < 0.01);
+        assert!((game.player.shares - starting_shares).abs() < 0.01);
     }
 
     #[test]
@@ -1336,7 +1722,7 @@ mod tests {
         assert!(game.player.cash < starting_cash);
         assert!(game.player.shares < starting_shares);
         assert_eq!(game.player.debt, starting_debt);
-        assert!(game.player.stock_price >= 6.0);
+        assert!(game.player.stock_price >= 1.0);
     }
 
     #[test]
@@ -1428,6 +1814,7 @@ mod tests {
             &mut game.player,
             &game.market,
             &game.macro_state,
+            1.0,
             true,
             &mut events,
         );
@@ -1643,6 +2030,250 @@ mod tests {
             .unwrap_err();
 
         assert!(error.contains("last independent rival"));
+    }
+
+    #[test]
+    fn high_share_makes_acquisitions_non_linearly_pricier() {
+        let low = Game::with_seed(50);
+        let mut high = Game::with_seed(50);
+        high.player.customers = 1_500.0;
+
+        let low_price = low.acquisition_price(0);
+        let high_price = high.acquisition_price(0);
+
+        assert!(
+            high_price > low_price * 1.4,
+            "consolidation premium should rise non-linearly: low {low_price}, high {high_price}"
+        );
+    }
+
+    #[test]
+    fn acquisition_absorbs_target_cash_and_debt() {
+        let mut game = Game::with_seed(60);
+        game.player.cash = 250_000.0;
+        let target = game.competitors[2].clone();
+        let starting_cash_after_payment_only = game.player.cash - game.acquisition_price(2);
+        let starting_debt = game.player.debt;
+
+        game.apply_decision(Decision::Acquire {
+            competitor_index: 2,
+        })
+        .unwrap();
+
+        assert!(game.player.cash > starting_cash_after_payment_only + target.cash * 0.5);
+        assert!(game.player.debt > starting_debt + target.debt * 0.5);
+    }
+
+    #[test]
+    fn reliability_decays_without_maintenance() {
+        let mut game = Game::with_seed(70);
+        let starting_reliability = game.player.reliability;
+
+        for _ in 0..6 {
+            game.advance_quarter();
+        }
+
+        assert!(
+            game.player.reliability < starting_reliability - 0.04,
+            "reliability should decay: {} -> {}",
+            starting_reliability,
+            game.player.reliability
+        );
+    }
+
+    #[test]
+    fn maintenance_has_diminishing_returns_at_high_reliability() {
+        let mut low = Game::with_seed(71);
+        let mut high = Game::with_seed(71);
+        low.player.reliability = 0.55;
+        high.player.reliability = 0.95;
+
+        let low_starting = low.player.reliability;
+        let high_starting = high.player.reliability;
+
+        low.apply_decision(Decision::Maintenance { spend: 5_000.0 })
+            .unwrap();
+        high.apply_decision(Decision::Maintenance { spend: 5_000.0 })
+            .unwrap();
+
+        let low_gain = low.player.reliability - low_starting;
+        let high_gain = high.player.reliability - high_starting;
+
+        assert!(
+            low_gain > high_gain * 2.0,
+            "low reliability should gain much more: low {low_gain} vs high {high_gain}"
+        );
+    }
+
+    #[test]
+    fn stock_price_can_exceed_old_eighty_five_cap_with_strong_fundamentals() {
+        let mut game = Game::with_seed(81);
+        game.player.stock_price = 200.0;
+        game.player.asset_base = 800_000.0;
+        game.player.cash = 100_000.0;
+        game.player.debt = 30_000.0;
+        game.player.shares = 5_000.0;
+
+        game.advance_quarter();
+
+        assert!(
+            game.player.stock_price > 85.0,
+            "stock should not be hard-capped at 85, got {}",
+            game.player.stock_price
+        );
+    }
+
+    #[test]
+    fn stock_price_reflects_balance_sheet_equity() {
+        let mut healthy = Game::with_seed(82);
+        let mut leveraged = Game::with_seed(82);
+
+        healthy.player.cash = 80_000.0;
+        healthy.player.debt = 10_000.0;
+        leveraged.player.cash = 5_000.0;
+        leveraged.player.debt = 90_000.0;
+
+        for _ in 0..3 {
+            healthy.advance_quarter();
+            leveraged.advance_quarter();
+        }
+
+        assert!(
+            healthy.player.stock_price > leveraged.player.stock_price + 1.0,
+            "healthier balance sheet should produce a higher stock price: healthy {}, leveraged {}",
+            healthy.player.stock_price,
+            leveraged.player.stock_price
+        );
+    }
+
+    #[test]
+    fn rate_freeze_blocks_rate_increases() {
+        let mut game = Game::with_seed(90);
+        game.active_shocks.push(ActiveShock {
+            kind: ShockKind::RateFreeze,
+            quarters_remaining: 2,
+        });
+
+        let error = game
+            .apply_decision(Decision::AdjustRate { delta_cents: 0.5 })
+            .unwrap_err();
+
+        assert!(error.contains("rate freeze"));
+    }
+
+    #[test]
+    fn rate_freeze_allows_rate_cuts() {
+        let mut game = Game::with_seed(91);
+        game.active_shocks.push(ActiveShock {
+            kind: ShockKind::RateFreeze,
+            quarters_remaining: 2,
+        });
+
+        game.apply_decision(Decision::AdjustRate { delta_cents: -0.5 })
+            .unwrap();
+    }
+
+    #[test]
+    fn rate_freeze_blocks_rival_rate_increases() {
+        let mut game = Game::with_seed(92);
+        game.player.rate_cents = 14.0;
+        game.player.customers = 500.0;
+        game.active_shocks.push(ActiveShock {
+            kind: ShockKind::RateFreeze,
+            quarters_remaining: 2,
+        });
+        for competitor in &mut game.competitors {
+            competitor.customers = 600.0;
+            competitor.last_quarter_customers = 600.0;
+            competitor.distribution_capacity = 600.0;
+            competitor.generation_capacity_mwh = 150.0;
+            competitor.rate_cents = 9.2;
+        }
+
+        let starting_rates: Vec<f64> = game.competitors.iter().map(|c| c.rate_cents).collect();
+        game.advance_quarter();
+
+        for (competitor, starting_rate) in game.competitors.iter().zip(starting_rates) {
+            assert!(
+                competitor.rate_cents <= starting_rate,
+                "{} raised rates during a freeze",
+                competitor.name
+            );
+        }
+    }
+
+    #[test]
+    fn cost_shock_increases_operating_cost() {
+        let mut normal = Game::with_seed(93);
+        let mut shocked = Game::with_seed(93);
+        shocked.active_shocks.push(ActiveShock {
+            kind: ShockKind::InputCostShock,
+            quarters_remaining: 2,
+        });
+
+        let normal_report = normal.advance_quarter();
+        let shocked_report = shocked.advance_quarter();
+
+        assert!(
+            shocked_report.operating_cost > normal_report.operating_cost * 1.05,
+            "input cost shock should raise operating cost: normal {}, shocked {}",
+            normal_report.operating_cost,
+            shocked_report.operating_cost
+        );
+    }
+
+    #[test]
+    fn startup_can_enter_consolidated_high_rate_market() {
+        let mut game = Game::with_seed(94);
+        game.player.customers = 3_500.0;
+        game.player.distribution_capacity = 5_000.0;
+        game.player.generation_capacity_mwh = 1_500.0;
+        game.player.rate_cents = 12.0;
+        for competitor in &mut game.competitors {
+            competitor.rate_cents = 12.5;
+        }
+        game.market.electrification = 0.9;
+        game.market.addressable_customers = 12_000.0;
+
+        let starting_competitors = game.competitors.len();
+        for _ in 0..30 {
+            game.advance_quarter();
+            if game.competitors.len() > starting_competitors {
+                return;
+            }
+        }
+        panic!("expected at least one startup to enter the market under these conditions");
+    }
+
+    #[test]
+    fn competitors_react_to_player_undercutting() {
+        let mut game = Game::with_seed(95);
+        game.player.rate_cents = 8.5;
+        game.player.reliability = 0.94;
+        game.player.reputation = 78.0;
+        game.player.distribution_capacity = 1_500.0;
+        game.player.generation_capacity_mwh = 600.0;
+        game.player.customers = 800.0;
+        for competitor in &mut game.competitors {
+            competitor.last_quarter_customers = competitor.customers;
+        }
+
+        let starting_rates: Vec<f64> = game.competitors.iter().map(|c| c.rate_cents).collect();
+
+        let mut any_cut = false;
+        for _ in 0..6 {
+            game.advance_quarter();
+            for (competitor, &start) in game.competitors.iter().zip(&starting_rates) {
+                if competitor.rate_cents < start - 0.1 {
+                    any_cut = true;
+                }
+            }
+            if any_cut {
+                break;
+            }
+        }
+
+        assert!(any_cut, "expected at least one competitor to cut rates");
     }
 
     #[test]
