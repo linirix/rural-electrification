@@ -4,7 +4,7 @@ A terminal-first economic and management simulator about running a small electri
 
 The first playable loop is deliberately local-market focused: raise capital, borrow, build generation, extend distribution capacity, buy competitors, set rates, market to customers, maintain service quality, and try to become the dominant utility before the market review ends.
 
-The market regulator will not approve a purchase of the last independent rival, so acquisitions can build a dominant utility but do not remove competitive pressure entirely.
+The market regulator will not approve a purchase of the last independent rival, and larger deals now require diligence before the purchase command will close. Acquisitions can build a dominant utility, but they carry information costs, public-interest concessions, integration strain, and rival countermeasures.
 
 ## Run
 
@@ -34,8 +34,9 @@ rate 10.0
 rate up 2
 rate down 1
 maint 4500
+diligence 1
 buy 1
-preview borrow 10000 buy 3
+preview borrow 10000 diligence 3 buy 3
 rivals
 board
 n
@@ -49,6 +50,8 @@ Capital action limits:
 - `buyback [amount]` has no fixed command cap, but it cannot spend cash you do not have and cannot retire the last public float.
 - `borrow [amount|max]` is floating-rate and limited by borrowing room, which is based on the asset base, current debt, and current credit conditions.
 - `repay [amount|max]` is limited by cash on hand and outstanding debt.
+- `diligence <number>` reveals exact acquisition terms for a rival for three quarters. Without diligence, the rival screen shows public estimates rather than exact cash, debt, closing cost, and post-deal leverage.
+- `buy <number>` requires current diligence, available cash for the closing price, and no active integration cooldown.
 - `maintenance [amount]` has diminishing reliability and reputation impact as the asset base grows, so larger systems need larger maintenance budgets.
 - `stock issue`, `stock buyback`, `debt`, and `debt repay` remain supported aliases.
 

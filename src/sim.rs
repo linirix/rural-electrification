@@ -22,6 +22,7 @@ const VARIABLE_COST_PRESSURE_SENSITIVITY: f64 = 2.35;
 const VARIABLE_COST_FLOOR_MULTIPLE: f64 = 0.72;
 const VARIABLE_COST_CEILING_MULTIPLE: f64 = 1.65;
 const MAX_CREDIBLE_RATE_CENTS: f64 = 25.0;
+const DILIGENCE_DURATION_QUARTERS: u32 = 3;
 
 mod attribution;
 mod competitors;
@@ -57,6 +58,7 @@ pub struct Game {
     pub startup_index: u32,
     pub review_completed: bool,
     pub equity_market_fatigue: f64,
+    pub diligence_reports: Vec<DiligenceReport>,
     pub last_report: Option<QuarterReport>,
     pub outcome: Option<Outcome>,
     rng: Rng,
@@ -85,6 +87,12 @@ impl CustomerAllocationKind {
 #[derive(Clone, Debug)]
 pub struct ActiveShock {
     pub kind: ShockKind,
+    pub quarters_remaining: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiligenceReport {
+    pub competitor_name: String,
     pub quarters_remaining: u32,
 }
 
@@ -157,6 +165,7 @@ pub enum Decision {
     BuyBackStock { amount: f64 },
     Borrow { amount: f64 },
     RepayDebt { amount: f64 },
+    Diligence { competitor_index: usize },
     Acquire { competitor_index: usize },
     AdjustRate { delta_cents: f64 },
     Maintenance { spend: f64 },
@@ -198,6 +207,8 @@ pub struct AcquisitionTerms {
     pub acquired_generation_capacity_mwh: f64,
     pub acquired_distribution_capacity: f64,
     pub acquired_asset_base: f64,
+    pub public_interest_concession: f64,
+    pub post_market_share: f64,
     pub post_cash: f64,
     pub post_debt: f64,
     pub post_asset_base: f64,
@@ -355,6 +366,7 @@ impl Game {
             startup_index: 0,
             review_completed: false,
             equity_market_fatigue: 0.0,
+            diligence_reports: Vec::new(),
             last_report: None,
             outcome: None,
             rng,
@@ -571,6 +583,34 @@ impl Game {
                     Ok("Repaid all outstanding debt.".to_string())
                 }
             }
+            Decision::Diligence { competitor_index } => {
+                if competitor_index >= self.competitors.len() {
+                    return Err("No competitor has that number.".to_string());
+                }
+                let cost = self
+                    .diligence_cost(competitor_index)
+                    .expect("competitor index checked before diligence");
+                self.require_cash(cost)?;
+                self.player.cash -= cost;
+                let name = self.competitors[competitor_index].name.clone();
+                if let Some(report) = self
+                    .diligence_reports
+                    .iter_mut()
+                    .find(|report| report.competitor_name == name)
+                {
+                    report.quarters_remaining = DILIGENCE_DURATION_QUARTERS;
+                } else {
+                    self.diligence_reports.push(DiligenceReport {
+                        competitor_name: name.clone(),
+                        quarters_remaining: DILIGENCE_DURATION_QUARTERS,
+                    });
+                }
+                Ok(format!(
+                    "Completed diligence on {name} for {}. Exact acquisition terms are available for {} quarter(s).",
+                    money(cost),
+                    DILIGENCE_DURATION_QUARTERS
+                ))
+            }
             Decision::Acquire { competitor_index } => {
                 if self.acquisition_cooldown > 0 {
                     return Err(format!(
@@ -588,6 +628,17 @@ impl Game {
                         "The market regulator will not approve the last independent rival's sale."
                             .to_string(),
                     );
+                }
+
+                if !self.has_diligence(competitor_index) {
+                    let cost = self
+                        .diligence_cost(competitor_index)
+                        .expect("competitor index checked before diligence prompt");
+                    return Err(format!(
+                        "Run 'diligence {}' first. It costs {} and reveals exact closing terms before you commit.",
+                        competitor_index + 1,
+                        money(cost)
+                    ));
                 }
 
                 let terms = self
@@ -629,6 +680,8 @@ impl Game {
                 self.integration_strain = (self.integration_strain
                     + acquisition_integration_strain(starting_customers, terms.acquired_customers))
                 .clamp(0.0, 1.6);
+                self.diligence_reports
+                    .retain(|report| report.competitor_name != acquired_name);
                 Ok(format!(
                     "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt). Integration will take {} quarter(s).",
                     money(terms.price),
@@ -732,6 +785,7 @@ impl Game {
         self.advance_macro_environment(&mut events);
         self.maybe_spawn_startup(&mut events);
         self.maybe_merge_rivals(&mut events);
+        self.maybe_rival_counteroffensive(&mut events);
         self.complete_projects(&mut events);
         self.grow_market(&mut events);
         self.competitor_plans(&mut events);
@@ -778,6 +832,7 @@ impl Game {
         if self.acquisition_cooldown > 0 {
             self.acquisition_cooldown -= 1;
         }
+        self.advance_diligence_reports();
         self.check_outcome(&player_finances);
 
         let ending_customers = self.player.customers;
@@ -894,6 +949,24 @@ impl Game {
             .price
     }
 
+    pub fn has_diligence(&self, competitor_index: usize) -> bool {
+        let Some(competitor) = self.competitors.get(competitor_index) else {
+            return false;
+        };
+
+        self.diligence_reports.iter().any(|report| {
+            report.quarters_remaining > 0 && report.competitor_name == competitor.name
+        })
+    }
+
+    pub fn diligence_cost(&self, competitor_index: usize) -> Option<f64> {
+        let competitor = self.competitors.get(competitor_index)?;
+        let scale_cost = competitor.customers * 8.0 + competitor.asset_base * 0.018;
+        let complexity_cost = competitor.debt_to_assets().max(0.0) * 1_800.0;
+        let concentration_cost = (self.market_share() - 0.45).max(0.0) * 8_000.0;
+        Some((2_800.0 + scale_cost + complexity_cost + concentration_cost).clamp(3_000.0, 14_000.0))
+    }
+
     pub fn acquisition_terms(&self, competitor_index: usize) -> Option<AcquisitionTerms> {
         let competitor = self.competitors.get(competitor_index)?;
         let acquired_customers = competitor.customers * 0.92;
@@ -910,9 +983,22 @@ impl Game {
         let enterprise_value =
             (customer_value + generation_value + line_value + market_position_value + premium)
                 * consolidation_premium;
+        let total_connected = self.total_connected_customers().max(1.0);
+        let post_player_customers = self.player.customers + acquired_customers;
+        let post_total_connected = (total_connected - competitor.customers + acquired_customers)
+            .max(post_player_customers)
+            .max(1.0);
+        let post_market_share = post_player_customers / post_total_connected;
+        let public_interest_concession = if post_market_share > 0.50 {
+            let excess_share = post_market_share - 0.50;
+            enterprise_value * excess_share.powf(1.10) * 1.35 + acquired_customers * 18.0
+        } else {
+            0.0
+        };
         let net_balance_sheet_adjustment = competitor.cash * ACQUISITION_CASH_ABSORPTION
             - competitor.debt * ACQUISITION_DEBT_ASSUMPTION;
-        let price = (enterprise_value + net_balance_sheet_adjustment).max(1_000.0);
+        let price = (enterprise_value + public_interest_concession + net_balance_sheet_adjustment)
+            .max(1_000.0);
         let absorbed_cash = competitor.cash * ACQUISITION_CASH_ABSORPTION;
         let assumed_debt = competitor.debt * ACQUISITION_DEBT_ASSUMPTION;
         let net_cash_cost = price - absorbed_cash;
@@ -930,6 +1016,8 @@ impl Game {
             acquired_generation_capacity_mwh,
             acquired_distribution_capacity,
             acquired_asset_base,
+            public_interest_concession,
+            post_market_share,
             post_cash,
             post_debt,
             post_asset_base,
@@ -1076,6 +1164,23 @@ impl Game {
                 ));
             }
         }
+    }
+
+    fn advance_diligence_reports(&mut self) {
+        for report in &mut self.diligence_reports {
+            report.quarters_remaining = report.quarters_remaining.saturating_sub(1);
+        }
+        self.prune_diligence_reports();
+    }
+
+    fn prune_diligence_reports(&mut self) {
+        self.diligence_reports.retain(|report| {
+            report.quarters_remaining > 0
+                && self
+                    .competitors
+                    .iter()
+                    .any(|competitor| competitor.name == report.competitor_name)
+        });
     }
 
     fn advance_macro_environment(&mut self, events: &mut Vec<String>) {

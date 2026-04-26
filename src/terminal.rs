@@ -149,12 +149,11 @@ fn handle_command(game: &mut Game, command: &str) -> CommandResult {
         "preview" | "quote" | "plan" => preview_command(game, &parts),
         "build" | "marketing" | "market" | "advertise" | "issue" | "stock" | "equity"
         | "buyback" | "repurchase" | "debt" | "borrow" | "loan" | "repay" | "paydown" | "buy"
-        | "acquire" | "rate" | "maintenance" | "maint" | "maintain" | "reliability" => {
-            match parse_decision(game, &parts) {
-                Ok(decision) => apply(game, decision),
-                Err(message) => CommandResult::Continue(message),
-            }
-        }
+        | "acquire" | "diligence" | "dilig" | "inspect" | "rate" | "maintenance" | "maint"
+        | "maintain" | "reliability" => match parse_decision(game, &parts) {
+            Ok(decision) => apply(game, decision),
+            Err(message) => CommandResult::Continue(message),
+        },
         "competitors" | "rivals" => CommandResult::ShowRivals,
         "board" | "goals" | "objectives" | "milestones" => CommandResult::ShowBoard,
         _ => CommandResult::Continue(format!("Unknown command '{first}'. Type 'help'.")),
@@ -280,6 +279,17 @@ fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, String> {
                 competitor_index: index - 1,
             })
         }
+        "diligence" | "dilig" | "inspect" => {
+            let Some(index) = parts.get(1).and_then(|value| value.parse::<usize>().ok()) else {
+                return Err("Use 'diligence 1', 'diligence 2', etc.".to_string());
+            };
+            if index == 0 {
+                return Err("Competitor numbers start at 1.".to_string());
+            }
+            Ok(Decision::Diligence {
+                competitor_index: index - 1,
+            })
+        }
         "rate" => {
             let delta = match parse_rate_delta(parts, game.player.rate_cents) {
                 Ok(Some(delta)) => delta,
@@ -305,8 +315,7 @@ fn preview_command(game: &Game, parts: &[&str]) -> CommandResult {
     if parts.len() <= 1 {
         return CommandResult::Preview(vec![
             styled(BOLD_CYAN, "Preview only; no action taken."),
-            "Use preview build gen 400, preview debt 20000, preview buy 2, or preview maint 6000."
-                .to_string(),
+            "Use preview build gen 400, preview debt 20000, preview diligence 2 buy 2, or preview maint 6000.".to_string(),
         ]);
     }
 
@@ -318,7 +327,8 @@ fn preview_command(game: &Game, parts: &[&str]) -> CommandResult {
             return CommandResult::Preview(vec![
                 styled(BOLD_RED, "Cannot preview command."),
                 message,
-                "Try preview build gen 400, preview debt 20000, or preview buy 1.".to_string(),
+                "Try preview build gen 400, preview debt 20000, or preview diligence 1 buy 1."
+                    .to_string(),
             ]);
         }
     };
@@ -455,7 +465,9 @@ fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
             None => Ok(1),
         },
         "borrow" | "loan" => Ok(1 + optional_command_argument(parts.get(1).copied())),
-        "buy" | "acquire" => Ok(if parts.get(1).is_some() { 2 } else { 1 }),
+        "buy" | "acquire" | "diligence" | "dilig" | "inspect" => {
+            Ok(if parts.get(1).is_some() { 2 } else { 1 })
+        }
         "rate" => match parts.get(1).copied() {
             Some("up" | "down" | "+" | "-") => {
                 Ok(2 + optional_rate_argument(parts.get(2).copied()))
@@ -514,6 +526,9 @@ fn is_preview_action_start(value: &str) -> bool {
             | "paydown"
             | "buy"
             | "acquire"
+            | "diligence"
+            | "dilig"
+            | "inspect"
             | "rate"
             | "maintenance"
             | "maint"
@@ -592,20 +607,46 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
             money(game.player.cash),
             money(game.player.debt)
         )],
-        Decision::Acquire { competitor_index } => {
+        Decision::Diligence { competitor_index } => {
             if let Some(competitor) = game.competitors.get(*competitor_index) {
-                let terms = game
-                    .acquisition_terms(*competitor_index)
-                    .expect("competitor exists for acquisition quote");
+                let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
                 vec![format!(
-                    "{} buy {} for {}; net cost {}, assumes debt {}, adds {:.0} customers.",
+                    "{} inspect {} for {}; exact deal terms for 3q.",
                     muted("Quote:"),
                     styled(BOLD, shorten_plain(&competitor.name, 16)),
-                    styled(BOLD_YELLOW, money(terms.price)),
-                    styled(cash_tone(terms.post_cash), money(terms.net_cash_cost)),
-                    styled(YELLOW, money(terms.assumed_debt)),
-                    terms.acquired_customers
+                    styled(BOLD_YELLOW, money(cost)),
                 )]
+            } else {
+                vec![format!(
+                    "{} No rival has that number.",
+                    styled(BOLD_RED, "Quote:")
+                )]
+            }
+        }
+        Decision::Acquire { competitor_index } => {
+            if let Some(competitor) = game.competitors.get(*competitor_index) {
+                if game.has_diligence(*competitor_index) {
+                    let terms = game
+                        .acquisition_terms(*competitor_index)
+                        .expect("competitor exists for acquisition quote");
+                    vec![format!(
+                        "{} buy {} for {}; net cost {}, assumes debt {}, adds {:.0} customers.",
+                        muted("Quote:"),
+                        styled(BOLD, shorten_plain(&competitor.name, 16)),
+                        styled(BOLD_YELLOW, money(terms.price)),
+                        styled(cash_tone(terms.post_cash), money(terms.net_cash_cost)),
+                        styled(YELLOW, money(terms.assumed_debt)),
+                        terms.acquired_customers
+                    )]
+                } else {
+                    let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
+                    vec![format!(
+                        "{} run diligence first; {} reveals exact terms for {}.",
+                        muted("Quote:"),
+                        styled(BOLD_YELLOW, money(cost)),
+                        styled(BOLD, shorten_plain(&competitor.name, 16))
+                    )]
+                }
             } else {
                 vec![format!(
                     "{} No rival has that number.",
@@ -857,6 +898,7 @@ fn print_help() {
             "buyback [amount]     repurchase shares".to_string(),
             "borrow [amount|max]  raise debt".to_string(),
             "repay [amount|max]   pay debt down".to_string(),
+            "diligence <number>   reveal deal terms".to_string(),
             "buy <number>         acquire rival".to_string(),
             "stock issue/buyback  aliases".to_string(),
             "debt / debt repay    aliases".to_string(),
@@ -1691,7 +1733,7 @@ fn rival_overview_lines(game: &Game) -> Vec<String> {
                 format!("{:.0} accounts", game.total_connected_customers())
             )
         ),
-        "Use buy <number> to acquire; final independent rival is protected.".to_string(),
+        "Use diligence <number> before buying; final independent rival is protected.".to_string(),
     ]
 }
 
@@ -1751,15 +1793,37 @@ fn rival_detail_lines(game: &Game) -> Vec<String> {
                 format!("{:+.0} MWh", firm_reserve)
             )
         ));
+        if game.has_diligence(index) {
+            let quarters = game
+                .diligence_reports
+                .iter()
+                .find(|report| report.competitor_name == competitor.name)
+                .map(|report| report.quarters_remaining)
+                .unwrap_or(0);
+            lines.push(format!(
+                "   {} {}   {} {}   {} {}",
+                muted("cash"),
+                styled(cash_tone(competitor.cash), money(competitor.cash)),
+                muted("debt/assets"),
+                styled(
+                    leverage_tone(competitor.debt_to_assets()),
+                    format!("{:.0}%", competitor.debt_to_assets() * 100.0)
+                ),
+                muted("diligence"),
+                styled(GREEN, format!("{quarters}q left"))
+            ));
+        } else {
+            let cost = game.diligence_cost(index).unwrap_or(0.0);
+            lines.push(format!(
+                "   {} {}   {} {}",
+                muted("financials"),
+                styled(DIM, "public estimates only"),
+                muted("diligence"),
+                styled(YELLOW, money(cost))
+            ));
+        }
         lines.push(format!(
-            "   {} {}   {} {}   {} {}",
-            muted("cash"),
-            styled(cash_tone(competitor.cash), money(competitor.cash)),
-            muted("debt/assets"),
-            styled(
-                leverage_tone(competitor.debt_to_assets()),
-                format!("{:.0}%", competitor.debt_to_assets() * 100.0)
-            ),
+            "   {} {}",
             muted("buy"),
             styled(acquisition_tone, acquisition_note)
         ));
@@ -1790,6 +1854,25 @@ fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> Vec<String> 
     };
 
     let mut lines = Vec::new();
+    if !game.has_diligence(competitor_index) {
+        let cost = game.diligence_cost(competitor_index).unwrap_or(0.0);
+        let (low, high) = public_acquisition_range(game, competitor_index);
+        lines.push(format!(
+            "   {} {}-{}   {} {}",
+            muted("M&A estimate"),
+            styled(YELLOW, money(low)),
+            styled(YELLOW, money(high)),
+            muted("next"),
+            styled(BOLD_CYAN, format!("diligence {}", competitor_index + 1))
+        ));
+        lines.push(format!(
+            "   {} hidden until diligence: cash, debt, closing cost, leverage, concessions ({})",
+            muted("terms"),
+            money(cost)
+        ));
+        return lines;
+    }
+
     lines.push(format!(
         "   {} {}   {} {}   {} {}",
         muted("M&A price"),
@@ -1818,6 +1901,14 @@ fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> Vec<String> 
         terms.acquired_generation_capacity_mwh,
         terms.acquired_distribution_capacity
     ));
+    if terms.public_interest_concession > 0.0 {
+        lines.push(format!(
+            "   {} {} public-interest concession; post-deal share about {:.0}%",
+            muted("review"),
+            styled(YELLOW, money(terms.public_interest_concession)),
+            terms.post_market_share * 100.0
+        ));
+    }
 
     if game.competitors.len() == 1 {
         lines.push(format!(
@@ -1887,9 +1978,22 @@ fn acquisition_status(game: &Game, competitor_index: usize) -> (String, &'static
         ("blocked".to_string(), RED)
     } else if game.acquisition_cooldown > 0 {
         (format!("{}q wait", game.acquisition_cooldown), YELLOW)
+    } else if !game.has_diligence(competitor_index) {
+        ("diligence".to_string(), YELLOW)
     } else {
         (money(game.acquisition_price(competitor_index)), CYAN)
     }
+}
+
+fn public_acquisition_range(game: &Game, competitor_index: usize) -> (f64, f64) {
+    let Some(terms) = game.acquisition_terms(competitor_index) else {
+        return (0.0, 0.0);
+    };
+    let uncertainty = (0.22 + (game.market_share() - 0.45).max(0.0) * 0.35).clamp(0.20, 0.42);
+    (
+        (terms.price * (1.0 - uncertainty)).max(1_000.0),
+        (terms.price * (1.0 + uncertainty)).max(1_000.0),
+    )
 }
 
 fn recent_rival_event(game: &Game, competitor_name: &str) -> Option<String> {
@@ -2195,7 +2299,7 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
         ),
     ];
 
-    if let Some((index, price)) = cheapest_competitor(game) {
+    if let Some((index, price)) = cheapest_diligenced_competitor(game) {
         if game.competitors.len() == 1 {
             lines.push(action_line(
                 "buy",
@@ -2215,6 +2319,29 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
                 format!(
                     "{} cash plus debt; integration strain follows",
                     styled(BOLD_YELLOW, money(price))
+                ),
+            ));
+        }
+    } else if let Some((index, cost)) = cheapest_diligence_target(game) {
+        if game.competitors.len() == 1 {
+            lines.push(action_line(
+                "buy",
+                styled(RED, "final rival acquisition blocked by regulator"),
+            ));
+        } else if game.acquisition_cooldown > 0 {
+            lines.push(action_line(
+                format!("diligence {}", index + 1),
+                format!(
+                    "can inspect now; acquisitions wait {}q",
+                    styled(YELLOW, game.acquisition_cooldown)
+                ),
+            ));
+        } else {
+            lines.push(action_line(
+                format!("diligence {}", index + 1),
+                format!(
+                    "{} to reveal exact acquisition terms",
+                    styled(BOLD_YELLOW, money(cost))
                 ),
             ));
         }
@@ -2249,9 +2376,17 @@ fn project_quote_inline(kind: &str, size: f64) -> String {
     }
 }
 
-fn cheapest_competitor(game: &Game) -> Option<(usize, f64)> {
+fn cheapest_diligenced_competitor(game: &Game) -> Option<(usize, f64)> {
     (0..game.competitors.len())
+        .filter(|index| game.has_diligence(*index))
         .map(|index| (index, game.acquisition_price(index)))
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+}
+
+fn cheapest_diligence_target(game: &Game) -> Option<(usize, f64)> {
+    (0..game.competitors.len())
+        .filter(|index| !game.has_diligence(*index))
+        .filter_map(|index| game.diligence_cost(index).map(|cost| (index, cost)))
         .min_by(|left, right| left.1.total_cmp(&right.1))
 }
 
@@ -2757,7 +2892,12 @@ mod tests {
 
     #[test]
     fn rival_detail_includes_acquisition_economics() {
-        let game = Game::with_seed(114);
+        let mut game = Game::with_seed(114);
+        game.player.cash = 100_000.0;
+        game.apply_decision(Decision::Diligence {
+            competitor_index: 0,
+        })
+        .unwrap();
         let lines = rival_detail_lines(&game);
 
         assert!(lines.iter().any(|line| line.contains("M&A price")));
@@ -2772,8 +2912,27 @@ mod tests {
     }
 
     #[test]
+    fn rival_detail_hides_exact_deal_terms_before_diligence() {
+        let game = Game::with_seed(117);
+        let lines = rival_detail_lines(&game);
+
+        assert!(lines.iter().any(|line| line.contains("M&A estimate")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("public estimates only"))
+        );
+        assert!(!lines.iter().any(|line| line.contains("post debt/assets")));
+    }
+
+    #[test]
     fn rival_detail_uses_cash_to_close_for_funding_status() {
         let mut game = Game::with_seed(115);
+        game.player.cash = 100_000.0;
+        game.apply_decision(Decision::Diligence {
+            competitor_index: 0,
+        })
+        .unwrap();
         let terms = game.acquisition_terms(0).unwrap();
         game.player.cash = (terms.price - 1_000.0).max(0.0);
 
@@ -2895,15 +3054,16 @@ mod tests {
     #[test]
     fn preview_can_chain_borrowing_and_acquisition_without_mutating_game() {
         let mut game = Game::with_seed(107);
-        game.player.cash = 50_000.0;
+        game.player.cash = 100_000.0;
         let starting_cash = game.player.cash;
         let starting_debt = game.player.debt;
         let starting_competitors = game.competitors.len();
 
-        match handle_command(&mut game, "preview borrow 10000 buy 3") {
+        match handle_command(&mut game, "preview borrow 10000 diligence 3 buy 3") {
             CommandResult::Preview(lines) => {
                 assert!(lines.iter().any(|line| line.contains("Step 1")));
                 assert!(lines.iter().any(|line| line.contains("Step 2")));
+                assert!(lines.iter().any(|line| line.contains("Step 3")));
                 assert!(lines.iter().any(|line| line.contains("Interest/q")));
                 assert!(lines.iter().any(|line| line.contains("Rivals")));
             }

@@ -75,8 +75,12 @@ impl Game {
         let name = draw_competitor_name(&mut self.rng, &used_names, self.startup_index);
         let scale = match reason {
             StartupEntryReason::StagnantMarket => 1.35,
-            StartupEntryReason::ConcentratedMarket => 1.15,
-            StartupEntryReason::HighRates => 1.0,
+            StartupEntryReason::ConcentratedMarket => {
+                1.15 + ((self.market_share() - 0.45) * 2.0).clamp(0.0, 0.70)
+            }
+            StartupEntryReason::HighRates => {
+                1.0 + high_rate_excess(&self.player, &self.market).clamp(0.0, 1.6) * 0.18
+            }
         };
         let starting_customers = (30.0 + self.rng.range(0.0, 25.0)) * scale;
         let startup = Utility {
@@ -272,6 +276,58 @@ impl Game {
             "{name} formed from {a_name} and {b_name}, creating a stronger rival to challenge Metro's lead."
         ));
         true
+    }
+
+    pub(super) fn maybe_rival_counteroffensive(&mut self, events: &mut Vec<String>) {
+        if self.quarter < 6 || self.competitors.is_empty() {
+            return;
+        }
+
+        let player_share = self.market_share();
+        if player_share < 0.48 {
+            return;
+        }
+
+        let probability = (0.08 + (player_share - 0.48) * 0.90).clamp(0.08, 0.42);
+        if self.rng.chance(probability) {
+            self.rival_counteroffensive(events);
+        }
+    }
+
+    pub(super) fn rival_counteroffensive(&mut self, events: &mut Vec<String>) -> bool {
+        let Some(index) = self.largest_competitor_index() else {
+            return false;
+        };
+
+        let player_rate = self.player.rate_cents;
+        let competitor = &mut self.competitors[index];
+        let capital = (12_000.0 + competitor.asset_base * 0.055).clamp(12_000.0, 36_000.0);
+        let debt_raise = capital * 0.30;
+        competitor.debt += debt_raise;
+        competitor.asset_base += capital;
+        competitor.generation_capacity_mwh += capital / 360.0;
+        competitor.distribution_capacity += capital / 70.0;
+        competitor.marketing_momentum = (competitor.marketing_momentum + 0.34).clamp(0.0, 1.30);
+        competitor.reputation = (competitor.reputation + 4.5).clamp(0.0, 100.0);
+        competitor.reliability = (competitor.reliability + 0.018).clamp(0.35, 0.97);
+
+        if competitor.rate_cents > player_rate - 0.15 {
+            competitor.rate_cents = (player_rate - 0.20).clamp(8.4, competitor.rate_cents);
+        }
+
+        events.push(format!(
+            "{} secured outside backing for a counteroffensive: lower rates, new capacity, and heavier customer acquisition.",
+            competitor.name
+        ));
+        true
+    }
+
+    fn largest_competitor_index(&self) -> Option<usize> {
+        self.competitors
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| left.customers.total_cmp(&right.customers))
+            .map(|(index, _)| index)
     }
 
     pub(super) fn competitor_plans(&mut self, events: &mut Vec<String>) {

@@ -675,11 +675,19 @@ fn larger_generation_projects_provide_larger_initial_reliability_lifts() {
     assert!((already_excellent - 0.98).abs() < 0.0001);
 }
 
+fn complete_diligence(game: &mut Game, competitor_index: usize) {
+    let cost = game.diligence_cost(competitor_index).unwrap();
+    game.player.cash += cost;
+    game.apply_decision(Decision::Diligence { competitor_index })
+        .unwrap();
+}
+
 #[test]
 fn acquisition_removes_competitor_and_adds_scale() {
     let mut game = Game::with_seed(3);
     game.apply_decision(Decision::IssueStock { amount: 60_000.0 })
         .unwrap();
+    complete_diligence(&mut game, 2);
     let starting_customers = game.player.customers;
     let competitor_count = game.competitors.len();
 
@@ -694,10 +702,51 @@ fn acquisition_removes_competitor_and_adds_scale() {
 }
 
 #[test]
+fn acquisition_requires_current_diligence() {
+    let mut game = Game::with_seed(30);
+    game.player.cash = 250_000.0;
+
+    let error = game
+        .apply_decision(Decision::Acquire {
+            competitor_index: 1,
+        })
+        .unwrap_err();
+
+    assert!(error.contains("diligence 2"));
+    assert!(!game.has_diligence(1));
+
+    game.apply_decision(Decision::Diligence {
+        competitor_index: 1,
+    })
+    .unwrap();
+
+    assert!(game.has_diligence(1));
+}
+
+#[test]
+fn diligence_expires_after_three_quarters() {
+    let mut game = Game::with_seed(30);
+    game.player.cash = 250_000.0;
+
+    game.apply_decision(Decision::Diligence {
+        competitor_index: 1,
+    })
+    .unwrap();
+    assert!(game.has_diligence(1));
+
+    game.advance_quarter();
+    game.advance_quarter();
+    game.advance_quarter();
+
+    assert!(!game.has_diligence(1));
+}
+
+#[test]
 fn acquisition_integration_blocks_immediate_rollup() {
     let mut game = Game::with_seed(30);
     game.apply_decision(Decision::IssueStock { amount: 60_000.0 })
         .unwrap();
+    complete_diligence(&mut game, 2);
     game.apply_decision(Decision::Acquire {
         competitor_index: 2,
     })
@@ -780,6 +829,15 @@ fn high_share_makes_acquisitions_non_linearly_pricier() {
 }
 
 #[test]
+fn acquisitions_crossing_control_threshold_include_public_interest_concession() {
+    let game = Game::with_seed(52);
+    let terms = game.acquisition_terms(0).unwrap();
+
+    assert!(terms.post_market_share > 0.50);
+    assert!(terms.public_interest_concession > 0.0);
+}
+
+#[test]
 fn acquisition_price_accounts_for_target_cash_and_debt() {
     let base = Game::with_seed(51);
     let mut cash_rich = base.clone();
@@ -798,12 +856,36 @@ fn acquisition_price_accounts_for_target_cash_and_debt() {
 }
 
 #[test]
+fn rival_counteroffensive_strengthens_largest_rival() {
+    let mut game = Game::with_seed(89);
+    game.player.customers = 900.0;
+    game.competitors[0].customers = 420.0;
+    game.competitors[1].customers = 180.0;
+    let starting_capacity = game.competitors[0].customer_capacity(&game.market);
+    let starting_reputation = game.competitors[0].reputation;
+    let starting_rate = game.competitors[0].rate_cents;
+    let mut events = Vec::new();
+
+    assert!(game.rival_counteroffensive(&mut events));
+
+    assert!(game.competitors[0].customer_capacity(&game.market) > starting_capacity);
+    assert!(game.competitors[0].reputation > starting_reputation);
+    assert!(game.competitors[0].rate_cents <= starting_rate);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("counteroffensive"))
+    );
+}
+
+#[test]
 fn acquisition_absorbs_target_cash_and_debt() {
     let mut game = Game::with_seed(60);
     game.player.cash = 250_000.0;
     let target = game.competitors[2].clone();
     let starting_cash_after_payment_only = game.player.cash - game.acquisition_price(2);
     let starting_debt = game.player.debt;
+    complete_diligence(&mut game, 2);
 
     game.apply_decision(Decision::Acquire {
         competitor_index: 2,
@@ -824,6 +906,7 @@ fn acquisition_terms_match_actual_close_effects() {
     let terms = game.acquisition_terms(1).unwrap();
 
     assert!((game.acquisition_price(1) - terms.price).abs() < 0.01);
+    complete_diligence(&mut game, 1);
 
     game.apply_decision(Decision::Acquire {
         competitor_index: 1,
@@ -868,6 +951,7 @@ fn acquisition_integration_uses_pre_acquisition_weights() {
     let acquired_generation = target.generation_capacity_mwh * 0.86;
     let expected_reliability =
         weighted_average(0.92, 100.0, target.reliability, acquired_generation * 0.70) - 0.035;
+    complete_diligence(&mut game, 0);
 
     game.apply_decision(Decision::Acquire {
         competitor_index: 0,

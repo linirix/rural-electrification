@@ -547,15 +547,32 @@ fn balanced_policy(game: &mut Game) {
 fn mna_policy(game: &mut Game) {
     if let Some((index, price)) = cheapest_competitor(game) {
         let reserve = if game.quarter < 4 { 5_000.0 } else { 10_000.0 };
-        if game.player.cash < price + reserve && game.player.debt_to_assets() < 0.66 {
+        let diligence_cost = if game.has_diligence(index) {
+            0.0
+        } else {
+            game.diligence_cost(index).unwrap_or(0.0)
+        };
+        if game.player.cash < price + reserve + diligence_cost
+            && game.player.debt_to_assets() < 0.66
+        {
             let _ = game.apply_decision(Decision::Borrow {
-                amount: (price + reserve - game.player.cash).clamp(8_000.0, 42_000.0),
+                amount: (price + reserve + diligence_cost - game.player.cash)
+                    .clamp(8_000.0, 42_000.0),
             });
         }
 
-        if game.player.cash < price + reserve && game.player.debt_to_assets() >= 0.60 {
+        if game.player.cash < price + reserve + diligence_cost
+            && game.player.debt_to_assets() >= 0.60
+        {
             let _ = game.apply_decision(Decision::IssueStock {
-                amount: (price + reserve - game.player.cash).clamp(12_000.0, 52_000.0),
+                amount: (price + reserve + diligence_cost - game.player.cash)
+                    .clamp(12_000.0, 52_000.0),
+            });
+        }
+
+        if !game.has_diligence(index) && game.player.cash > diligence_cost + reserve * 0.25 {
+            let _ = game.apply_decision(Decision::Diligence {
+                competitor_index: index,
             });
         }
 
@@ -603,6 +620,15 @@ fn mna_policy(game: &mut Game) {
 
     if let Some((index, price)) = cheapest_competitor(game) {
         let can_absorb_debt = game.player.debt_to_assets() < 0.82;
+        if !game.has_diligence(index) {
+            if let Some(cost) = game.diligence_cost(index) {
+                if game.player.cash > cost + 5_000.0 {
+                    let _ = game.apply_decision(Decision::Diligence {
+                        competitor_index: index,
+                    });
+                }
+            }
+        }
         if game.player.cash > price + 10_000.0 && can_absorb_debt {
             let _ = game.apply_decision(Decision::Acquire {
                 competitor_index: index,
@@ -731,7 +757,25 @@ fn try_acquire_cheapest(
         return false;
     }
 
-    finance_to_cash(game, price + reserve, max_debt_to_assets);
+    let diligence_cost = if game.has_diligence(index) {
+        0.0
+    } else {
+        game.diligence_cost(index).unwrap_or(0.0)
+    };
+    finance_to_cash(game, price + reserve + diligence_cost, max_debt_to_assets);
+    if !game.has_diligence(index) {
+        if game.player.cash <= diligence_cost + reserve * 0.25 {
+            return false;
+        }
+        if game
+            .apply_decision(Decision::Diligence {
+                competitor_index: index,
+            })
+            .is_err()
+        {
+            return false;
+        }
+    }
     if game.player.cash <= price + reserve
         || game.player.debt_to_assets() > max_debt_to_assets + 0.10
     {
