@@ -1733,6 +1733,18 @@ fn rival_overview_lines(game: &Game) -> Vec<String> {
                 format!("{:.0} accounts", game.total_connected_customers())
             )
         ),
+        format!(
+            "{} {}   {} {}   {} {}",
+            muted("Cash"),
+            styled(cash_tone(game.player.cash), money(game.player.cash)),
+            muted("Borrowing room"),
+            styled(
+                borrowing_room_tone(game.borrowing_room()),
+                money(game.borrowing_room())
+            ),
+            muted("Market cap"),
+            styled(BOLD, money(game.player.market_cap()))
+        ),
         "Use diligence <number> before buying; final independent rival is protected.".to_string(),
     ]
 }
@@ -2888,6 +2900,16 @@ mod tests {
             CommandResult::ShowRivals => {}
             _ => panic!("rivals should show rival detail"),
         }
+    }
+
+    #[test]
+    fn rival_overview_shows_acquisition_financing_context() {
+        let game = Game::with_seed(113);
+        let lines = rival_overview_lines(&game);
+
+        assert!(lines.iter().any(|line| line.contains("Cash")));
+        assert!(lines.iter().any(|line| line.contains("Borrowing room")));
+        assert!(lines.iter().any(|line| line.contains("Market cap")));
     }
 
     #[test]
