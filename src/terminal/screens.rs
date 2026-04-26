@@ -1,0 +1,1088 @@
+use super::render::*;
+use super::rivals::{dashboard_competitor_lines, rival_detail_lines, rival_overview_lines};
+use super::*;
+
+pub(super) struct BoardTarget {
+    label: &'static str,
+    quarter: u32,
+    share: f64,
+    reliability: f64,
+    leverage: f64,
+}
+
+pub(super) fn print_help() {
+    println!("{}", styled(BOLD_CYAN, "Electrification Command Reference"));
+    print_box_pair(
+        "Build + Operate",
+        &[
+            "build gen [MWh]".to_string(),
+            "build lines [customers]".to_string(),
+            "marketing [amount]".to_string(),
+            "maint [amount]       maintenance".to_string(),
+            "expand               adjacent territory".to_string(),
+            "rate 10.0            set target".to_string(),
+            "rate up|down [cents] adjust rate".to_string(),
+            "preview <command>    inspect first".to_string(),
+        ],
+        "Capital",
+        &[
+            "issue [amount]       issue stock".to_string(),
+            "buyback [amount]     repurchase shares".to_string(),
+            "borrow [amount|max]  raise debt".to_string(),
+            "repay [amount|max]   pay debt down".to_string(),
+            "diligence <number>   reveal deal terms".to_string(),
+            "buy <number>         acquire rival".to_string(),
+            "stock issue/buyback  aliases".to_string(),
+            "debt / debt repay    aliases".to_string(),
+        ],
+    );
+    print_box_pair(
+        "Navigation",
+        &[
+            "status / s     show dashboard".to_string(),
+            "rivals         competitor detail".to_string(),
+            "board          objectives".to_string(),
+            "preview/quote  inspect command".to_string(),
+            "next / n / end finish quarter".to_string(),
+            "continue       post-review play".to_string(),
+            "save [name]    write save file".to_string(),
+            "load [name]    restore save file".to_string(),
+            "help / ?       command reference".to_string(),
+            "quit / exit    leave game".to_string(),
+        ],
+        "Input Notes",
+        &[
+            "Money accepts 20000 or 20k.".to_string(),
+            "Invalid amounts are rejected.".to_string(),
+            "Build sizes are clamped to sane bounds.".to_string(),
+            "Large rate increases above public tolerance are rejected.".to_string(),
+            "Saves live in ~/.electrification.".to_string(),
+            "Use the dashboard guide for live costs.".to_string(),
+        ],
+    );
+}
+
+pub(super) fn print_status(game: &Game) {
+    print_box(
+        &format!("{} | {}", game.date_label(), game.player.name),
+        &scorecard_lines(game),
+    );
+    print_box("Signals", &signal_lines(game));
+    print_box_pair(
+        "Capital",
+        &financial_lines(game),
+        "Operations",
+        &operation_lines(game),
+    );
+    print_box("Competition", &dashboard_competitor_lines(game));
+    if has_active_pipeline(game) {
+        print_box("Pipeline", &project_lines(game));
+    }
+    print_box("Commands", &command_footer_lines(game));
+}
+
+pub(super) fn print_competitors(game: &Game) {
+    print_box("Rival Overview", &rival_overview_lines(game));
+    print_box("Rival Detail", &rival_detail_lines(game));
+}
+
+pub(super) fn print_board(game: &Game) {
+    print_box("Board Objectives", &board_overview_lines(game));
+    print_box_pair(
+        "Next Milestone",
+        &board_milestone_lines(game),
+        "Risk Notes",
+        &board_risk_lines(game),
+    );
+    print_box("Milestone Path", &board_path_lines(game));
+}
+
+pub(super) fn print_notice(message: &str) {
+    println!();
+    print_box("Notice", &wrap_plain_text(message, content_width()));
+}
+
+pub(super) fn print_report(report: &QuarterReport) {
+    let mut lines = vec![
+        format!(
+            "{} {} | {} {} | {} {} | {} {}",
+            muted("Revenue"),
+            styled(BOLD_GREEN, money(report.revenue)),
+            muted("Costs"),
+            styled(YELLOW, money(report.operating_cost)),
+            muted("Interest"),
+            styled(YELLOW, money(report.interest)),
+            muted("Profit"),
+            styled(profit_tone(report.profit), money(report.profit))
+        ),
+        format!(
+            "{} {} gross, {} churn ({}) | {} {}",
+            muted("Customers:"),
+            styled(BOLD_GREEN, format!("+{:.0}", report.new_customers)),
+            styled(RED, format!("-{:.0}", report.lost_customers)),
+            styled(
+                churn_tone(report.lost_customer_rate),
+                format_churn_rate(report.lost_customer_rate)
+            ),
+            muted("Market share"),
+            styled(
+                share_tone(report.market_share),
+                format!(
+                    "{:.0}% ({:.0}%)",
+                    report.market_share * 100.0,
+                    report.prior_market_share * 100.0
+                )
+            )
+        ),
+    ];
+    if !report.attributions.is_empty() {
+        lines.push(styled(BOLD_CYAN, "Drivers"));
+        for attribution in &report.attributions {
+            for (index, wrapped) in wrap_plain_text(attribution, content_width().saturating_sub(4))
+                .iter()
+                .enumerate()
+            {
+                if index == 0 {
+                    lines.push(format!("  {wrapped}"));
+                } else {
+                    lines.push(format!("    {wrapped}"));
+                }
+            }
+        }
+    }
+    if !report.events.is_empty() {
+        lines.push(styled(BOLD_CYAN, "Events"));
+        for event in &report.events {
+            for (index, wrapped) in wrap_plain_text(event, content_width().saturating_sub(7))
+                .iter()
+                .enumerate()
+            {
+                if index == 0 {
+                    lines.push(format!("{} {wrapped}", styled(BOLD_YELLOW, "Event:")));
+                } else {
+                    lines.push(format!("       {wrapped}"));
+                }
+            }
+        }
+    }
+    println!();
+    print_box(&format!("{} Results", report.label), &lines);
+}
+
+pub(super) fn print_outcome(outcome: &Outcome) {
+    let (outcome_style, result) = match outcome.kind {
+        OutcomeKind::Victory => (BOLD_GREEN, "victory"),
+        OutcomeKind::Defeat => (BOLD_RED, "defeat"),
+    };
+    let mut lines = vec![styled(outcome_style, &outcome.headline)];
+    lines.extend(wrap_plain_text(&outcome.details, content_width()));
+    lines.push(format!(
+        "{} {}",
+        muted("Result:"),
+        styled(outcome_style, result)
+    ));
+    if outcome.can_continue {
+        lines.push("Type 'continue' to keep operating, or 'quit' to leave the game.".to_string());
+    }
+
+    println!();
+    print_box("Outcome", &lines);
+}
+
+pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {
+    let share = game.market_share();
+    let reliability = game.player.reliability;
+    let leverage = game.player.debt_to_assets();
+
+    vec![
+        format!(
+            "{} {} | {} {} | {} {} | {} {}",
+            muted("Review"),
+            styled(BOLD_CYAN, quarters_remaining_label(game)),
+            muted("Rate"),
+            styled(BOLD_CYAN, format!("{:.1}c/kWh", game.player.rate_cents)),
+            muted("Avg"),
+            styled(CYAN, format!("{:.1}c", market_average_rate(game))),
+            muted("Tolerance"),
+            styled(
+                YELLOW,
+                format!("{:.1}c", public_rate_tolerance(&game.market))
+            )
+        ),
+        score_line(
+            "Share",
+            share,
+            SHARE_TARGET,
+            share_tone(share),
+            format!("{:.0}% target", SHARE_TARGET * 100.0),
+            if share >= SHARE_TARGET {
+                "target met".to_string()
+            } else {
+                format!("{:.0} pts to go", (SHARE_TARGET - share) * 100.0)
+            },
+        ),
+        score_line(
+            "Reliability",
+            reliability,
+            RELIABILITY_TARGET,
+            reliability_tone(reliability),
+            format!("{:.0}% target", RELIABILITY_TARGET * 100.0),
+            if reliability >= RELIABILITY_TARGET {
+                format!(
+                    "{:.0} pts above",
+                    (reliability - RELIABILITY_TARGET) * 100.0
+                )
+            } else {
+                format!(
+                    "{:.0} pts short",
+                    (RELIABILITY_TARGET - reliability) * 100.0
+                )
+            },
+        ),
+        score_line(
+            "Debt/assets",
+            leverage,
+            LEVERAGE_LIMIT,
+            leverage_tone(leverage),
+            format!("{:.0}% limit", LEVERAGE_LIMIT * 100.0),
+            if leverage <= LEVERAGE_LIMIT {
+                format!("{:.0} pts room", (LEVERAGE_LIMIT - leverage) * 100.0)
+            } else {
+                format!("{:.0} pts over", (leverage - LEVERAGE_LIMIT) * 100.0)
+            },
+        ),
+    ]
+}
+
+pub(super) fn score_line(
+    label: &str,
+    current: f64,
+    reference: f64,
+    tone: &str,
+    target: String,
+    note: String,
+) -> String {
+    format!(
+        "{} {} / {}  {}  {}",
+        styled(BOLD, label),
+        styled(tone, format!("{:.0}%", current * 100.0)),
+        muted(target),
+        progress_meter(current, reference, tone),
+        muted(note)
+    )
+}
+
+pub(super) fn progress_meter(current: f64, reference: f64, tone: &str) -> String {
+    let width = 16;
+    let filled = ((current / reference.max(0.01)).clamp(0.0, 1.0) * width as f64).round() as usize;
+    styled(
+        tone,
+        format!("[{}{}]", "=".repeat(filled), ".".repeat(width - filled)),
+    )
+}
+
+pub(super) fn quarters_remaining_label(game: &Game) -> String {
+    if game.review_completed {
+        return "review complete".to_string();
+    }
+
+    let remaining = game.campaign_quarters.saturating_sub(game.quarter);
+    match remaining {
+        0 => "review due now".to_string(),
+        1 => "1 quarter left".to_string(),
+        _ => format!("{remaining} quarters left"),
+    }
+}
+
+pub(super) fn board_overview_lines(game: &Game) -> Vec<String> {
+    let next = next_board_target(game);
+    vec![
+        format!(
+            "{} {}   {} {}",
+            muted("Current"),
+            styled(BOLD_CYAN, game.date_label()),
+            muted("Next"),
+            styled(BOLD, next.label)
+        ),
+        format!(
+            "{} {} | {} {} | {} {}",
+            muted("Final"),
+            styled(BOLD_GREEN, format!("{:.0}% share", SHARE_TARGET * 100.0)),
+            muted("reliability"),
+            styled(BOLD_GREEN, format!("{:.0}%+", RELIABILITY_TARGET * 100.0)),
+            muted("debt/assets"),
+            styled(BOLD_GREEN, format!("<={:.0}%", LEVERAGE_LIMIT * 100.0))
+        ),
+        format!(
+            "{} {} | {} {} | {} {}",
+            muted("Now"),
+            styled(
+                share_tone(game.market_share()),
+                format!("{:.0}% share", game.market_share() * 100.0)
+            ),
+            muted("reliability"),
+            styled(
+                reliability_tone(game.player.reliability),
+                format!("{:.0}%", game.player.reliability * 100.0)
+            ),
+            muted("debt/assets"),
+            styled(
+                leverage_tone(game.player.debt_to_assets()),
+                format!("{:.0}%", game.player.debt_to_assets() * 100.0)
+            )
+        ),
+    ]
+}
+
+pub(super) fn board_milestone_lines(game: &Game) -> Vec<String> {
+    let target = next_board_target(game);
+    vec![
+        format!(
+            "{} {}",
+            muted("Checkpoint"),
+            styled(BOLD_CYAN, target.label)
+        ),
+        board_metric_line("Share", game.market_share(), target.share, true),
+        board_metric_line(
+            "Reliability",
+            game.player.reliability,
+            target.reliability,
+            true,
+        ),
+        board_metric_line(
+            "Debt/assets",
+            game.player.debt_to_assets(),
+            target.leverage,
+            false,
+        ),
+    ]
+}
+
+pub(super) fn board_risk_lines(game: &Game) -> Vec<String> {
+    let target = next_board_target(game);
+    let mut lines = Vec::new();
+    let share_gap = target.share - game.market_share();
+    if share_gap > 0.06 {
+        lines.push(signal_line(
+            "Growth",
+            YELLOW,
+            format!("share needs {}", points(share_gap)),
+        ));
+    } else if share_gap <= 0.0 {
+        lines.push(signal_line("Growth", GREEN, "share milestone already met"));
+    } else {
+        lines.push(signal_line("Growth", CYAN, "share gap is manageable"));
+    }
+
+    let headroom = game.player.capacity_headroom(&game.market);
+    if headroom < 70.0 {
+        lines.push(signal_line("Capacity", RED, "network may block growth"));
+    } else if headroom < 140.0 {
+        lines.push(signal_line("Capacity", YELLOW, "plan expansion soon"));
+    } else {
+        lines.push(signal_line("Capacity", GREEN, "room for customer growth"));
+    }
+
+    if game.player.reliability < target.reliability {
+        lines.push(signal_line("Service", RED, "maintenance before review"));
+    } else if game.player.reliability < target.reliability + 0.04 {
+        lines.push(signal_line("Service", YELLOW, "thin reliability cushion"));
+    } else {
+        lines.push(signal_line("Service", GREEN, "reliability cushion intact"));
+    }
+
+    let leverage = game.player.debt_to_assets();
+    if leverage > target.leverage {
+        lines.push(signal_line("Capital", RED, "delever before checkpoint"));
+    } else if game.borrowing_room() > 25_000.0 {
+        lines.push(signal_line("Capital", GREEN, "borrowing room available"));
+    } else {
+        lines.push(signal_line("Capital", YELLOW, "funding room is limited"));
+    }
+
+    lines
+}
+
+pub(super) fn board_path_lines(game: &Game) -> Vec<String> {
+    board_targets()
+        .iter()
+        .map(|target| {
+            let status = if game.quarter >= target.quarter {
+                let met = game.market_share() >= target.share
+                    && game.player.reliability >= target.reliability
+                    && game.player.debt_to_assets() <= target.leverage;
+                if met {
+                    styled(BOLD_GREEN, "met")
+                } else {
+                    styled(BOLD_RED, "missed")
+                }
+            } else if target.quarter == next_board_target(game).quarter {
+                styled(BOLD_CYAN, "next")
+            } else {
+                styled(DIM, "later")
+            };
+            format!(
+                "{} {:<10} | share {:.0}% | rel {:.0}% | debt/assets <= {:.0}%",
+                status,
+                target.label,
+                target.share * 100.0,
+                target.reliability * 100.0,
+                target.leverage * 100.0
+            )
+        })
+        .collect()
+}
+
+pub(super) fn board_metric_line(
+    label: &str,
+    current: f64,
+    target: f64,
+    higher_is_better: bool,
+) -> String {
+    let met = if higher_is_better {
+        current >= target
+    } else {
+        current <= target
+    };
+    let tone = if met { BOLD_GREEN } else { BOLD_YELLOW };
+    let note = if met {
+        if higher_is_better {
+            format!("{} cushion", points(current - target))
+        } else {
+            format!("{} room", points(target - current))
+        }
+    } else if higher_is_better {
+        format!("{} short", points(target - current))
+    } else {
+        format!("{} over", points(current - target))
+    };
+    format!(
+        "{} {} / {}   {}",
+        styled(BOLD, label),
+        styled(tone, format!("{:.0}%", current * 100.0)),
+        muted(format!("{:.0}%", target * 100.0)),
+        muted(note)
+    )
+}
+
+pub(super) fn next_board_target(game: &Game) -> BoardTarget {
+    if game.review_completed {
+        return BoardTarget {
+            label: "Continuation",
+            quarter: game.quarter,
+            share: SHARE_TARGET,
+            reliability: RELIABILITY_TARGET,
+            leverage: LEVERAGE_LIMIT,
+        };
+    }
+
+    board_targets()
+        .into_iter()
+        .find(|target| game.quarter < target.quarter)
+        .unwrap_or(BoardTarget {
+            label: "Final",
+            quarter: game.campaign_quarters,
+            share: SHARE_TARGET,
+            reliability: RELIABILITY_TARGET,
+            leverage: LEVERAGE_LIMIT,
+        })
+}
+
+pub(super) fn board_targets() -> [BoardTarget; 4] {
+    [
+        BoardTarget {
+            label: "Year 2",
+            quarter: 8,
+            share: 0.28,
+            reliability: 0.74,
+            leverage: 1.05,
+        },
+        BoardTarget {
+            label: "Year 3",
+            quarter: 12,
+            share: 0.34,
+            reliability: 0.74,
+            leverage: 1.00,
+        },
+        BoardTarget {
+            label: "Year 4",
+            quarter: 16,
+            share: 0.40,
+            reliability: 0.73,
+            leverage: 0.98,
+        },
+        BoardTarget {
+            label: "Final",
+            quarter: 20,
+            share: SHARE_TARGET,
+            reliability: RELIABILITY_TARGET,
+            leverage: LEVERAGE_LIMIT,
+        },
+    ]
+}
+
+pub(super) fn points(value: f64) -> String {
+    format!("{:.0} pts", value.abs() * 100.0)
+}
+
+pub(super) fn financial_lines(game: &Game) -> Vec<String> {
+    let borrowing_room = game.borrowing_room();
+    let leverage = game.player.debt_to_assets();
+    let debt_rate = game.player_annual_interest_rate();
+    let mut lines = vec![
+        format!(
+            "{} {}   {} {}",
+            muted("Cash"),
+            styled(cash_tone(game.player.cash), money(game.player.cash)),
+            muted("Debt"),
+            styled(leverage_tone(leverage), money(game.player.debt))
+        ),
+        format!(
+            "{} {}   {} {}",
+            muted("Borrow room"),
+            styled(borrowing_room_tone(borrowing_room), money(borrowing_room)),
+            muted("Debt rate"),
+            styled(
+                interest_rate_tone(debt_rate),
+                format!("{:.1}%", debt_rate * 100.0)
+            )
+        ),
+        format!(
+            "{} {}   {} {}",
+            muted("Stock"),
+            styled(BOLD_CYAN, format!("${:.2}", game.player.stock_price)),
+            muted("Market cap"),
+            styled(BOLD, money(game.player.market_cap()))
+        ),
+    ];
+
+    if game.macro_state.credit_label() != "normal"
+        || borrowing_room < 12_000.0
+        || game.macro_state.borrowing_limit_ratio() < 0.90
+    {
+        lines.push(format!(
+            "{} {}   {} {}",
+            muted("Credit"),
+            styled(macro_credit_tone(game), game.macro_state.credit_label()),
+            muted("Debt cap"),
+            styled(
+                debt_cap_tone(game.macro_state.borrowing_limit_ratio()),
+                format!("{:.0}%", game.macro_state.borrowing_limit_ratio() * 100.0)
+            )
+        ));
+    }
+
+    if let Some(report) = &game.last_report {
+        let margin = if report.revenue > 0.0 {
+            report.profit / report.revenue * 100.0
+        } else {
+            0.0
+        };
+        lines.push(format!(
+            "{} {}   {} {}",
+            muted("Last profit"),
+            styled(profit_tone(report.profit), money(report.profit)),
+            muted("margin"),
+            styled(profit_tone(margin), format!("{:.1}%", margin))
+        ));
+    } else {
+        lines.push(format!("{} no operating report yet", muted("Last q")));
+    }
+
+    lines
+}
+
+pub(super) fn operation_lines(game: &Game) -> Vec<String> {
+    let capacity = game.player.customer_capacity(&game.market);
+    let headroom = (capacity - game.player.customers).max(0.0);
+    let generation_customer_capacity =
+        game.player.generation_capacity_mwh / game.market.avg_mwh_per_customer.max(0.05);
+    let demanded_mwh = game.player.demanded_mwh(&game.market);
+    let firm_generation_reserve = game.player.firm_generation_reserve_mwh(&game.market);
+    let limiting = if game.player.distribution_capacity <= generation_customer_capacity {
+        "distribution"
+    } else {
+        "generation"
+    };
+
+    vec![
+        format!(
+            "{} {} / {}   {} {}",
+            muted("Customers"),
+            styled(BOLD, format!("{:.0}", game.player.customers)),
+            styled(BOLD, format!("{:.0}", capacity)),
+            muted("Headroom"),
+            styled(headroom_tone(headroom), format!("{:.0}", headroom))
+        ),
+        format!(
+            "{} {}   {} {}",
+            muted("Generation"),
+            styled(
+                BOLD,
+                format!("{:.0} MWh/q", game.player.generation_capacity_mwh)
+            ),
+            muted("Demand"),
+            styled(BOLD, format!("{:.0}", demanded_mwh)),
+        ),
+        format!(
+            "{} {}   {} {}",
+            muted("Firm"),
+            styled(
+                reserve_tone(firm_generation_reserve),
+                format!("{:+.0}", firm_generation_reserve)
+            ),
+            muted("Limit"),
+            styled(
+                if limiting == "generation" {
+                    YELLOW
+                } else {
+                    CYAN
+                },
+                limiting
+            )
+        ),
+        format!(
+            "{} {}",
+            muted("Utilization"),
+            styled(
+                utilization_tone(game.player.utilization(&game.market)),
+                format!("{:.0}%", game.player.utilization(&game.market) * 100.0)
+            ),
+        ),
+        format!(
+            "{} {}   {} {}",
+            muted("Reliability"),
+            styled(
+                reliability_tone(game.player.reliability),
+                format!("{:.0}%", game.player.reliability * 100.0)
+            ),
+            muted("Reputation"),
+            styled(
+                reputation_tone(game.player.reputation),
+                format!("{:.0}", game.player.reputation)
+            )
+        ),
+    ]
+}
+
+pub(super) fn project_lines(game: &Game) -> Vec<String> {
+    let mut lines = if game.pending_projects.is_empty() && game.acquisition_cooldown == 0 {
+        vec![styled(DIM, "No active pipeline.")]
+    } else if game.pending_projects.is_empty() {
+        Vec::new()
+    } else {
+        game.pending_projects
+            .iter()
+            .map(|project| {
+                let summary = match &project.kind {
+                    crate::sim::ProjectKind::Generation { capacity_mwh } => {
+                        format!("gen +{capacity_mwh:.0} MWh/q")
+                    }
+                    crate::sim::ProjectKind::Distribution { customer_capacity } => {
+                        format!("lines +{customer_capacity:.0} cust")
+                    }
+                    crate::sim::ProjectKind::AdjacentTerritory {
+                        addressable_customers,
+                        ..
+                    } => format!("territory +{addressable_customers:.0} addr"),
+                };
+                format!(
+                    "{}   {}",
+                    styled(BOLD, summary),
+                    styled(YELLOW, format!("{}q left", project.quarters_remaining))
+                )
+            })
+            .collect()
+    };
+
+    if game.acquisition_cooldown > 0 {
+        lines.push(format!(
+            "{} {}",
+            muted("Integration"),
+            styled(YELLOW, format!("{}q left", game.acquisition_cooldown))
+        ));
+    }
+
+    lines
+}
+
+pub(super) fn has_active_pipeline(game: &Game) -> bool {
+    !game.pending_projects.is_empty() || game.acquisition_cooldown > 0
+}
+
+pub(super) fn signal_lines(game: &Game) -> Vec<String> {
+    #[derive(Clone)]
+    struct SignalCandidate {
+        priority: u8,
+        order: usize,
+        line: String,
+    }
+
+    let mut lines: Vec<SignalCandidate> = Vec::new();
+    let mut push_line = |priority: u8, line: String| {
+        let order = lines.len();
+        lines.push(SignalCandidate {
+            priority,
+            order,
+            line,
+        });
+    };
+
+    if !game.active_shocks.is_empty() {
+        let descriptors: Vec<String> = game
+            .active_shocks
+            .iter()
+            .map(|shock| format!("{} {}q", shock_label(&shock.kind), shock.quarters_remaining))
+            .collect();
+        push_line(100, signal_line("Shock", BOLD_RED, descriptors.join(" | ")));
+    }
+
+    if let Some(report) = &game.last_report {
+        let net_customers = report.new_customers - report.lost_customers;
+        push_line(
+            45,
+            signal_line(
+                "Trend",
+                CYAN,
+                format!(
+                    "net {} | churn {}",
+                    styled(
+                        customer_tone(net_customers),
+                        format!("{:+.0}", net_customers)
+                    ),
+                    styled(
+                        churn_tone(report.lost_customer_rate),
+                        format_churn_rate(report.lost_customer_rate)
+                    )
+                ),
+            ),
+        );
+    } else {
+        push_line(45, signal_line("Trend", CYAN, "no prior quarter yet"));
+    }
+
+    push_line(
+        40,
+        signal_line(
+            "Macro",
+            macro_credit_tone(game),
+            format!(
+                "credit {} | demand {} | costs {}",
+                styled(macro_credit_tone(game), game.macro_state.credit_label()),
+                styled(
+                    demand_tone(game.macro_state.demand_index),
+                    game.macro_state.demand_label()
+                ),
+                styled(
+                    cost_pressure_tone(game.macro_state.cost_pressure),
+                    game.macro_state.cost_label()
+                )
+            ),
+        ),
+    );
+
+    let average_rate = market_average_rate(game);
+    let rate_gap = game.player.rate_cents - average_rate;
+    let tolerance = public_rate_tolerance(&game.market);
+    if game.player.rate_cents > tolerance {
+        push_line(
+            86,
+            signal_line(
+                "Rate",
+                RED,
+                format!(
+                    "{} above public tolerance; intervention risk",
+                    styled(
+                        BOLD_RED,
+                        format!("{:.1}c", game.player.rate_cents - tolerance)
+                    )
+                ),
+            ),
+        );
+    } else if rate_gap >= 0.4 {
+        push_line(
+            60,
+            signal_line(
+                "Rate",
+                YELLOW,
+                format!(
+                    "{} above market; churn pressure",
+                    styled(BOLD_YELLOW, format!("{:.1}c", rate_gap))
+                ),
+            ),
+        );
+    } else if rate_gap <= -0.4 {
+        push_line(
+            60,
+            signal_line(
+                "Rate",
+                CYAN,
+                format!(
+                    "{} below market; margin tightens",
+                    styled(BOLD_CYAN, format!("{:.1}c", rate_gap.abs()))
+                ),
+            ),
+        );
+    } else {
+        push_line(35, signal_line("Rate", CYAN, "near market average"));
+    }
+
+    let capacity = game.player.customer_capacity(&game.market);
+    let headroom = capacity - game.player.customers;
+    let firm_generation_reserve = game.player.firm_generation_reserve_mwh(&game.market);
+    if headroom < 60.0 {
+        push_line(
+            84,
+            signal_line("Capacity", RED, "tight; build capacity first"),
+        );
+    } else if headroom < 140.0 {
+        push_line(
+            55,
+            signal_line("Capacity", YELLOW, "adequate, but narrowing"),
+        );
+    } else {
+        push_line(
+            25,
+            signal_line("Capacity", GREEN, "growth headroom available"),
+        );
+    }
+    if firm_generation_reserve < 15.0 {
+        push_line(
+            82,
+            signal_line(
+                "Generation",
+                reserve_tone(firm_generation_reserve),
+                "firm reserve thin",
+            ),
+        );
+    }
+
+    let leverage = game.player.debt_to_assets();
+    if leverage > 0.85 {
+        push_line(80, signal_line("Debt", RED, "high leverage; lender risk"));
+    } else if leverage < 0.55 {
+        push_line(
+            30,
+            signal_line("Debt", GREEN, "borrowing capacity available"),
+        );
+    } else {
+        push_line(
+            35,
+            signal_line("Debt", YELLOW, "usable, but no longer cheap"),
+        );
+    }
+
+    if game.player.reliability < 0.74 {
+        push_line(
+            78,
+            signal_line("Reliability", RED, "below target; fund maintenance"),
+        );
+    } else if game.player.reliability > 0.88 {
+        push_line(
+            25,
+            signal_line("Reliability", GREEN, "strong; expansion can lead"),
+        );
+    }
+
+    if lines.len() > 6 {
+        lines.sort_by(|left, right| {
+            right
+                .priority
+                .cmp(&left.priority)
+                .then_with(|| left.order.cmp(&right.order))
+        });
+        lines.truncate(6);
+        lines.sort_by_key(|candidate| candidate.order);
+    }
+
+    lines.into_iter().map(|candidate| candidate.line).collect()
+}
+
+pub(super) fn shock_label(kind: &ShockKind) -> &'static str {
+    match kind {
+        ShockKind::RateFreeze => "rate freeze",
+        ShockKind::DemandRecession => "demand recession",
+        ShockKind::DemandBoom => "demand boom",
+        ShockKind::InputCostShock => "input cost shock",
+    }
+}
+
+pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
+    let mut lines = vec![action_line(
+        "next/n | preview",
+        "finish the quarter or inspect a command before committing",
+    )];
+
+    if dashboard_width() >= 112 {
+        lines.push(action_line(
+            "build gen/lines",
+            format!(
+                "gen 400 {} | lines 600 {}",
+                project_quote_inline("gen", 400.0),
+                project_quote_inline("lines", 600.0)
+            ),
+        ));
+    } else {
+        lines.push(action_line(
+            "build gen 400",
+            project_quote_inline("gen", 400.0),
+        ));
+        lines.push(action_line(
+            "build lines 600",
+            project_quote_inline("lines", 600.0),
+        ));
+    }
+
+    lines.push(action_line(
+        "marketing/maint",
+        "marketing 4000 for demand; maint 6000 for reliability",
+    ));
+    if should_show_adjacent_expansion(game) {
+        lines.push(action_line("expand", adjacent_expansion_footer(game)));
+    }
+    lines.push(action_line(
+        "rate | capital",
+        if dashboard_width() >= 112 {
+            format!(
+                "rate {:.1} near market; borrow max {} at {}; issue/buyback",
+                game.market.standard_rate_cents,
+                styled(
+                    borrowing_room_tone(game.borrowing_room()),
+                    money(game.borrowing_room())
+                ),
+                styled(
+                    interest_rate_tone(game.player_annual_interest_rate()),
+                    format!("{:.1}%", game.player_annual_interest_rate() * 100.0)
+                )
+            )
+        } else {
+            format!(
+                "rate {:.1}; borrow max {} @ {}; equity",
+                game.market.standard_rate_cents,
+                styled(
+                    borrowing_room_tone(game.borrowing_room()),
+                    money(game.borrowing_room())
+                ),
+                styled(
+                    interest_rate_tone(game.player_annual_interest_rate()),
+                    format!("{:.1}%", game.player_annual_interest_rate() * 100.0)
+                )
+            )
+        },
+    ));
+    lines.push(action_line(
+        "rivals | board | save",
+        "competitor detail, objectives, and save/load",
+    ));
+
+    if let Some((index, price)) = cheapest_diligenced_competitor(game) {
+        if game.competitors.len() == 1 {
+            lines.push(action_line(
+                "buy",
+                styled(RED, "final rival acquisition blocked by regulator"),
+            ));
+        } else if game.acquisition_cooldown > 0 {
+            lines.push(action_line(
+                format!("buy {}", index + 1),
+                format!(
+                    "unavailable for {} more quarter(s) during integration",
+                    styled(YELLOW, game.acquisition_cooldown)
+                ),
+            ));
+        } else {
+            lines.push(action_line(
+                format!("buy {}", index + 1),
+                format!(
+                    "{} cash plus debt; integration strain follows",
+                    styled(BOLD_YELLOW, money(price))
+                ),
+            ));
+        }
+    } else if let Some((index, cost)) = cheapest_diligence_target(game) {
+        if game.competitors.len() == 1 {
+            lines.push(action_line(
+                "buy",
+                styled(RED, "final rival acquisition blocked by regulator"),
+            ));
+        } else if game.acquisition_cooldown > 0 {
+            lines.push(action_line(
+                format!("diligence {}", index + 1),
+                format!(
+                    "can inspect now; acquisitions wait {}q",
+                    styled(YELLOW, game.acquisition_cooldown)
+                ),
+            ));
+        } else {
+            lines.push(action_line(
+                format!("diligence {}", index + 1),
+                format!(
+                    "{} to reveal exact acquisition terms",
+                    styled(BOLD_YELLOW, money(cost))
+                ),
+            ));
+        }
+    }
+
+    lines
+}
+
+pub(super) fn should_show_adjacent_expansion(game: &Game) -> bool {
+    game.quarter >= 6
+        || game.review_completed
+        || game.adjacent_expansion_pending()
+        || game.adjacent_expansions > 0
+}
+
+pub(super) fn adjacent_expansion_footer(game: &Game) -> String {
+    let cost = game.adjacent_expansion_cost();
+    if game.adjacent_expansion_pending() {
+        return styled(YELLOW, "adjacent territory entry already in pipeline");
+    }
+    if game.adjacent_expansions > 0 {
+        return styled(
+            DIM,
+            "adjacent territory open; later regional expansion not modeled yet",
+        );
+    }
+    if let Some(blocker) = game.adjacent_expansion_blocker() {
+        return blocker;
+    }
+    if game.player.cash < cost {
+        return format!(
+            "{} | {}q | raise {} more",
+            styled(BOLD_YELLOW, money(cost)),
+            styled(YELLOW, game.adjacent_expansion_duration()),
+            styled(YELLOW, money(cost - game.player.cash))
+        );
+    }
+    format!(
+        "{} | {}q | +{:.0} addressable customers",
+        styled(BOLD_YELLOW, money(cost)),
+        styled(YELLOW, game.adjacent_expansion_duration()),
+        ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS
+    )
+}
+
+pub(super) fn project_quote_inline(kind: &str, size: f64) -> String {
+    match kind {
+        "gen" => {
+            let cost = generation_project_cost(size);
+            format!(
+                "{} | {} | {}",
+                styled(BOLD_YELLOW, money(cost)),
+                styled(YELLOW, format!("{}q", generation_project_duration(size))),
+                styled(DIM, format!("{}/MWh", money(cost / size)))
+            )
+        }
+        "lines" => {
+            let cost = distribution_project_cost(size);
+            format!(
+                "{} | {} | {}",
+                styled(BOLD_YELLOW, money(cost)),
+                styled(YELLOW, format!("{}q", distribution_project_duration(size))),
+                styled(DIM, format!("{}/cust", money(cost / size)))
+            )
+        }
+        _ => String::new(),
+    }
+}

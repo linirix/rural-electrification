@@ -133,7 +133,13 @@ There is also a strategy regression test in `tests/strategy_balance.rs` that kee
 ```text
 src/lib.rs              crate exports
 src/main.rs             interactive terminal entry point
-src/terminal.rs         command parsing, dashboard, previews, save/load
+src/terminal.rs         terminal entry point and shared terminal constants
+src/terminal/command.rs command parsing, aliases, save/load
+src/terminal/preview.rs command preview and chained transaction preview
+src/terminal/screens.rs dashboard, board, notices, and report screens
+src/terminal/rivals.rs  rival overview/detail rendering
+src/terminal/render.rs  ANSI styling, box rendering, wrapping, tones
+src/terminal/tests.rs   terminal command and rendering tests
 src/sim.rs              core game state, decisions, quarter advancement
 src/sim/economics.rs    settlement, churn, project costs, maintenance
 src/sim/competitors.rs  rival behavior, startups, rival mergers
