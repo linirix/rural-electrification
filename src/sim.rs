@@ -26,6 +26,10 @@ const MAX_CREDIBLE_RATE_CENTS: f64 = 25.0;
 const MAX_RELIABILITY: f64 = 0.98;
 const MIN_MAINTENANCE_RELIABILITY_GAIN: f64 = 0.0005;
 const DILIGENCE_DURATION_QUARTERS: u32 = 3;
+const BOARD_CHECKPOINT_QUARTER: u32 = 8;
+const BOARD_CHECKPOINT_SHARE_TARGET: f64 = 0.32;
+const BOARD_CHECKPOINT_REPUTATION_PENALTY: f64 = 3.0;
+const BOARD_CHECKPOINT_EQUITY_FATIGUE: f64 = 0.30;
 
 mod attribution;
 mod competitors;
@@ -876,6 +880,7 @@ impl Game {
             self.acquisition_cooldown -= 1;
         }
         self.advance_diligence_reports();
+        self.apply_board_checkpoint(&mut events);
         self.check_outcome(&player_finances);
 
         let ending_customers = self.player.customers;
@@ -1037,7 +1042,7 @@ impl Game {
         let market_position_value = competitor.reputation * 90.0;
         let premium = 8_000.0 + competitor.reliability * 4_000.0;
         let share = self.market_share();
-        let consolidation_premium = 1.0 + share * 0.4 + share * share * 2.0;
+        let consolidation_premium = acquisition_consolidation_premium(share);
         let enterprise_value =
             (customer_value + generation_value + line_value + market_position_value + premium)
                 * consolidation_premium;
@@ -1250,6 +1255,24 @@ impl Game {
                     .iter()
                     .any(|competitor| competitor.name == report.competitor_name)
         });
+    }
+
+    fn apply_board_checkpoint(&mut self, events: &mut Vec<String>) {
+        if self.quarter != BOARD_CHECKPOINT_QUARTER
+            || self.review_completed
+            || self.market_share() >= BOARD_CHECKPOINT_SHARE_TARGET
+        {
+            return;
+        }
+
+        self.player.reputation =
+            (self.player.reputation - BOARD_CHECKPOINT_REPUTATION_PENALTY).clamp(0.0, 100.0);
+        self.equity_market_fatigue =
+            (self.equity_market_fatigue + BOARD_CHECKPOINT_EQUITY_FATIGUE).clamp(0.0, 6.0);
+        events.push(format!(
+            "Board confidence weakened at the Year 2 checkpoint: market share below {:.0}% hurt reputation and made fresh equity harder to sell.",
+            BOARD_CHECKPOINT_SHARE_TARGET * 100.0
+        ));
     }
 
     fn advance_macro_environment(&mut self, events: &mut Vec<String>) {
@@ -1704,13 +1727,18 @@ impl Default for Game {
 fn acquisition_integration_cooldown(starting_customers: f64, acquired_customers: f64) -> u32 {
     let post_customers = (starting_customers + acquired_customers).max(1.0);
     let acquired_share = (acquired_customers / post_customers).clamp(0.0, 1.0);
-    (2 + (acquired_share * 8.0).floor() as u32).clamp(2, 7)
+    (2 + (acquired_share * 8.0).floor() as u32).clamp(2, 6)
 }
 
 fn acquisition_integration_strain(starting_customers: f64, acquired_customers: f64) -> f64 {
     let post_customers = (starting_customers + acquired_customers).max(1.0);
     let acquired_share = (acquired_customers / post_customers).clamp(0.0, 1.0);
     acquired_share * 1.35
+}
+
+fn acquisition_consolidation_premium(share: f64) -> f64 {
+    let share = share.clamp(0.0, 1.0);
+    1.0 + share * 0.35 + share * share * 2.2
 }
 
 fn apply_equipment_fire_damage(utility: &mut Utility, capacity_loss: f64) -> f64 {

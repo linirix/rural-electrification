@@ -747,6 +747,48 @@ fn formal_review_can_be_continued_past_campaign_end() {
 }
 
 #[test]
+fn year_two_board_checkpoint_penalizes_low_share() {
+    let mut game = Game::with_seed(54);
+    game.quarter = BOARD_CHECKPOINT_QUARTER;
+    game.player.customers = 200.0;
+    game.player.reputation = 70.0;
+    game.equity_market_fatigue = 0.0;
+    for competitor in &mut game.competitors {
+        competitor.customers = 400.0;
+    }
+    let mut events = Vec::new();
+
+    game.apply_board_checkpoint(&mut events);
+
+    assert!((game.player.reputation - 67.0).abs() < 0.001);
+    assert!((game.equity_market_fatigue - BOARD_CHECKPOINT_EQUITY_FATIGUE).abs() < 0.001);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("Year 2 checkpoint"))
+    );
+}
+
+#[test]
+fn year_two_board_checkpoint_ignores_adequate_share() {
+    let mut game = Game::with_seed(55);
+    game.quarter = BOARD_CHECKPOINT_QUARTER;
+    game.player.customers = 800.0;
+    game.player.reputation = 70.0;
+    game.equity_market_fatigue = 0.0;
+    for competitor in &mut game.competitors {
+        competitor.customers = 200.0;
+    }
+    let mut events = Vec::new();
+
+    game.apply_board_checkpoint(&mut events);
+
+    assert!((game.player.reputation - 70.0).abs() < 0.001);
+    assert_eq!(game.equity_market_fatigue, 0.0);
+    assert!(events.is_empty());
+}
+
+#[test]
 fn terminal_operating_failures_cannot_be_continued() {
     let mut game = Game::with_seed(53);
     game.player.reliability = 0.40;
@@ -1028,10 +1070,17 @@ fn acquisition_cooldown_scales_with_target_size() {
     let small = acquisition_integration_cooldown(1_000.0, 50.0);
     let midsize = acquisition_integration_cooldown(1_000.0, 400.0);
     let peer_sized = acquisition_integration_cooldown(1_000.0, 1_000.0);
+    let larger_than_player = acquisition_integration_cooldown(1_000.0, 1_200.0);
 
     assert_eq!(small, 2);
     assert!(midsize > small);
     assert!(peer_sized > midsize);
+    assert!(larger_than_player >= 4);
+}
+
+#[test]
+fn high_share_consolidation_premium_exceeds_two_times() {
+    assert!(acquisition_consolidation_premium(0.70) > 2.0);
 }
 
 #[test]
