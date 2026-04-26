@@ -17,6 +17,10 @@ const NEW_GENERATION_RELIABILITY_WEIGHT: f64 = 0.35;
 const MAX_GENERATION_RELIABILITY_LIFT: f64 = 0.085;
 const MIN_STOCK_PRICE: f64 = 0.25;
 const FRESH_EQUITY_CASH_MARKET_RECOGNITION: f64 = 0.35;
+const VARIABLE_COST_REVERSION: f64 = 0.14;
+const VARIABLE_COST_PRESSURE_SENSITIVITY: f64 = 2.35;
+const VARIABLE_COST_FLOOR_MULTIPLE: f64 = 0.72;
+const VARIABLE_COST_CEILING_MULTIPLE: f64 = 1.65;
 
 mod attribution;
 mod competitors;
@@ -98,6 +102,7 @@ pub struct Market {
     pub electrification: f64,
     pub avg_mwh_per_customer: f64,
     pub variable_cost_per_mwh: f64,
+    pub baseline_variable_cost_per_mwh: f64,
     pub standard_rate_cents: f64,
     pub civic_patience: f64,
 }
@@ -235,18 +240,25 @@ impl Game {
         used_names.push(second_competitor_name.clone());
         let third_competitor_name = draw_competitor_name(&mut name_rng, &used_names, 3);
 
+        let addressable_customers = varied_pct(&mut rng, 6_500.0, 0.08, initial_variance).round();
+        let electrification = varied_abs(&mut rng, 0.14, 0.018, initial_variance).clamp(0.10, 0.18);
+        let avg_mwh_per_customer =
+            varied_pct(&mut rng, 0.22, 0.08, initial_variance).clamp(0.18, 0.27);
+        let variable_cost_per_mwh =
+            varied_pct(&mut rng, 26.0, 0.07, initial_variance).clamp(21.0, 31.0);
+        let standard_rate_cents =
+            varied_abs(&mut rng, 10.4, 0.35, initial_variance).clamp(9.5, 11.3);
+        let civic_patience = varied_abs(&mut rng, 0.76, 0.04, initial_variance).clamp(0.64, 0.88);
         let market = Market {
             territory: "Core Market".to_string(),
             start_year: 1,
-            addressable_customers: varied_pct(&mut rng, 6_500.0, 0.08, initial_variance).round(),
-            electrification: varied_abs(&mut rng, 0.14, 0.018, initial_variance).clamp(0.10, 0.18),
-            avg_mwh_per_customer: varied_pct(&mut rng, 0.22, 0.08, initial_variance)
-                .clamp(0.18, 0.27),
-            variable_cost_per_mwh: varied_pct(&mut rng, 26.0, 0.07, initial_variance)
-                .clamp(21.0, 31.0),
-            standard_rate_cents: varied_abs(&mut rng, 10.4, 0.35, initial_variance)
-                .clamp(9.5, 11.3),
-            civic_patience: varied_abs(&mut rng, 0.76, 0.04, initial_variance).clamp(0.64, 0.88),
+            addressable_customers,
+            electrification,
+            avg_mwh_per_customer,
+            variable_cost_per_mwh,
+            baseline_variable_cost_per_mwh: variable_cost_per_mwh,
+            standard_rate_cents,
+            civic_patience,
         };
 
         Self {
@@ -1152,9 +1164,21 @@ impl Game {
             (self.market.electrification + adoption_gain).clamp(0.05, 0.68);
         self.market.avg_mwh_per_customer *=
             (1.004 + self.rng.range(0.0, 0.004) + demand_cycle * 0.002).clamp(0.996, 1.012);
-        self.market.variable_cost_per_mwh *=
-            (1.0 + self.rng.range(-0.008, 0.010) + self.macro_state.cost_pressure)
-                .clamp(0.965, 1.085);
+        let baseline_cost = self.market.baseline_variable_cost_per_mwh.max(1.0);
+        let pressure_target = baseline_cost
+            * (1.0 + self.macro_state.cost_pressure * VARIABLE_COST_PRESSURE_SENSITIVITY);
+        let bounded_target = pressure_target.clamp(
+            baseline_cost * VARIABLE_COST_FLOOR_MULTIPLE,
+            baseline_cost * VARIABLE_COST_CEILING_MULTIPLE,
+        );
+        let random_cost_noise = self.rng.range(-0.006, 0.007);
+        self.market.variable_cost_per_mwh = (self.market.variable_cost_per_mwh
+            + (bounded_target - self.market.variable_cost_per_mwh) * VARIABLE_COST_REVERSION)
+            * (1.0 + random_cost_noise);
+        self.market.variable_cost_per_mwh = self.market.variable_cost_per_mwh.clamp(
+            baseline_cost * VARIABLE_COST_FLOOR_MULTIPLE,
+            baseline_cost * VARIABLE_COST_CEILING_MULTIPLE,
+        );
 
         if self.rng.chance(0.18) {
             events.push(

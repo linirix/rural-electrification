@@ -25,6 +25,10 @@ fn fixed_initial_variance_preserves_baseline_start() {
     assert!((game.player.customers - 160.0).abs() < 0.01);
     assert!((game.player.reliability - 0.82).abs() < 0.0001);
     assert!((game.market.addressable_customers - 6_500.0).abs() < 0.01);
+    assert!(
+        (game.market.variable_cost_per_mwh - game.market.baseline_variable_cost_per_mwh).abs()
+            < 0.0001
+    );
 }
 
 #[test]
@@ -328,6 +332,90 @@ fn macro_environment_changes_each_quarter() {
 
     assert!((game.macro_state.benchmark_credit_rate() - starting_rate).abs() > 0.0001);
     assert!((game.macro_state.demand_index - starting_demand).abs() > 0.0001);
+}
+
+#[test]
+fn market_variable_costs_are_bounded_over_extended_play() {
+    for seed in 1..=50 {
+        let mut game = Game::with_seed(seed);
+        let baseline_cost = game.market.baseline_variable_cost_per_mwh;
+        let mut max_cost = game.market.variable_cost_per_mwh;
+        let mut min_cost = game.market.variable_cost_per_mwh;
+        let mut events = Vec::new();
+
+        for _ in 0..240 {
+            game.advance_macro_environment(&mut events);
+            game.grow_market(&mut events);
+            max_cost = max_cost.max(game.market.variable_cost_per_mwh);
+            min_cost = min_cost.min(game.market.variable_cost_per_mwh);
+        }
+
+        assert!(
+            max_cost <= baseline_cost * VARIABLE_COST_CEILING_MULTIPLE + 0.01,
+            "seed {seed} max cost {max_cost} exceeded bounded cost ceiling from baseline {baseline_cost}"
+        );
+        assert!(
+            min_cost >= baseline_cost * VARIABLE_COST_FLOOR_MULTIPLE - 0.01,
+            "seed {seed} min cost {min_cost} fell below bounded cost floor from baseline {baseline_cost}"
+        );
+    }
+}
+
+#[test]
+fn variable_costs_mean_revert_after_cost_pressure_eases() {
+    let mut game = Game::with_seed(45);
+    let baseline_cost = game.market.baseline_variable_cost_per_mwh;
+    game.market.variable_cost_per_mwh = baseline_cost * VARIABLE_COST_CEILING_MULTIPLE;
+    game.macro_state.cost_pressure = -0.030;
+    let mut events = Vec::new();
+
+    for _ in 0..20 {
+        game.grow_market(&mut events);
+    }
+
+    assert!(
+        game.market.variable_cost_per_mwh < baseline_cost * 1.25,
+        "costs should retreat after pressure eases: current {}, baseline {}",
+        game.market.variable_cost_per_mwh,
+        baseline_cost
+    );
+}
+
+#[test]
+fn mature_reliable_utility_can_profit_at_bounded_cost_ceiling() {
+    let game = Game::with_seed(46);
+    let mut utility = game.player.clone();
+    let mut market = game.market.clone();
+    let mut events = Vec::new();
+
+    utility.customers = 4_000.0;
+    utility.generation_capacity_mwh = 2_400.0;
+    utility.distribution_capacity = 5_500.0;
+    utility.rate_cents = 9.8;
+    utility.reliability = 0.92;
+    utility.reputation = 84.0;
+    utility.asset_base = 620_000.0;
+    utility.debt = 180_000.0;
+    market.avg_mwh_per_customer = 0.45;
+    market.variable_cost_per_mwh =
+        market.baseline_variable_cost_per_mwh * VARIABLE_COST_CEILING_MULTIPLE;
+
+    let finances = settle_utility(
+        &mut utility,
+        &market,
+        &game.macro_state,
+        1.0,
+        true,
+        &mut events,
+    );
+
+    assert!(
+        finances.profit > 0.0,
+        "mature reliable utility should still be profitable at bounded cost ceiling: revenue {}, cost {}, interest {}",
+        finances.revenue,
+        finances.operating_cost,
+        finances.interest
+    );
 }
 
 #[test]
