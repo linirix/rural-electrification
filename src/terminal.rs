@@ -1,4 +1,7 @@
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    sync::OnceLock,
+};
 
 #[cfg(test)]
 use crate::sim::ActiveShock;
@@ -2470,11 +2473,40 @@ fn shorten_plain(value: &str, width: usize) -> String {
 }
 
 fn styled(style: &str, value: impl std::fmt::Display) -> String {
-    format!("{style}{value}{RESET}")
+    if ansi_enabled() {
+        format!("{style}{value}{RESET}")
+    } else {
+        value.to_string()
+    }
 }
 
 fn muted(value: impl std::fmt::Display) -> String {
     styled(DIM, value)
+}
+
+fn ansi(style: &'static str) -> &'static str {
+    if ansi_enabled() { style } else { "" }
+}
+
+fn ansi_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        let term = std::env::var("TERM").ok();
+        should_use_ansi(std::env::var_os("NO_COLOR").is_some(), term.as_deref())
+    })
+}
+
+fn terminal_control_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("TERM")
+            .map(|term| term != "dumb")
+            .unwrap_or(true)
+    })
+}
+
+fn should_use_ansi(no_color_set: bool, term: Option<&str>) -> bool {
+    !no_color_set && term != Some("dumb")
 }
 
 fn action_line(command: impl std::fmt::Display, effect: impl std::fmt::Display) -> String {
@@ -2750,7 +2782,9 @@ fn padded_box_lines(lines: &[String], height: usize) -> Vec<String> {
 }
 
 fn clear_screen() {
-    print!("\x1B[2J\x1B[H");
+    if terminal_control_enabled() {
+        print!("\x1B[2J\x1B[H");
+    }
 }
 
 fn render_box(title: &str, lines: &[String], width: usize) -> Vec<String> {
@@ -2768,28 +2802,33 @@ fn render_box(title: &str, lines: &[String], width: usize) -> Vec<String> {
 }
 
 fn render_top_border(title: &str, width: usize) -> String {
+    let dim = ansi(DIM);
+    let bold_cyan = ansi(BOLD_CYAN);
+    let reset = ansi(RESET);
     if title.is_empty() {
-        format!("{DIM}┌{}┐{RESET}", "─".repeat(width - 2))
+        format!("{dim}┌{}┐{reset}", "─".repeat(width - 2))
     } else {
         let title = shorten_plain(title, width.saturating_sub(6));
         let fill = (width - 2).saturating_sub(visible_width(&title) + 3);
         format!(
-            "{DIM}┌─ {BOLD_CYAN}{title}{RESET}{DIM} {}┐{RESET}",
+            "{dim}┌─ {bold_cyan}{title}{reset}{dim} {}┐{reset}",
             "─".repeat(fill)
         )
     }
 }
 
 fn render_bottom_border(width: usize) -> String {
-    format!("{DIM}└{}┘{RESET}", "─".repeat(width - 2))
+    format!("{}└{}┘{}", ansi(DIM), "─".repeat(width - 2), ansi(RESET))
 }
 
 fn render_box_line(line: &str, width: usize) -> String {
     let content_width = width.saturating_sub(4);
     let fitted = fit_line(line, content_width);
     let padding = content_width.saturating_sub(visible_width(&fitted));
+    let dim = ansi(DIM);
+    let reset = ansi(RESET);
     format!(
-        "{DIM}│{RESET} {}{} {DIM}│{RESET}",
+        "{dim}│{reset} {}{} {dim}│{reset}",
         fitted,
         " ".repeat(padding)
     )
@@ -2827,7 +2866,7 @@ fn fit_line(line: &str, width: usize) -> String {
         visible += 1;
     }
 
-    truncated.push_str(RESET);
+    truncated.push_str(ansi(RESET));
     truncated.push_str("...");
     truncated
 }
@@ -3390,16 +3429,23 @@ mod tests {
 
     #[test]
     fn visible_width_ignores_ansi_escape_sequences() {
-        let line = format!("{}Cash{} {}", DIM, RESET, styled(BOLD_GREEN, "$34.0k"));
+        let line = format!("{DIM}Cash{RESET} {BOLD_GREEN}$34.0k{RESET}");
         assert_eq!(visible_width(&line), "Cash $34.0k".len());
     }
 
     #[test]
     fn fit_line_preserves_ansi_sequences_without_counting_them() {
-        let line = format!("{} {}", styled(BOLD_CYAN, "issue [amt]"), "no fixed cap");
+        let line = format!("{BOLD_CYAN}issue [amt]{RESET} no fixed cap");
         let fitted = fit_line(&line, 24);
         assert_eq!(visible_width(&fitted), 24);
         assert!(fitted.contains(BOLD_CYAN));
+    }
+
+    #[test]
+    fn ansi_can_be_disabled_by_environment_convention() {
+        assert!(should_use_ansi(false, Some("xterm-256color")));
+        assert!(!should_use_ansi(true, Some("xterm-256color")));
+        assert!(!should_use_ansi(false, Some("dumb")));
     }
 
     #[test]

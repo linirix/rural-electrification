@@ -23,6 +23,7 @@ const VARIABLE_COST_PRESSURE_SENSITIVITY: f64 = 2.35;
 const VARIABLE_COST_FLOOR_MULTIPLE: f64 = 0.72;
 const VARIABLE_COST_CEILING_MULTIPLE: f64 = 1.65;
 const MAX_CREDIBLE_RATE_CENTS: f64 = 25.0;
+/// Maximum rate premium above public tolerance that the command layer allows for new increases.
 pub const MAX_PUBLIC_RATE_PREMIUM_CENTS: f64 = 5.0;
 const RECEIVERSHIP_DEBT_TO_ASSETS: f64 = 1.05;
 const MAX_RELIABILITY: f64 = 0.98;
@@ -37,7 +38,7 @@ mod attribution;
 mod competitors;
 mod economics;
 
-use attribution::{AttributionContext, quarter_attributions};
+use attribution::{AttributionContext, PointInTime, quarter_attributions};
 use competitors::draw_competitor_name;
 #[cfg(test)]
 use competitors::{COMPETITOR_NAME_POOL, StartupEntryReason};
@@ -52,6 +53,10 @@ pub use economics::{
     generation_project_duration, money, public_rate_tolerance,
 };
 
+/// Complete simulation state for one campaign or sandbox run.
+///
+/// `Game` owns the market, player utility, rivals, pending projects, macro shocks, and current
+/// outcome. Consumers normally mutate it through `apply_decision` and `advance_quarter`.
 #[derive(Clone, Debug)]
 pub struct Game {
     pub quarter: u32,
@@ -73,6 +78,10 @@ pub struct Game {
     rng: Rng,
 }
 
+/// Controls how much seeded starts vary around the baseline scenario.
+///
+/// `amplitude` is clamped to `0.0..=2.0` when applied: `0.0` gives the fixed baseline, `1.0` is
+/// the normal game variance, and `2.0` is a deliberately wide opening spread.
 #[derive(Clone, Copy, Debug)]
 pub struct InitialVariance {
     pub amplitude: f64,
@@ -93,12 +102,14 @@ impl CustomerAllocationKind {
     }
 }
 
+/// A temporary market-wide shock that modifies demand, rates, costs, or valuation.
 #[derive(Clone, Debug)]
 pub struct ActiveShock {
     pub kind: ShockKind,
     pub quarters_remaining: u32,
 }
 
+/// Time-limited due-diligence record for a competitor, including frozen acquisition terms.
 #[derive(Clone, Debug)]
 pub struct DiligenceReport {
     pub competitor_name: String,
@@ -106,6 +117,7 @@ pub struct DiligenceReport {
     pub quoted_terms: AcquisitionTerms,
 }
 
+/// Types of macro shocks that can be active during a quarter.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShockKind {
     RateFreeze,
@@ -114,6 +126,7 @@ pub enum ShockKind {
     InputCostShock,
 }
 
+/// Core market conditions shared by the player and competitors.
 #[derive(Clone, Debug)]
 pub struct Market {
     pub territory: String,
@@ -127,6 +140,7 @@ pub struct Market {
     pub civic_patience: f64,
 }
 
+/// Current macro-financing environment that affects debt rates, demand, costs, and valuation.
 #[derive(Clone, Debug)]
 pub struct MacroEnvironment {
     pub annual_base_rate: f64,
@@ -135,6 +149,7 @@ pub struct MacroEnvironment {
     pub cost_pressure: f64,
 }
 
+/// Operating and balance-sheet state for the player utility or a competitor.
 #[derive(Clone, Debug)]
 pub struct Utility {
     pub name: String,
@@ -153,6 +168,7 @@ pub struct Utility {
     pub last_quarter_customers: f64,
 }
 
+/// Capital project under construction and waiting to complete in a future quarter.
 #[derive(Clone, Debug)]
 pub struct Project {
     pub name: String,
@@ -160,12 +176,17 @@ pub struct Project {
     pub quarters_remaining: u32,
 }
 
+/// Type and scale of a pending capital project.
 #[derive(Clone, Debug)]
 pub enum ProjectKind {
     Generation { capacity_mwh: f64 },
     Distribution { customer_capacity: f64 },
 }
 
+/// Player command accepted by the simulation core.
+///
+/// The terminal layer parses text into these variants; the simulation validates cash,
+/// financing, market-access, and regulatory constraints when applying them.
 #[derive(Clone, Debug)]
 pub enum Decision {
     BuildGeneration { capacity_mwh: f64 },
@@ -181,6 +202,7 @@ pub enum Decision {
     Maintenance { spend: f64 },
 }
 
+/// Result of one processed quarter, suitable for terminal display or automated playtests.
 #[derive(Clone, Debug)]
 pub struct QuarterReport {
     pub label: String,
@@ -197,6 +219,7 @@ pub struct QuarterReport {
     pub events: Vec<String>,
 }
 
+/// Income-statement and service-output summary for a settled utility in one quarter.
 #[derive(Clone, Debug)]
 pub struct FirmFinances {
     pub revenue: f64,
@@ -207,6 +230,7 @@ pub struct FirmFinances {
     pub unmet_demand_ratio: f64,
 }
 
+/// Full acquisition economics for a target, including the post-close player balance sheet.
 #[derive(Clone, Debug)]
 pub struct AcquisitionTerms {
     pub price: f64,
@@ -225,19 +249,23 @@ pub struct AcquisitionTerms {
     pub post_debt_to_assets: f64,
 }
 
+/// High-level category for a formal review or terminal operating outcome.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OutcomeKind {
     Victory,
     Defeat,
 }
 
+/// Current end-state of the game, if one has been reached.
+///
+/// `can_continue` is true for formal review outcomes that can be cleared with
+/// `Game::continue_after_review`; it is false for terminal operating failures such as
+/// receivership or lost market access.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outcome {
     pub kind: OutcomeKind,
     pub headline: String,
     pub details: String,
-    /// True for formal review outcomes where the company can continue into sandbox play.
-    /// False for terminal operating failures such as receivership or lost market access.
     pub can_continue: bool,
 }
 
@@ -904,16 +932,20 @@ impl Game {
             0.0
         };
         let attributions = quarter_attributions(AttributionContext {
-            starting_customers,
-            ending_customers,
-            starting_total_connected,
-            ending_total_connected,
-            starting_market_share,
-            ending_market_share,
-            starting_reliability,
-            ending_reliability,
-            starting_headroom,
-            ending_headroom,
+            starting: PointInTime {
+                customers: starting_customers,
+                market_share: starting_market_share,
+                total_connected: starting_total_connected,
+                reliability: starting_reliability,
+                headroom: starting_headroom,
+            },
+            ending: PointInTime {
+                customers: ending_customers,
+                market_share: ending_market_share,
+                total_connected: ending_total_connected,
+                reliability: ending_reliability,
+                headroom: ending_headroom,
+            },
             lost_customer_rate,
             rate_gap_to_rivals: self.player.rate_cents - self.rival_average_rate_for_player(),
             finances: &player_finances,
@@ -2022,8 +2054,12 @@ fn starting_utility(
         cash: varied_pct(rng, cash, 0.18, initial_variance).max(1_500.0),
         debt: varied_debt,
         shares,
-        stock_price: varied_pct(rng, stock_price, 0.12, initial_variance)
-            .max(stock_price.min(MIN_STOCK_PRICE)),
+        stock_price: if stock_price == 0.0 {
+            0.0
+        } else {
+            varied_pct(rng, stock_price, 0.12, initial_variance)
+                .max(stock_price.min(MIN_STOCK_PRICE))
+        },
         customers: varied_customers,
         generation_capacity_mwh: varied_pct(rng, generation_capacity_mwh, 0.10, initial_variance)
             .max(20.0),

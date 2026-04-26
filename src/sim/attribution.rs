@@ -1,16 +1,16 @@
 use super::{ActiveShock, FirmFinances, shock_kind_label};
 
+pub(super) struct PointInTime {
+    pub(super) customers: f64,
+    pub(super) market_share: f64,
+    pub(super) total_connected: f64,
+    pub(super) reliability: f64,
+    pub(super) headroom: f64,
+}
+
 pub(super) struct AttributionContext<'a> {
-    pub(super) starting_customers: f64,
-    pub(super) ending_customers: f64,
-    pub(super) starting_total_connected: f64,
-    pub(super) ending_total_connected: f64,
-    pub(super) starting_market_share: f64,
-    pub(super) ending_market_share: f64,
-    pub(super) starting_reliability: f64,
-    pub(super) ending_reliability: f64,
-    pub(super) starting_headroom: f64,
-    pub(super) ending_headroom: f64,
+    pub(super) starting: PointInTime,
+    pub(super) ending: PointInTime,
     pub(super) lost_customer_rate: f64,
     pub(super) rate_gap_to_rivals: f64,
     pub(super) finances: &'a FirmFinances,
@@ -19,9 +19,9 @@ pub(super) struct AttributionContext<'a> {
 
 pub(super) fn quarter_attributions(context: AttributionContext<'_>) -> Vec<String> {
     let mut lines = Vec::new();
-    let net_customers = context.ending_customers - context.starting_customers;
-    let market_customer_change = context.ending_total_connected - context.starting_total_connected;
-    let share_change = context.ending_market_share - context.starting_market_share;
+    let net_customers = context.ending.customers - context.starting.customers;
+    let market_customer_change = context.ending.total_connected - context.starting.total_connected;
+    let share_change = context.ending.market_share - context.starting.market_share;
 
     if share_change.abs() >= 0.001 {
         let direction = if share_change > 0.0 { "rose" } else { "fell" };
@@ -39,11 +39,11 @@ pub(super) fn quarter_attributions(context: AttributionContext<'_>) -> Vec<Strin
         ));
     }
 
-    let churn_reason = if context.rate_gap_to_rivals >= 0.4 && context.ending_reliability < 0.74 {
+    let churn_reason = if context.rate_gap_to_rivals >= 0.4 && context.ending.reliability < 0.74 {
         "premium pricing and service pressure"
     } else if context.rate_gap_to_rivals >= 0.4 {
         "premium pricing"
-    } else if context.ending_reliability < 0.74 {
+    } else if context.ending.reliability < 0.74 {
         "service pressure"
     } else if context.rate_gap_to_rivals <= -0.4 {
         "normal switching despite a price advantage"
@@ -78,12 +78,12 @@ pub(super) fn quarter_attributions(context: AttributionContext<'_>) -> Vec<Strin
         interest_load * 100.0
     ));
 
-    let headroom_change = context.ending_headroom - context.starting_headroom;
-    if context.ending_headroom < 60.0 {
+    let headroom_change = context.ending.headroom - context.starting.headroom;
+    if context.ending.headroom < 60.0 {
         lines.push(format!(
             "Capacity is tight: headroom moved from {:.0} to {:.0}, so growth spending may outrun the network.",
-            context.starting_headroom.max(0.0),
-            context.ending_headroom.max(0.0)
+            context.starting.headroom.max(0.0),
+            context.ending.headroom.max(0.0)
         ));
     } else if headroom_change.abs() >= 35.0 {
         let direction = if headroom_change > 0.0 {
@@ -94,11 +94,11 @@ pub(super) fn quarter_attributions(context: AttributionContext<'_>) -> Vec<Strin
         lines.push(format!(
             "Capacity headroom {direction} by {:.0} customers, ending at {:.0}.",
             headroom_change.abs(),
-            context.ending_headroom.max(0.0)
+            context.ending.headroom.max(0.0)
         ));
     }
 
-    let reliability_change = context.ending_reliability - context.starting_reliability;
+    let reliability_change = context.ending.reliability - context.starting.reliability;
     if reliability_change <= -0.006 {
         lines.push(format!(
             "Reliability slipped {} from operating wear and load; maintenance is the direct offset.",
