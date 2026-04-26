@@ -802,6 +802,27 @@ fn terminal_operating_failures_cannot_be_continued() {
 }
 
 #[test]
+fn high_leverage_and_losses_trigger_receivership() {
+    let mut game = Game::with_seed(56);
+    game.quarter = 6;
+    game.player.cash = 1_000.0;
+    game.player.asset_base = 100_000.0;
+    game.player.debt = 110_000.0;
+    game.player.customers = 100.0;
+    game.player.rate_cents = 1.0;
+    game.player.reliability = 0.88;
+    game.player.generation_capacity_mwh = 300.0;
+    game.player.distribution_capacity = 400.0;
+
+    let report = game.advance_quarter();
+
+    let outcome = game.outcome.as_ref().expect("expected receivership");
+    assert_eq!(outcome.headline, "Bankers Forced Receivership");
+    assert!(!outcome.can_continue);
+    assert!(report.profit < 0.0);
+}
+
+#[test]
 fn churn_compares_player_rate_to_rival_rates_not_own_weighted_average() {
     let mut game = Game::with_seed(47);
     game.player.customers = 1_800.0;
@@ -1656,7 +1677,7 @@ fn rates_can_exceed_old_fifteen_cent_cap() {
 }
 
 #[test]
-fn extreme_rates_are_rejected_as_not_credible() {
+fn extreme_rates_are_rejected_above_public_ceiling() {
     let mut game = Game::with_seed(85);
     let starting_rate = game.player.rate_cents;
 
@@ -1664,8 +1685,41 @@ fn extreme_rates_are_rejected_as_not_credible() {
         .apply_decision(Decision::AdjustRate { delta_cents: 40.0 })
         .unwrap_err();
 
-    assert!(error.contains("not a credible tariff"));
+    assert!(error.contains("beyond public tolerance"));
     assert!((game.player.rate_cents - starting_rate).abs() < 0.001);
+}
+
+#[test]
+fn public_rate_ceiling_allows_some_premium_but_rejects_runaway_rates() {
+    let mut game = Game::with_seed(85);
+    let tolerance = public_rate_tolerance(&game.market);
+    game.player.rate_cents = tolerance + MAX_PUBLIC_RATE_PREMIUM_CENTS - 0.2;
+
+    game.apply_decision(Decision::AdjustRate { delta_cents: 0.1 })
+        .unwrap();
+    let error = game
+        .apply_decision(Decision::AdjustRate { delta_cents: 0.3 })
+        .unwrap_err();
+
+    assert!(error.contains("beyond public tolerance"));
+    assert!(
+        game.player.rate_cents <= tolerance + MAX_PUBLIC_RATE_PREMIUM_CENTS + 0.001,
+        "rate should remain inside public ceiling"
+    );
+}
+
+#[test]
+fn public_rate_ceiling_still_allows_cuts_from_above_ceiling() {
+    let mut game = Game::with_seed(85);
+    let tolerance = public_rate_tolerance(&game.market);
+    game.player.rate_cents = tolerance + MAX_PUBLIC_RATE_PREMIUM_CENTS + 1.0;
+
+    game.apply_decision(Decision::AdjustRate { delta_cents: -0.4 })
+        .unwrap();
+
+    assert!(
+        (game.player.rate_cents - (tolerance + MAX_PUBLIC_RATE_PREMIUM_CENTS + 0.6)).abs() < 0.001
+    );
 }
 
 #[test]

@@ -23,6 +23,8 @@ const VARIABLE_COST_PRESSURE_SENSITIVITY: f64 = 2.35;
 const VARIABLE_COST_FLOOR_MULTIPLE: f64 = 0.72;
 const VARIABLE_COST_CEILING_MULTIPLE: f64 = 1.65;
 const MAX_CREDIBLE_RATE_CENTS: f64 = 25.0;
+pub const MAX_PUBLIC_RATE_PREMIUM_CENTS: f64 = 5.0;
+const RECEIVERSHIP_DEBT_TO_ASSETS: f64 = 1.05;
 const MAX_RELIABILITY: f64 = 0.98;
 const MIN_MAINTENANCE_RELIABILITY_GAIN: f64 = 0.0005;
 const DILIGENCE_DURATION_QUARTERS: u32 = 3;
@@ -739,6 +741,14 @@ impl Game {
                     return Err(
                         "Rates must stay above 0.0c/kWh; use a positive tariff.".to_string()
                     );
+                }
+                let public_ceiling =
+                    public_rate_tolerance(&self.market) + MAX_PUBLIC_RATE_PREMIUM_CENTS;
+                if delta_cents > 0.0 && requested_rate > public_ceiling {
+                    return Err(format!(
+                        "A {:.1}c rate is beyond public tolerance. Keep rates at or below {:.1}c/kWh or raise gradually.",
+                        requested_rate, public_ceiling
+                    ));
                 }
                 if requested_rate > MAX_CREDIBLE_RATE_CENTS {
                     return Err(format!(
@@ -1678,7 +1688,10 @@ impl Game {
             return;
         }
 
-        if self.quarter > 5 && self.player.debt_to_assets() > 1.22 && finances.profit < 0.0 {
+        if self.quarter > 5
+            && self.player.debt_to_assets() > RECEIVERSHIP_DEBT_TO_ASSETS
+            && finances.profit < 0.0
+        {
             self.outcome = Some(Outcome {
                 kind: OutcomeKind::Defeat,
                 headline: "Bankers Forced Receivership".to_string(),

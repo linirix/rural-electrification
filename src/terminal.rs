@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use crate::sim::ActiveShock;
 use crate::sim::{
     DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
-    MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH,
+    MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH, MAX_PUBLIC_RATE_PREMIUM_CENTS,
     MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, Outcome, OutcomeKind,
     QuarterReport, ShockKind, Utility, distribution_project_cost, distribution_project_duration,
     generation_project_cost, generation_project_duration,
@@ -665,13 +665,22 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
                     styled(BOLD_RED, "Quote:")
                 )];
             }
+            let tolerance = public_rate_tolerance(&game.market);
+            let public_ceiling = tolerance + MAX_PUBLIC_RATE_PREMIUM_CENTS;
+            if *delta_cents > 0.0 && target > public_ceiling {
+                return vec![format!(
+                    "{} {:.1}c would be rejected; public ceiling is {:.1}c/kWh.",
+                    styled(BOLD_RED, "Quote:"),
+                    target,
+                    public_ceiling
+                )];
+            }
             let mut lines = vec![format!(
                 "{} rate would move from {:.1}c to {:.1}c/kWh.",
                 muted("Quote:"),
                 game.player.rate_cents,
                 target
             )];
-            let tolerance = public_rate_tolerance(&game.market);
             if target > tolerance {
                 lines.push(format!(
                     "{} above the {:.1}c public tolerance; expect heavier churn, reputation pressure, startup risk, and rate-freeze risk.",
@@ -2920,6 +2929,54 @@ mod tests {
         }
 
         assert!((game.player.rate_cents - 7.2).abs() < 0.001);
+    }
+
+    #[test]
+    fn rate_preview_warns_when_above_public_ceiling() {
+        let mut game = Game::with_seed(100);
+        game.player.rate_cents =
+            public_rate_tolerance(&game.market) + MAX_PUBLIC_RATE_PREMIUM_CENTS - 0.2;
+
+        match handle_command(&mut game, "preview rate up 0.4") {
+            CommandResult::Preview(lines) => {
+                assert!(lines.iter().any(|line| line.contains("would be rejected")));
+                assert!(lines.iter().any(|line| line.contains("public ceiling")));
+            }
+            _ => panic!("preview rate should warn before exceeding the public ceiling"),
+        }
+    }
+
+    #[test]
+    fn rate_command_rejects_above_public_ceiling_without_mutating() {
+        let mut game = Game::with_seed(100);
+        game.player.rate_cents =
+            public_rate_tolerance(&game.market) + MAX_PUBLIC_RATE_PREMIUM_CENTS - 0.2;
+        let starting_rate = game.player.rate_cents;
+
+        match handle_command(&mut game, "rate up 0.4") {
+            CommandResult::Continue(message) => {
+                assert!(message.contains("Cannot do that"));
+                assert!(message.contains("public tolerance"));
+            }
+            _ => panic!("rate command should reject an above-ceiling target"),
+        }
+
+        assert!((game.player.rate_cents - starting_rate).abs() < 0.001);
+    }
+
+    #[test]
+    fn rate_command_allows_cuts_from_above_public_ceiling() {
+        let mut game = Game::with_seed(100);
+        game.player.rate_cents =
+            public_rate_tolerance(&game.market) + MAX_PUBLIC_RATE_PREMIUM_CENTS + 1.0;
+        let starting_rate = game.player.rate_cents;
+
+        match handle_command(&mut game, "rate down 0.4") {
+            CommandResult::Continue(message) => assert!(message.contains("Cut the rate")),
+            _ => panic!("rate command should allow cuts from above the public ceiling"),
+        }
+
+        assert!((game.player.rate_cents - (starting_rate - 0.4)).abs() < 0.001);
     }
 
     #[test]

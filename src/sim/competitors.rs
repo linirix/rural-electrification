@@ -1,6 +1,7 @@
 use super::economics::break_even_rate_cents;
 use super::{
-    Game, Rng, Utility, high_rate_excess, maintenance_reliability_gain, public_rate_tolerance,
+    Game, MacroEnvironment, Market, Rng, Utility, high_rate_excess, maintenance_reliability_gain,
+    public_rate_tolerance,
 };
 
 pub(super) const COMPETITOR_NAME_POOL: &[&str] = &[
@@ -332,16 +333,29 @@ impl Game {
     }
 
     pub(super) fn competitor_plans(&mut self, events: &mut Vec<String>) {
-        let player_rate = self.player.rate_cents;
-        let player_share = self.market_share();
-        let market = self.market.clone();
-        let demand_signal = self.macro_state.demand_index;
+        let context = self.competitor_plan_context();
         let competitor_count = self.competitors.len();
-        let rate_frozen = self.rate_frozen();
-        let macro_state = self.macro_state.clone();
-        let cost_multiplier = self.cost_shock_multiplier();
 
-        let total_now = self.total_connected_customers().max(1.0);
+        for index in 0..competitor_count {
+            let rolls = self.competitor_plan_rolls();
+
+            if let Some(event) = self.competitor_rate_decision(index, &context) {
+                events.push(event);
+            }
+            if let Some(event) = self.competitor_marketing_decision(index, &context, &rolls) {
+                events.push(event);
+            }
+            if let Some(event) = self.competitor_capacity_decision(index, &context, &rolls) {
+                events.push(event);
+            }
+            if let Some(event) = self.competitor_capital_decision(index, &context, &rolls) {
+                events.push(event);
+            }
+            self.competitor_maintenance_decision(index);
+        }
+    }
+
+    fn competitor_plan_context(&self) -> CompetitorPlanContext {
         let total_last = (self.player.last_quarter_customers
             + self
                 .competitors
@@ -350,104 +364,192 @@ impl Game {
                 .sum::<f64>())
         .max(1.0);
 
-        for index in 0..competitor_count {
-            let routine_marketing_chance = self.rng.chance(0.24);
-            let routine_marketing_jitter = self.rng.range(0.0, 2_000.0);
-            let expansion_cost_jitter = self.rng.range(0.0, 2_000.0);
-            let expansion_lines_jitter = self.rng.range(0.0, 45.0);
-            let expansion_gen_jitter = self.rng.range(0.0, 30.0);
-            let proactive_expansion_chance = self.rng.chance(0.22);
-            let strategic_debt_chance = self.rng.chance(0.32);
-
-            let competitor = &mut self.competitors[index];
-
-            let share_now = competitor.customers / total_now;
-            let share_last = competitor.last_quarter_customers / total_last;
-            let lost_share =
-                competitor.last_quarter_customers > 0.0 && share_now < share_last - 0.005;
-            let player_undercutting = player_rate + 0.4 < competitor.rate_cents;
-            let player_premium_pricing = player_rate > competitor.rate_cents + 0.5;
-            let near_capacity = competitor.capacity_headroom(&market) < competitor.customers * 0.06;
-
-            let defensive_floor =
-                rival_defensive_rate_floor(competitor, &market, &macro_state, cost_multiplier);
-            if lost_share && player_undercutting && competitor.rate_cents > defensive_floor + 0.05 {
-                let target = (player_rate + 0.35).max(defensive_floor);
-                let cut = 0.4_f64.min((competitor.rate_cents - target).max(0.0));
-                if cut > 0.0 {
-                    competitor.rate_cents -= cut;
-                    events.push(format!(
-                        "{} cut rates to {:.1}c/kWh to defend share.",
-                        competitor.name, competitor.rate_cents
-                    ));
-                }
-            } else if !rate_frozen
-                && player_premium_pricing
-                && near_capacity
-                && competitor.rate_cents < 13.4
-            {
-                let raise = 0.3_f64.min(13.5 - competitor.rate_cents);
-                if raise > 0.0 {
-                    competitor.rate_cents += raise;
-                    events.push(format!(
-                        "{} raised rates to {:.1}c/kWh, riding strong demand.",
-                        competitor.name, competitor.rate_cents
-                    ));
-                }
-            }
-
-            if lost_share && competitor.cash > 4_500.0 {
-                let spend = (competitor.cash * 0.18).clamp(2_500.0, 6_500.0);
-                competitor.cash -= spend;
-                competitor.marketing_momentum += spend / 12_000.0;
-                competitor.reputation = (competitor.reputation + spend / 5_500.0).clamp(0.0, 100.0);
-                events.push(format!(
-                    "{} launched a retention campaign to win back customers.",
-                    competitor.name
-                ));
-            } else if routine_marketing_chance && competitor.cash > 2_500.0 {
-                let spend = 1_600.0 + routine_marketing_jitter;
-                competitor.cash -= spend;
-                competitor.marketing_momentum += spend / 18_000.0;
-                competitor.reputation = (competitor.reputation + spend / 7_000.0).clamp(0.0, 100.0);
-            }
-
-            let headroom = competitor.capacity_headroom(&market);
-            let reactive_pressure = headroom < market.addressable_customers * 0.025;
-            let proactive_growth =
-                proactive_expansion_chance && (demand_signal > 0.10 || player_share > 0.40);
-            if (reactive_pressure || proactive_growth) && competitor.cash > 8_500.0 {
-                let line_cost = 6_000.0 + expansion_cost_jitter;
-                competitor.cash -= line_cost;
-                competitor.asset_base += line_cost;
-                competitor.distribution_capacity += 115.0 + expansion_lines_jitter;
-                competitor.generation_capacity_mwh += 42.0 + expansion_gen_jitter;
-                events.push(format!(
-                    "{} expanded generation and distribution capacity.",
-                    competitor.name
-                ));
-            }
-
-            let leverage = competitor.debt / competitor.asset_base.max(1.0);
-            let losing_to_player = player_share > 0.45 && lost_share;
-            if losing_to_player && leverage < 0.65 && strategic_debt_chance {
-                let raise = 12_000.0 + competitor.asset_base * 0.05;
-                competitor.cash += raise;
-                competitor.debt += raise;
-                events.push(format!(
-                    "{} raised debt to fund a counter-expansion.",
-                    competitor.name
-                ));
-            }
-
-            if competitor.reliability < 0.78 && competitor.cash > 3_500.0 {
-                let spend = 4_000.0_f64.min(competitor.cash * 0.30);
-                competitor.cash -= spend;
-                let gain = maintenance_reliability_gain(competitor, spend);
-                competitor.reliability = (competitor.reliability + gain).clamp(0.35, 0.98);
-            }
+        CompetitorPlanContext {
+            player_rate: self.player.rate_cents,
+            player_share: self.market_share(),
+            demand_signal: self.macro_state.demand_index,
+            rate_frozen: self.rate_frozen(),
+            total_now: self.total_connected_customers().max(1.0),
+            total_last,
+            market: self.market.clone(),
+            macro_state: self.macro_state.clone(),
+            cost_multiplier: self.cost_shock_multiplier(),
         }
     }
+
+    fn competitor_plan_rolls(&mut self) -> CompetitorPlanRolls {
+        CompetitorPlanRolls {
+            routine_marketing_chance: self.rng.chance(0.24),
+            routine_marketing_jitter: self.rng.range(0.0, 2_000.0),
+            expansion_cost_jitter: self.rng.range(0.0, 2_000.0),
+            expansion_lines_jitter: self.rng.range(0.0, 45.0),
+            expansion_gen_jitter: self.rng.range(0.0, 30.0),
+            proactive_expansion_chance: self.rng.chance(0.22),
+            strategic_debt_chance: self.rng.chance(0.32),
+        }
+    }
+
+    fn competitor_rate_decision(
+        &mut self,
+        index: usize,
+        context: &CompetitorPlanContext,
+    ) -> Option<String> {
+        let competitor = &mut self.competitors[index];
+        let lost_share = competitor_lost_share(competitor, context);
+        let player_undercutting = context.player_rate + 0.4 < competitor.rate_cents;
+        let player_premium_pricing = context.player_rate > competitor.rate_cents + 0.5;
+        let near_capacity =
+            competitor.capacity_headroom(&context.market) < competitor.customers * 0.06;
+
+        let defensive_floor = rival_defensive_rate_floor(
+            competitor,
+            &context.market,
+            &context.macro_state,
+            context.cost_multiplier,
+        );
+        if lost_share && player_undercutting && competitor.rate_cents > defensive_floor + 0.05 {
+            let target = (context.player_rate + 0.35).max(defensive_floor);
+            let cut = 0.4_f64.min((competitor.rate_cents - target).max(0.0));
+            if cut > 0.0 {
+                competitor.rate_cents -= cut;
+                return Some(format!(
+                    "{} cut rates to {:.1}c/kWh to defend share.",
+                    competitor.name, competitor.rate_cents
+                ));
+            }
+        } else if !context.rate_frozen
+            && player_premium_pricing
+            && near_capacity
+            && competitor.rate_cents < 13.4
+        {
+            let raise = 0.3_f64.min(13.5 - competitor.rate_cents);
+            if raise > 0.0 {
+                competitor.rate_cents += raise;
+                return Some(format!(
+                    "{} raised rates to {:.1}c/kWh, riding strong demand.",
+                    competitor.name, competitor.rate_cents
+                ));
+            }
+        }
+
+        None
+    }
+
+    fn competitor_marketing_decision(
+        &mut self,
+        index: usize,
+        context: &CompetitorPlanContext,
+        rolls: &CompetitorPlanRolls,
+    ) -> Option<String> {
+        let competitor = &mut self.competitors[index];
+        let lost_share = competitor_lost_share(competitor, context);
+
+        if lost_share && competitor.cash > 4_500.0 {
+            let spend = (competitor.cash * 0.18).clamp(2_500.0, 6_500.0);
+            competitor.cash -= spend;
+            competitor.marketing_momentum += spend / 12_000.0;
+            competitor.reputation = (competitor.reputation + spend / 5_500.0).clamp(0.0, 100.0);
+            Some(format!(
+                "{} launched a retention campaign to win back customers.",
+                competitor.name
+            ))
+        } else if rolls.routine_marketing_chance && competitor.cash > 2_500.0 {
+            let spend = 1_600.0 + rolls.routine_marketing_jitter;
+            competitor.cash -= spend;
+            competitor.marketing_momentum += spend / 18_000.0;
+            competitor.reputation = (competitor.reputation + spend / 7_000.0).clamp(0.0, 100.0);
+            None
+        } else {
+            None
+        }
+    }
+
+    fn competitor_capacity_decision(
+        &mut self,
+        index: usize,
+        context: &CompetitorPlanContext,
+        rolls: &CompetitorPlanRolls,
+    ) -> Option<String> {
+        let competitor = &mut self.competitors[index];
+        let headroom = competitor.capacity_headroom(&context.market);
+        let reactive_pressure = headroom < context.market.addressable_customers * 0.025;
+        let proactive_growth = rolls.proactive_expansion_chance
+            && (context.demand_signal > 0.10 || context.player_share > 0.40);
+        if (reactive_pressure || proactive_growth) && competitor.cash > 8_500.0 {
+            let line_cost = 6_000.0 + rolls.expansion_cost_jitter;
+            competitor.cash -= line_cost;
+            competitor.asset_base += line_cost;
+            competitor.distribution_capacity += 115.0 + rolls.expansion_lines_jitter;
+            competitor.generation_capacity_mwh += 42.0 + rolls.expansion_gen_jitter;
+            Some(format!(
+                "{} expanded generation and distribution capacity.",
+                competitor.name
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn competitor_capital_decision(
+        &mut self,
+        index: usize,
+        context: &CompetitorPlanContext,
+        rolls: &CompetitorPlanRolls,
+    ) -> Option<String> {
+        let competitor = &mut self.competitors[index];
+        let lost_share = competitor_lost_share(competitor, context);
+        let leverage = competitor.debt / competitor.asset_base.max(1.0);
+        let losing_to_player = context.player_share > 0.45 && lost_share;
+        if losing_to_player && leverage < 0.65 && rolls.strategic_debt_chance {
+            let raise = 12_000.0 + competitor.asset_base * 0.05;
+            competitor.cash += raise;
+            competitor.debt += raise;
+            Some(format!(
+                "{} raised debt to fund a counter-expansion.",
+                competitor.name
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn competitor_maintenance_decision(&mut self, index: usize) {
+        let competitor = &mut self.competitors[index];
+        if competitor.reliability < 0.78 && competitor.cash > 3_500.0 {
+            let spend = 4_000.0_f64.min(competitor.cash * 0.30);
+            competitor.cash -= spend;
+            let gain = maintenance_reliability_gain(competitor, spend);
+            competitor.reliability = (competitor.reliability + gain).clamp(0.35, 0.98);
+        }
+    }
+}
+
+struct CompetitorPlanContext {
+    player_rate: f64,
+    player_share: f64,
+    demand_signal: f64,
+    rate_frozen: bool,
+    total_now: f64,
+    total_last: f64,
+    market: Market,
+    macro_state: MacroEnvironment,
+    cost_multiplier: f64,
+}
+
+struct CompetitorPlanRolls {
+    routine_marketing_chance: bool,
+    routine_marketing_jitter: f64,
+    expansion_cost_jitter: f64,
+    expansion_lines_jitter: f64,
+    expansion_gen_jitter: f64,
+    proactive_expansion_chance: bool,
+    strategic_debt_chance: bool,
+}
+
+fn competitor_lost_share(competitor: &Utility, context: &CompetitorPlanContext) -> bool {
+    let share_now = competitor.customers / context.total_now;
+    let share_last = competitor.last_quarter_customers / context.total_last;
+    competitor.last_quarter_customers > 0.0 && share_now < share_last - 0.005
 }
 
 fn rival_defensive_rate_floor(
