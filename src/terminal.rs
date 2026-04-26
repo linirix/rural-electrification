@@ -5,7 +5,8 @@ use crate::sim::{
     MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH,
     MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, Outcome, OutcomeKind,
     QuarterReport, ShockKind, distribution_project_cost, distribution_project_duration,
-    generation_project_cost, generation_project_duration, money,
+    generation_project_cost, generation_project_duration,
+    generation_reliability_after_new_capacity, money, public_rate_tolerance,
 };
 
 const SCREEN_WIDTH: usize = 88;
@@ -540,13 +541,20 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
         Decision::BuildGeneration { capacity_mwh } => {
             let size = capacity_mwh.clamp(MIN_GENERATION_PROJECT_MWH, MAX_GENERATION_PROJECT_MWH);
             let cost = generation_project_cost(size);
+            let reliability_after = generation_reliability_after_new_capacity(
+                game.player.reliability,
+                game.player.generation_capacity_mwh,
+                size,
+            );
             vec![format!(
-                "{} generation: {} for {:.0} MWh/q, {}q, {} per MWh/q.",
+                "{} generation: {} for {:.0} MWh/q, {}q, {} per MWh/q; reliability {:.0}% -> {:.0}% when online.",
                 muted("Quote:"),
                 styled(BOLD_YELLOW, money(cost)),
                 size,
                 generation_project_duration(size),
-                money(cost / size)
+                money(cost / size),
+                game.player.reliability * 100.0,
+                reliability_after * 100.0
             )]
         }
         Decision::BuildDistribution { customer_capacity } => {
@@ -620,13 +628,22 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
             }
         }
         Decision::AdjustRate { delta_cents } => {
-            let target = (game.player.rate_cents + delta_cents).clamp(7.0, 15.0);
-            vec![format!(
+            let target = (game.player.rate_cents + delta_cents).max(7.0);
+            let mut lines = vec![format!(
                 "{} rate would move from {:.1}c to {:.1}c/kWh.",
                 muted("Quote:"),
                 game.player.rate_cents,
                 target
-            )]
+            )];
+            let tolerance = public_rate_tolerance(&game.market);
+            if target > tolerance {
+                lines.push(format!(
+                    "{} above the {:.1}c public tolerance; expect heavier churn, reputation pressure, startup risk, and rate-freeze risk.",
+                    styled(BOLD_YELLOW, "Pressure:"),
+                    tolerance
+                ));
+            }
+            lines
         }
         Decision::Maintenance { spend } => vec![format!(
             "{} {} maintenance; immediate reliability gain with scale diminishing returns.",
@@ -1998,7 +2015,20 @@ fn signal_lines(game: &Game) -> Vec<String> {
 
     let average_rate = market_average_rate(game);
     let rate_gap = game.player.rate_cents - average_rate;
-    if rate_gap >= 0.4 {
+    let tolerance = public_rate_tolerance(&game.market);
+    if game.player.rate_cents > tolerance {
+        lines.push(signal_line(
+            "Rate",
+            RED,
+            format!(
+                "{} above public tolerance; intervention risk",
+                styled(
+                    BOLD_RED,
+                    format!("{:.1}c", game.player.rate_cents - tolerance)
+                )
+            ),
+        ));
+    } else if rate_gap >= 0.4 {
         lines.push(signal_line(
             "Rate",
             YELLOW,

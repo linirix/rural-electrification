@@ -12,6 +12,11 @@ const BASE_CREDIT_SPREAD: f64 = 0.018;
 const MAINTENANCE_REFERENCE_ASSET_BASE: f64 = 78_000.0;
 const ACQUISITION_CASH_ABSORPTION: f64 = 0.80;
 const ACQUISITION_DEBT_ASSUMPTION: f64 = 0.75;
+const NEW_GENERATION_EQUIPMENT_RELIABILITY: f64 = 0.965;
+const NEW_GENERATION_RELIABILITY_WEIGHT: f64 = 0.35;
+const MAX_GENERATION_RELIABILITY_LIFT: f64 = 0.085;
+const MIN_STOCK_PRICE: f64 = 0.25;
+const FRESH_EQUITY_CASH_MARKET_RECOGNITION: f64 = 0.35;
 
 mod attribution;
 mod competitors;
@@ -21,15 +26,15 @@ use attribution::{AttributionContext, quarter_attributions};
 use competitors::draw_competitor_name;
 #[cfg(test)]
 use competitors::{COMPETITOR_NAME_POOL, StartupEntryReason};
-#[cfg(test)]
-use economics::churn_rate_for;
 use economics::{
-    churn_for, maintenance_reliability_gain, maintenance_reputation_gain, positive_amount,
-    settle_utility, weighted_average, weighted_rate,
+    churn_for_market, high_rate_excess, maintenance_reliability_gain, maintenance_reputation_gain,
+    positive_amount, settle_utility, weighted_average, weighted_rate,
 };
+#[cfg(test)]
+use economics::{churn_rate_for, churn_rate_for_market};
 pub use economics::{
     distribution_project_cost, distribution_project_duration, generation_project_cost,
-    generation_project_duration, money,
+    generation_project_duration, money, public_rate_tolerance,
 };
 
 #[derive(Clone, Debug)]
@@ -45,6 +50,7 @@ pub struct Game {
     pub active_shocks: Vec<ActiveShock>,
     pub startup_index: u32,
     pub review_completed: bool,
+    pub equity_market_fatigue: f64,
     pub last_report: Option<QuarterReport>,
     pub outcome: Option<Outcome>,
     rng: Rng,
@@ -331,6 +337,7 @@ impl Game {
             active_shocks: Vec::new(),
             startup_index: 0,
             review_completed: false,
+            equity_market_fatigue: 0.0,
             last_report: None,
             outcome: None,
             rng,
@@ -366,7 +373,7 @@ impl Game {
                     quarters_remaining: quarters,
                 });
                 Ok(format!(
-                    "Started a generation expansion for {}. It will add {:.0} MWh/quarter in {} quarter(s).",
+                    "Started a generation expansion for {}. It will add {:.0} MWh/quarter in {} quarter(s) and refresh fleet reliability when online.",
                     money(cost),
                     capacity_mwh,
                     quarters
@@ -410,16 +417,29 @@ impl Game {
                 let amount = positive_amount(amount, "stock issuance")?;
                 let old_market_cap = self.player.market_cap().max(1.0);
                 let old_shares = self.player.shares.max(1.0);
-                let pressure = amount / old_market_cap;
-                let pressure_squared = pressure * pressure;
+                let financing_base = self.equity_issuance_base();
+                let pressure = amount / financing_base;
+                let effective_pressure = pressure + self.equity_market_fatigue;
+                let effective_pressure_squared = effective_pressure * effective_pressure;
                 let finance_pressure = self.macro_state.financing_pressure();
-                let issue_discount =
-                    (0.03 + pressure * 0.05 + pressure_squared * 0.08 + finance_pressure * 0.055)
-                        .clamp(0.03, 0.65);
-                let issue_price = (self.player.stock_price * (1.0 - issue_discount)).max(1.0);
+                let issue_discount = (0.03
+                    + effective_pressure * 0.05
+                    + effective_pressure_squared * 0.08
+                    + finance_pressure * 0.055)
+                    .clamp(0.03, 0.65);
+                let raw_issue_price = self.player.stock_price * (1.0 - issue_discount);
+                if raw_issue_price <= MIN_STOCK_PRICE * 1.05 && amount > financing_base * 0.15 {
+                    return Err(
+                        "The market cannot absorb that stock sale at a viable price; try a smaller issue or rebuild valuation."
+                            .to_string(),
+                    );
+                }
+                let issue_price = raw_issue_price.max(MIN_STOCK_PRICE);
                 let new_shares = amount / issue_price;
-                let fee_rate =
-                    0.025 + pressure * 0.012 + pressure_squared * 0.020 + finance_pressure * 0.012;
+                let fee_rate = 0.025
+                    + effective_pressure * 0.012
+                    + effective_pressure_squared * 0.020
+                    + finance_pressure * 0.012;
                 if fee_rate >= 0.75 {
                     return Err(format!(
                         "The market cannot absorb that stock sale. Expected fees would consume {:.0}% of gross proceeds; try a smaller issue.",
@@ -428,14 +448,21 @@ impl Game {
                 }
                 let underwriting_cost = amount * fee_rate;
                 let net_proceeds = amount - underwriting_cost;
-                let post_money_price = (old_market_cap + net_proceeds) / (old_shares + new_shares);
-                let signal_drag = (pressure * 0.020 + pressure_squared * 0.040).clamp(0.0, 0.30);
+                let post_money_price = (old_market_cap
+                    + net_proceeds * FRESH_EQUITY_CASH_MARKET_RECOGNITION)
+                    / (old_shares + new_shares);
+                let signal_drag = (effective_pressure * 0.020 + effective_pressure_squared * 0.040)
+                    .clamp(0.0, 0.30);
                 self.player.cash += net_proceeds;
                 self.player.shares += new_shares;
-                self.player.stock_price = (post_money_price * (1.0 - signal_drag)).max(1.0);
-                self.player.reputation =
-                    (self.player.reputation - pressure * 1.5 - pressure_squared * 1.5)
-                        .clamp(0.0, 100.0);
+                self.player.stock_price =
+                    (post_money_price * (1.0 - signal_drag)).max(MIN_STOCK_PRICE);
+                self.player.reputation = (self.player.reputation
+                    - effective_pressure * 1.5
+                    - effective_pressure_squared * 1.5)
+                    .clamp(0.0, 100.0);
+                self.equity_market_fatigue =
+                    (self.equity_market_fatigue + pressure * 0.80).clamp(0.0, 6.0);
                 Ok(format!(
                     "Issued {:.0} shares at ${:.2}. Gross {}, net cash {} after fees; dilution reset stock to ${:.2}.",
                     new_shares,
@@ -456,7 +483,7 @@ impl Game {
                 let pressure = amount / old_market_cap;
                 let repurchase_premium = 0.02 + pressure.min(3.0) * 0.06;
                 let repurchase_price =
-                    (self.player.stock_price * (1.0 + repurchase_premium)).max(1.0);
+                    (self.player.stock_price * (1.0 + repurchase_premium)).max(MIN_STOCK_PRICE);
                 let max_shares = (self.player.shares - 500.0).max(0.0);
                 let shares_bought = (amount / repurchase_price).min(max_shares);
                 if shares_bought < 1.0 {
@@ -467,12 +494,14 @@ impl Game {
                 let actual_spend = shares_bought * repurchase_price;
                 self.require_cash(actual_spend)?;
                 let remaining_shares = self.player.shares - shares_bought;
-                let remaining_equity_value = (old_market_cap - actual_spend).max(remaining_shares);
+                let remaining_equity_value =
+                    (old_market_cap - actual_spend).max(remaining_shares * MIN_STOCK_PRICE);
                 let theoretical_price = remaining_equity_value / remaining_shares.max(1.0);
                 let confidence_lift = (pressure * 0.05).clamp(0.0, 0.10);
                 self.player.cash -= actual_spend;
                 self.player.shares = remaining_shares;
-                self.player.stock_price = (theoretical_price * (1.0 + confidence_lift)).max(1.0);
+                self.player.stock_price =
+                    (theoretical_price * (1.0 + confidence_lift)).max(MIN_STOCK_PRICE);
                 Ok(format!(
                     "Bought back {:.0} shares at ${:.2}, spending {}. Shares outstanding now {:.0}; stock is ${:.2}.",
                     shares_bought,
@@ -594,7 +623,7 @@ impl Game {
                     );
                 }
                 let old = self.player.rate_cents;
-                self.player.rate_cents = (self.player.rate_cents + delta_cents).clamp(7.0, 15.0);
+                self.player.rate_cents = (self.player.rate_cents + delta_cents).max(7.0);
                 let actual_delta = self.player.rate_cents - old;
                 if actual_delta > 0.0 {
                     self.player.reputation =
@@ -678,6 +707,7 @@ impl Game {
         self.competitor_plans(&mut events);
 
         self.player.marketing_momentum *= 0.55;
+        self.equity_market_fatigue *= 0.55;
         for competitor in &mut self.competitors {
             competitor.marketing_momentum *= 0.62;
         }
@@ -813,6 +843,16 @@ impl Game {
             .max(0.0)
     }
 
+    fn equity_issuance_base(&self) -> f64 {
+        let market_cap = self.player.market_cap().max(1.0);
+        let cash_adjusted_cap = market_cap - self.player.cash.max(0.0) * 0.60;
+        let asset_support = self.player.asset_base.max(1.0) * 0.65;
+        cash_adjusted_cap
+            .max(asset_support)
+            .max(self.player.shares * MIN_STOCK_PRICE)
+            .max(1.0)
+    }
+
     pub fn player_annual_interest_rate(&self) -> f64 {
         self.macro_state.annual_interest_rate_for(&self.player)
     }
@@ -882,6 +922,16 @@ impl Game {
         self.shock_active(|kind| matches!(kind, ShockKind::RateFreeze))
     }
 
+    pub fn rate_freeze_probability(&self) -> f64 {
+        let player_excess = high_rate_excess(&self.player, &self.market);
+        let market_excess = (self.average_rate() - public_rate_tolerance(&self.market)).max(0.0);
+        (0.035
+            + (1.0 - self.market.civic_patience) * 0.025
+            + player_excess * 0.035
+            + market_excess * 0.025)
+            .clamp(0.02, 0.38)
+    }
+
     pub fn cost_shock_multiplier(&self) -> f64 {
         if self.shock_active(|kind| matches!(kind, ShockKind::InputCostShock)) {
             1.18
@@ -920,14 +970,22 @@ impl Game {
         }
         self.active_shocks = remaining;
 
-        if self.rng.chance(0.045)
+        let rate_freeze_probability = self.rate_freeze_probability();
+        if self.rng.chance(rate_freeze_probability)
             && !self.shock_active(|kind| matches!(kind, ShockKind::RateFreeze))
         {
             self.active_shocks.push(ActiveShock {
                 kind: ShockKind::RateFreeze,
                 quarters_remaining: 2 + (self.rng.next_u64() % 2) as u32,
             });
-            events.push("A market-wide rate freeze took effect.".to_string());
+            if high_rate_excess(&self.player, &self.market) > 0.5 {
+                events.push(
+                    "A market-wide rate freeze took effect after pressure over high rates."
+                        .to_string(),
+                );
+            } else {
+                events.push("A market-wide rate freeze took effect.".to_string());
+            }
         }
 
         if self.rng.chance(0.04)
@@ -1047,12 +1105,21 @@ impl Game {
             if project.quarters_remaining == 0 {
                 match project.kind {
                     ProjectKind::Generation { capacity_mwh } => {
+                        let old_reliability = self.player.reliability;
+                        let old_generation_capacity = self.player.generation_capacity_mwh;
+                        let new_reliability = generation_reliability_after_new_capacity(
+                            old_reliability,
+                            old_generation_capacity,
+                            capacity_mwh,
+                        );
                         self.player.generation_capacity_mwh += capacity_mwh;
-                        self.player.reliability =
-                            (self.player.reliability + 0.025).clamp(0.35, 0.98);
+                        self.player.reliability = new_reliability;
+                        let reliability_lift = (new_reliability - old_reliability).max(0.0);
                         events.push(format!(
-                            "Your {} came online, adding {:.0} MWh/quarter of generating capacity.",
-                            project.name, capacity_mwh
+                            "Your {} came online, adding {:.0} MWh/quarter of generating capacity and lifting reliability by {:.1} points.",
+                            project.name,
+                            capacity_mwh,
+                            reliability_lift * 100.0
                         ));
                     }
                     ProjectKind::Distribution { customer_capacity } => {
@@ -1102,7 +1169,7 @@ impl Game {
             .map(|index| self.alternative_rate_for_competitor(index))
             .collect::<Vec<_>>();
 
-        let player_loss = churn_for(&self.player, player_alternative_rate);
+        let player_loss = churn_for_market(&self.player, player_alternative_rate, &self.market);
         self.player.customers -= player_loss;
         let mut player_switch_gain = self.allocate_customers_from(
             player_loss,
@@ -1114,7 +1181,9 @@ impl Game {
             .competitors
             .iter()
             .zip(competitor_alternative_rates)
-            .map(|(competitor, alternative_rate)| churn_for(competitor, alternative_rate))
+            .map(|(competitor, alternative_rate)| {
+                churn_for_market(competitor, alternative_rate, &self.market)
+            })
             .collect::<Vec<_>>();
 
         for (index, loss) in competitor_losses.into_iter().enumerate() {
@@ -1259,8 +1328,8 @@ impl Game {
 
     fn update_stock_price(&mut self, finances: &FirmFinances) {
         let shares = self.player.shares.max(1.0);
-        let book_equity =
-            (self.player.asset_base + self.player.cash - self.player.debt).max(shares);
+        let book_equity = (self.player.asset_base + self.player.cash - self.player.debt)
+            .max(shares * MIN_STOCK_PRICE);
         let book_value_per_share = book_equity / shares;
 
         let annualized_profit = finances.profit * 4.0;
@@ -1268,14 +1337,15 @@ impl Game {
         let earnings_value_per_share = annualized_profit.max(0.0) * multiple / shares;
 
         let fundamental_price =
-            (book_value_per_share * 0.5 + earnings_value_per_share * 0.5).max(1.0);
+            (book_value_per_share * 0.5 + earnings_value_per_share * 0.5).max(MIN_STOCK_PRICE);
         let gap = fundamental_price - self.player.stock_price;
         let reverted = self.player.stock_price + gap * 0.22;
 
         let macro_signal = self.macro_state.valuation_signal();
         let shock_signal = self.active_shock_valuation_signal();
         let noise = self.rng.range(-0.025, 0.025);
-        self.player.stock_price = (reverted * (1.0 + macro_signal + shock_signal + noise)).max(1.0);
+        self.player.stock_price =
+            (reverted * (1.0 + macro_signal + shock_signal + noise)).max(MIN_STOCK_PRICE);
     }
 
     fn earnings_multiple(&self) -> f64 {
@@ -1362,6 +1432,29 @@ impl Default for Game {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub fn generation_reliability_after_new_capacity(
+    current_reliability: f64,
+    existing_generation_capacity_mwh: f64,
+    added_capacity_mwh: f64,
+) -> f64 {
+    let effective_new_equipment_weight =
+        added_capacity_mwh.max(0.0) * NEW_GENERATION_RELIABILITY_WEIGHT;
+    if effective_new_equipment_weight <= 0.0 {
+        return current_reliability.clamp(0.35, 0.98);
+    }
+
+    let blended = weighted_average(
+        current_reliability,
+        existing_generation_capacity_mwh.max(20.0),
+        NEW_GENERATION_EQUIPMENT_RELIABILITY,
+        effective_new_equipment_weight,
+    );
+    blended
+        .max(current_reliability)
+        .min(current_reliability + MAX_GENERATION_RELIABILITY_LIFT)
+        .clamp(0.35, 0.98)
 }
 
 impl InitialVariance {
@@ -1600,7 +1693,8 @@ fn starting_utility(
         cash: varied_pct(rng, cash, 0.18, initial_variance).max(1_500.0),
         debt: varied_debt,
         shares,
-        stock_price: varied_pct(rng, stock_price, 0.12, initial_variance).max(stock_price.min(1.0)),
+        stock_price: varied_pct(rng, stock_price, 0.12, initial_variance)
+            .max(stock_price.min(MIN_STOCK_PRICE)),
         customers: varied_customers,
         generation_capacity_mwh: varied_pct(rng, generation_capacity_mwh, 0.10, initial_variance)
             .max(20.0),

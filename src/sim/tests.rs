@@ -98,6 +98,42 @@ fn stock_issuance_has_no_fixed_proceeds_cap() {
 }
 
 #[test]
+fn large_stock_issue_does_not_add_full_cash_to_market_cap() {
+    let mut game = Game::with_seed(14);
+    let starting_cash = game.player.cash;
+    let starting_market_cap = game.player.market_cap();
+
+    game.apply_decision(Decision::IssueStock { amount: 120_000.0 })
+        .unwrap();
+
+    let cash_gain = game.player.cash - starting_cash;
+    let market_cap_gain = game.player.market_cap() - starting_market_cap;
+
+    assert!(cash_gain > 90_000.0);
+    assert!(
+        market_cap_gain < cash_gain * 0.65,
+        "market cap gain {market_cap_gain} should stay well below cash gain {cash_gain}"
+    );
+}
+
+#[test]
+fn repeated_large_stock_issues_hit_market_fatigue() {
+    let mut game = Game::with_seed(14);
+
+    game.apply_decision(Decision::IssueStock { amount: 120_000.0 })
+        .unwrap();
+    game.apply_decision(Decision::IssueStock { amount: 120_000.0 })
+        .unwrap();
+
+    let error = game
+        .apply_decision(Decision::IssueStock { amount: 120_000.0 })
+        .unwrap_err();
+
+    assert!(game.equity_market_fatigue > 0.0);
+    assert!(error.contains("cannot absorb"));
+}
+
+#[test]
 fn excessive_dilution_yields_less_cash_per_dollar() {
     let mut small = Game::with_seed(101);
     let mut large = small.clone();
@@ -151,7 +187,7 @@ fn stock_buyback_reduces_cash_and_share_count() {
     assert!(game.player.cash < starting_cash);
     assert!(game.player.shares < starting_shares);
     assert_eq!(game.player.debt, starting_debt);
-    assert!(game.player.stock_price >= 1.0);
+    assert!(game.player.stock_price >= MIN_STOCK_PRICE);
 }
 
 #[test]
@@ -479,6 +515,52 @@ fn custom_generation_project_uses_requested_size_and_cost() {
         }
         _ => panic!("expected generation project"),
     }
+}
+
+#[test]
+fn generation_completion_lifts_reliability_from_new_equipment() {
+    let mut game = Game::with_seed(23);
+    game.player.reliability = 0.74;
+    game.player.generation_capacity_mwh = 120.0;
+    let expected_reliability =
+        generation_reliability_after_new_capacity(game.player.reliability, 120.0, 220.0);
+    let mut events = Vec::new();
+
+    game.pending_projects.push(Project {
+        name: "test plant".to_string(),
+        kind: ProjectKind::Generation {
+            capacity_mwh: 220.0,
+        },
+        quarters_remaining: 1,
+    });
+
+    game.complete_projects(&mut events);
+
+    assert!((game.player.generation_capacity_mwh - 340.0).abs() < 0.01);
+    assert!((game.player.reliability - expected_reliability).abs() < 0.0001);
+    assert!(game.player.reliability > 0.74);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("lifting reliability"))
+    );
+}
+
+#[test]
+fn larger_generation_projects_provide_larger_initial_reliability_lifts() {
+    let current_reliability = 0.70;
+    let existing_generation = 150.0;
+
+    let small =
+        generation_reliability_after_new_capacity(current_reliability, existing_generation, 100.0);
+    let large =
+        generation_reliability_after_new_capacity(current_reliability, existing_generation, 400.0);
+    let already_excellent =
+        generation_reliability_after_new_capacity(0.98, existing_generation, 400.0);
+
+    assert!(small > current_reliability);
+    assert!(large > small);
+    assert!((already_excellent - 0.98).abs() < 0.0001);
 }
 
 #[test]
@@ -882,6 +964,92 @@ fn rate_freeze_allows_rate_cuts() {
 
     game.apply_decision(Decision::AdjustRate { delta_cents: -0.5 })
         .unwrap();
+}
+
+#[test]
+fn rates_can_exceed_old_fifteen_cent_cap() {
+    let mut game = Game::with_seed(85);
+    game.player.rate_cents = 14.6;
+
+    game.apply_decision(Decision::AdjustRate { delta_cents: 1.2 })
+        .unwrap();
+
+    assert!((game.player.rate_cents - 15.8).abs() < 0.001);
+}
+
+#[test]
+fn rates_above_public_tolerance_churn_harder() {
+    let mut game = Game::with_seed(86);
+    game.player.rate_cents = public_rate_tolerance(&game.market) + 3.5;
+    game.player.reliability = 0.90;
+    game.player.reputation = 70.0;
+    let market_rate = game.market.standard_rate_cents;
+
+    let old_style_churn = churn_rate_for(&game.player, market_rate);
+    let tolerance_churn = churn_rate_for_market(&game.player, market_rate, &game.market);
+
+    assert!(
+        tolerance_churn > old_style_churn + 0.08,
+        "high public-rate pressure should materially lift churn: old {old_style_churn}, new {tolerance_churn}"
+    );
+}
+
+#[test]
+fn rates_above_public_tolerance_damage_reputation() {
+    let mut game = Game::with_seed(87);
+    game.player.cash = 80_000.0;
+    game.player.rate_cents = public_rate_tolerance(&game.market) + 2.0;
+    game.player.reliability = 0.88;
+    game.player.reputation = 70.0;
+    let starting_reputation = game.player.reputation;
+    let mut events = Vec::new();
+
+    settle_utility(
+        &mut game.player,
+        &game.market,
+        &game.macro_state,
+        1.0,
+        true,
+        &mut events,
+    );
+
+    assert!(game.player.reputation < starting_reputation - 0.5);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("above public tolerance"))
+    );
+}
+
+#[test]
+fn high_rates_raise_rate_freeze_probability() {
+    let normal = Game::with_seed(88);
+    let mut high = normal.clone();
+    high.player.rate_cents = public_rate_tolerance(&high.market) + 4.0;
+
+    assert!(high.rate_freeze_probability() > normal.rate_freeze_probability() + 0.10);
+}
+
+#[test]
+fn high_player_rates_create_startup_pressure() {
+    let mut game = Game::with_seed(89);
+    game.player.customers = 1_100.0;
+    game.player.distribution_capacity = 2_000.0;
+    game.player.generation_capacity_mwh = 700.0;
+    game.player.rate_cents = public_rate_tolerance(&game.market) + 2.0;
+    game.market.addressable_customers = 8_000.0;
+    game.market.electrification = 0.45;
+    for competitor in &mut game.competitors {
+        competitor.customers = 150.0;
+        competitor.rate_cents = game.market.standard_rate_cents;
+    }
+
+    let Some((reason, probability)) = game.startup_entry_signal() else {
+        panic!("expected high player rates to create startup pressure");
+    };
+
+    assert_eq!(reason, StartupEntryReason::HighRates);
+    assert!(probability >= 0.10);
 }
 
 #[test]

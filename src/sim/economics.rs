@@ -78,6 +78,21 @@ pub(super) fn settle_utility(
         utility.reliability = (utility.reliability + 0.004).clamp(0.35, 0.98);
     }
 
+    let rate_excess = high_rate_excess(utility, market);
+    if rate_excess > 0.0 {
+        let impatience = 1.0 - market.civic_patience;
+        let reputation_damage = (rate_excess * (0.45 + impatience * 0.35)
+            + rate_excess * rate_excess * 0.08)
+            .clamp(0.0, 8.0);
+        utility.reputation = (utility.reputation - reputation_damage).clamp(0.0, 100.0);
+        if is_player {
+            events.push(format!(
+                "Rates above public tolerance damaged reputation by {:.1} points.",
+                reputation_damage
+            ));
+        }
+    }
+
     let service_reputation_gain = service_reputation_gain(utility, market, unmet_demand_ratio);
     if service_reputation_gain > 0.0 {
         utility.reputation = (utility.reputation + service_reputation_gain).clamp(0.0, 100.0);
@@ -118,20 +133,41 @@ fn service_reputation_gain(utility: &Utility, market: &Market, unmet_demand_rati
     (0.20 + reliability_quality * 0.35 + utilization_cushion * 0.15).min(0.70) * reputation_headroom
 }
 
-pub(super) fn churn_for(utility: &Utility, average_rate: f64) -> f64 {
-    utility.customers * churn_rate_for(utility, average_rate)
+pub(super) fn churn_for_market(utility: &Utility, average_rate: f64, market: &Market) -> f64 {
+    utility.customers * churn_rate_for_market(utility, average_rate, market)
 }
 
+#[cfg(test)]
 pub(super) fn churn_rate_for(utility: &Utility, average_rate: f64) -> f64 {
+    base_churn_rate_for(utility, average_rate, 0.0)
+}
+
+pub(super) fn churn_rate_for_market(utility: &Utility, average_rate: f64, market: &Market) -> f64 {
+    base_churn_rate_for(utility, average_rate, high_rate_excess(utility, market))
+}
+
+fn base_churn_rate_for(utility: &Utility, average_rate: f64, rate_excess: f64) -> f64 {
     let rate_gap = utility.rate_cents - average_rate;
     let rate_pressure = rate_gap.max(0.0) * 0.006;
     let rate_retention = (-rate_gap).max(0.0) * 0.0025;
+    let public_rate_pressure = rate_excess * 0.012 + rate_excess * rate_excess * 0.004;
     let outage_pressure = (0.78 - utility.reliability).max(0.0) * 0.055;
     let reliability_retention = (utility.reliability - 0.84).max(0.0) * 0.020;
     let reputation_pressure = (48.0 - utility.reputation).max(0.0) * 0.0008;
     let reputation_retention = (utility.reputation - 62.0).max(0.0) * 0.00012;
-    let churn_rate = 0.010 + rate_pressure + outage_pressure + reputation_pressure;
-    (churn_rate - rate_retention - reliability_retention - reputation_retention).clamp(0.004, 0.075)
+    let churn_rate =
+        0.010 + rate_pressure + public_rate_pressure + outage_pressure + reputation_pressure;
+    let churn_cap = (0.075 + rate_excess * 0.035).clamp(0.075, 0.50);
+    (churn_rate - rate_retention - reliability_retention - reputation_retention)
+        .clamp(0.004, churn_cap)
+}
+
+pub fn public_rate_tolerance(market: &Market) -> f64 {
+    market.standard_rate_cents + 2.2 + market.civic_patience * 1.2
+}
+
+pub(super) fn high_rate_excess(utility: &Utility, market: &Market) -> f64 {
+    (utility.rate_cents - public_rate_tolerance(market)).max(0.0)
 }
 
 pub(super) fn weighted_rate(rates: impl Iterator<Item = (f64, f64)>, fallback: f64) -> f64 {

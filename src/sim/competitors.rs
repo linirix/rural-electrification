@@ -1,4 +1,6 @@
-use super::{Game, Rng, Utility, maintenance_reliability_gain};
+use super::{
+    Game, Rng, Utility, high_rate_excess, maintenance_reliability_gain, public_rate_tolerance,
+};
 
 pub(super) const COMPETITOR_NAME_POOL: &[&str] = &[
     "Arc Light Power",
@@ -51,7 +53,14 @@ impl Game {
 
         let undercut = match reason {
             StartupEntryReason::ConcentratedMarket => (market_avg_rate - 0.7).clamp(8.4, 12.8),
-            StartupEntryReason::HighRates => (market_avg_rate - 0.8).clamp(8.5, 12.9),
+            StartupEntryReason::HighRates => {
+                let target = if high_rate_excess(&self.player, &self.market) > 0.75 {
+                    self.player.rate_cents - 1.2
+                } else {
+                    market_avg_rate - 0.8
+                };
+                target.clamp(8.5, 12.9)
+            }
             StartupEntryReason::StagnantMarket => {
                 (self.market.standard_rate_cents - 0.4).clamp(8.6, 11.6)
             }
@@ -103,6 +112,8 @@ impl Game {
     pub(super) fn startup_entry_signal(&self) -> Option<(StartupEntryReason, f64)> {
         let player_share = self.market_share();
         let market_avg_rate = self.average_rate();
+        let player_rate_excess = high_rate_excess(&self.player, &self.market);
+        let market_rate_excess = (market_avg_rate - public_rate_tolerance(&self.market)).max(0.0);
         let total_connected = self.total_connected_customers();
         let addressable = self.market.addressable_customers.max(1.0);
         let serviceable_gap = (self.market.serviceable_customers() - total_connected).max(0.0);
@@ -114,8 +125,10 @@ impl Game {
         let concentrated = player_share > 0.55
             || self.competitors.len() <= 2 && player_share > 0.42
             || self.competitors.len() <= 1;
-        let high_rates =
-            market_avg_rate > 11.2 || market_avg_rate > self.market.standard_rate_cents + 0.75;
+        let high_rates = market_avg_rate > 11.2
+            || market_avg_rate > self.market.standard_rate_cents + 0.75
+            || player_rate_excess > 0.40
+            || market_rate_excess > 0.20;
         let stagnant = self.quarter >= 4
             && connected_penetration < expected_penetration
             && addressable_gap > addressable * 0.45
@@ -137,6 +150,7 @@ impl Game {
         }
         if high_rates {
             probability += 0.06;
+            probability += player_rate_excess * 0.025 + market_rate_excess * 0.020;
         }
         if stagnant {
             probability += 0.09;
@@ -150,13 +164,15 @@ impl Game {
 
         let reason = if stagnant {
             StartupEntryReason::StagnantMarket
+        } else if high_rates && player_rate_excess > 0.75 {
+            StartupEntryReason::HighRates
         } else if concentrated {
             StartupEntryReason::ConcentratedMarket
         } else {
             StartupEntryReason::HighRates
         };
 
-        Some((reason, probability.clamp(0.04, 0.26)))
+        Some((reason, probability.clamp(0.04, 0.36)))
     }
 
     fn market_average_reliability(&self) -> f64 {
