@@ -14,10 +14,10 @@ use crate::sim::{
     generation_reliability_after_new_capacity, money, public_rate_tolerance,
 };
 
-const SCREEN_WIDTH: usize = 88;
-const CONTENT_WIDTH: usize = SCREEN_WIDTH - 4;
+const MIN_SCREEN_WIDTH: usize = 88;
+const DEFAULT_SCREEN_WIDTH: usize = 118;
+const MAX_SCREEN_WIDTH: usize = 124;
 const COLUMN_GAP: usize = 2;
-const COLUMN_WIDTH: usize = (SCREEN_WIDTH - COLUMN_GAP) / 2;
 const SHARE_TARGET: f64 = 0.45;
 const RELIABILITY_TARGET: f64 = 0.72;
 const LEVERAGE_LIMIT: f64 = 0.95;
@@ -898,7 +898,7 @@ fn changed(before: f64, after: f64, epsilon: f64) -> bool {
 
 fn push_labeled_wrapped(lines: &mut Vec<String>, label: &str, style: &str, text: &str) {
     let label_width = label.chars().count();
-    let body_width = CONTENT_WIDTH.saturating_sub(label_width + 1).max(16);
+    let body_width = content_width().saturating_sub(label_width + 1).max(16);
 
     for (index, wrapped) in wrap_plain_text(text, body_width).iter().enumerate() {
         if index == 0 {
@@ -951,7 +951,7 @@ fn print_help() {
             "Money accepts 20000 or 20k.".to_string(),
             "Invalid amounts are rejected.".to_string(),
             "Build sizes are clamped to sane bounds.".to_string(),
-            "Rates above 25c are rejected.".to_string(),
+            "Large rate increases above public tolerance are rejected.".to_string(),
             "Use the dashboard guide for live costs.".to_string(),
         ],
     );
@@ -962,25 +962,18 @@ fn print_status(game: &Game) {
         &format!("{} | {}", game.date_label(), game.player.name),
         &scorecard_lines(game),
     );
+    print_box("Signals", &signal_lines(game));
     print_box_pair(
         "Capital",
         &financial_lines(game),
-        "Network",
+        "Operations",
         &operation_lines(game),
     );
-    print_box_pair(
-        "Market",
-        &market_lines(game),
-        "Rivals",
-        &dashboard_competitor_lines(game),
-    );
-    print_box_pair(
-        "Projects",
-        &project_lines(game),
-        "Signals",
-        &signal_lines(game),
-    );
-    print_box("Decision Guide", &action_effect_lines(game));
+    print_box("Competition", &dashboard_competitor_lines(game));
+    if has_active_pipeline(game) {
+        print_box("Pipeline", &project_lines(game));
+    }
+    print_box("Commands", &command_footer_lines(game));
 }
 
 fn print_competitors(game: &Game) {
@@ -1001,7 +994,7 @@ fn print_board(game: &Game) {
 
 fn print_notice(message: &str) {
     println!();
-    print_box("Notice", &wrap_plain_text(message, CONTENT_WIDTH));
+    print_box("Notice", &wrap_plain_text(message, content_width()));
 }
 
 fn print_report(report: &QuarterReport) {
@@ -1040,7 +1033,7 @@ fn print_report(report: &QuarterReport) {
     if !report.attributions.is_empty() {
         lines.push(styled(BOLD_CYAN, "Drivers"));
         for attribution in &report.attributions {
-            for (index, wrapped) in wrap_plain_text(attribution, CONTENT_WIDTH.saturating_sub(4))
+            for (index, wrapped) in wrap_plain_text(attribution, content_width().saturating_sub(4))
                 .iter()
                 .enumerate()
             {
@@ -1055,7 +1048,7 @@ fn print_report(report: &QuarterReport) {
     if !report.events.is_empty() {
         lines.push(styled(BOLD_CYAN, "Events"));
         for event in &report.events {
-            for (index, wrapped) in wrap_plain_text(event, CONTENT_WIDTH.saturating_sub(7))
+            for (index, wrapped) in wrap_plain_text(event, content_width().saturating_sub(7))
                 .iter()
                 .enumerate()
             {
@@ -1077,7 +1070,7 @@ fn print_outcome(outcome: &Outcome) {
         OutcomeKind::Defeat => (BOLD_RED, "defeat"),
     };
     let mut lines = vec![styled(outcome_style, &outcome.headline)];
-    lines.extend(wrap_plain_text(&outcome.details, CONTENT_WIDTH));
+    lines.extend(wrap_plain_text(&outcome.details, content_width()));
     lines.push(format!(
         "{} {}",
         muted("Result:"),
@@ -1194,13 +1187,18 @@ fn scorecard_lines(game: &Game) -> Vec<String> {
 
     vec![
         format!(
-            "{} {} | {} {} | {} {}",
-            muted("Market"),
-            styled(BOLD, &game.market.territory),
+            "{} {} | {} {} | {} {} | {} {}",
             muted("Review"),
             styled(BOLD_CYAN, quarters_remaining_label(game)),
             muted("Rate"),
-            styled(BOLD_CYAN, format!("{:.1}c/kWh", game.player.rate_cents))
+            styled(BOLD_CYAN, format!("{:.1}c/kWh", game.player.rate_cents)),
+            muted("Avg"),
+            styled(CYAN, format!("{:.1}c", market_average_rate(game))),
+            muted("Tolerance"),
+            styled(
+                YELLOW,
+                format!("{:.1}c", public_rate_tolerance(&game.market))
+            )
         ),
         score_line(
             "Share",
@@ -1542,7 +1540,13 @@ fn financial_lines(game: &Game) -> Vec<String> {
             muted("Market cap"),
             styled(BOLD, money(game.player.market_cap()))
         ),
-        format!(
+    ];
+
+    if game.macro_state.credit_label() != "normal"
+        || borrowing_room < 12_000.0
+        || game.macro_state.borrowing_limit_ratio() < 0.90
+    {
+        lines.push(format!(
             "{} {}   {} {}",
             muted("Credit"),
             styled(macro_credit_tone(game), game.macro_state.credit_label()),
@@ -1551,8 +1555,8 @@ fn financial_lines(game: &Game) -> Vec<String> {
                 debt_cap_tone(game.macro_state.borrowing_limit_ratio()),
                 format!("{:.0}%", game.macro_state.borrowing_limit_ratio() * 100.0)
             )
-        ),
-    ];
+        ));
+    }
 
     if let Some(report) = &game.last_report {
         let margin = if report.revenue > 0.0 {
@@ -1624,16 +1628,11 @@ fn operation_lines(game: &Game) -> Vec<String> {
             )
         ),
         format!(
-            "{} {}   {} {}",
+            "{} {}",
             muted("Utilization"),
             styled(
                 utilization_tone(game.player.utilization(&game.market)),
                 format!("{:.0}%", game.player.utilization(&game.market) * 100.0)
-            ),
-            muted("Avg use"),
-            styled(
-                BOLD,
-                format!("{:.2} MWh/cust", game.market.avg_mwh_per_customer)
             ),
         ),
         format!(
@@ -1652,53 +1651,6 @@ fn operation_lines(game: &Game) -> Vec<String> {
     ]
 }
 
-fn market_lines(game: &Game) -> Vec<String> {
-    vec![
-        format!(
-            "{} {} / {}",
-            muted("Serviceable"),
-            styled(BOLD, format!("{:.0}", game.serviceable_customers())),
-            styled(
-                DIM,
-                format!("{:.0} addressable", game.market.addressable_customers)
-            )
-        ),
-        format!(
-            "{} {}   {} {}",
-            muted("Connected"),
-            styled(BOLD, format!("{:.0}", game.total_connected_customers())),
-            muted("Your share"),
-            styled(
-                share_tone(game.market_share()),
-                format!("{:.0}%", game.market_share() * 100.0)
-            )
-        ),
-        format!(
-            "{} {}   {} {}",
-            muted("Electrified"),
-            styled(
-                BOLD_CYAN,
-                format!("{:.1}%", game.market.electrification * 100.0)
-            ),
-            muted("Address share"),
-            styled(BOLD, format!("{:.1}%", game.addressable_share() * 100.0))
-        ),
-        format!(
-            "{} {}   {} {}",
-            muted("Demand"),
-            styled(
-                demand_tone(game.macro_state.demand_index),
-                game.macro_state.demand_label()
-            ),
-            muted("Costs"),
-            styled(
-                cost_pressure_tone(game.macro_state.cost_pressure),
-                game.macro_state.cost_label()
-            )
-        ),
-    ]
-}
-
 fn competitor_lines(game: &Game) -> Vec<String> {
     if game.competitors.is_empty() {
         return vec!["No active rivals.".to_string()];
@@ -1706,6 +1658,7 @@ fn competitor_lines(game: &Game) -> Vec<String> {
 
     let mut lines = Vec::new();
     let total_connected = game.total_connected_customers().max(1.0);
+    let name_width = if dashboard_width() >= 112 { 22 } else { 15 };
     for (index, competitor) in game.competitors.iter().enumerate() {
         let (acquisition_note, acquisition_tone) = acquisition_status(game, index);
         let (health_label, health_tone) = rival_health_label(competitor);
@@ -1717,20 +1670,18 @@ fn competitor_lines(game: &Game) -> Vec<String> {
         } else {
             CYAN
         };
+        let name = shorten_plain(&competitor.name, name_width);
         lines.push(format!(
-            "{} {}  {} acct  {}",
+            "{}. {}   {} {}   {} {}   {} {}   {} {}",
             styled(DIM, index + 1),
-            styled(BOLD, shorten_plain(&competitor.name, 15)),
-            styled(BOLD, format!("{:.0}", competitor.customers)),
-            styled(rate_tone, format!("{:.1}c", competitor.rate_cents)),
-        ));
-        lines.push(format!(
-            "  {} {}  {} {}  {} {}",
+            styled(BOLD, format!("{name:<name_width$}")),
             muted("share"),
             styled(
                 BOLD,
                 format!("{:.0}%", competitor.customers / total_connected * 100.0)
             ),
+            muted("rate"),
+            styled(rate_tone, format!("{:.1}c", competitor.rate_cents)),
             muted("health"),
             styled(health_tone, health_label),
             muted("buy"),
@@ -1886,7 +1837,7 @@ fn rival_detail_lines(game: &Game) -> Vec<String> {
         ));
         lines.extend(rival_acquisition_lines(game, index));
         if let Some(event) = recent_rival_event(game, &competitor.name) {
-            for (line_index, wrapped) in wrap_plain_text(&event, CONTENT_WIDTH.saturating_sub(12))
+            for (line_index, wrapped) in wrap_plain_text(&event, content_width().saturating_sub(12))
                 .iter()
                 .enumerate()
             {
@@ -2019,12 +1970,13 @@ fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> Vec<String> 
 
 fn dashboard_competitor_lines(game: &Game) -> Vec<String> {
     let mut lines = competitor_lines(game);
-    if game.competitors.len() > 3 {
-        lines.truncate(6);
+    let visible_rivals = if dashboard_width() >= 112 { 4 } else { 3 };
+    if game.competitors.len() > visible_rivals {
+        lines.truncate(visible_rivals);
         lines.push(format!(
             "{} use 'rivals' for {} more",
             muted("More:"),
-            game.competitors.len() - 3
+            game.competitors.len() - visible_rivals
         ));
     }
     lines
@@ -2081,8 +2033,10 @@ fn rival_customer_delta_tone(value: f64) -> &'static str {
 }
 
 fn project_lines(game: &Game) -> Vec<String> {
-    let mut lines = if game.pending_projects.is_empty() {
-        vec![styled(DIM, "No active projects.")]
+    let mut lines = if game.pending_projects.is_empty() && game.acquisition_cooldown == 0 {
+        vec![styled(DIM, "No active pipeline.")]
+    } else if game.pending_projects.is_empty() {
+        Vec::new()
     } else {
         game.pending_projects
             .iter()
@@ -2113,6 +2067,10 @@ fn project_lines(game: &Game) -> Vec<String> {
     }
 
     lines
+}
+
+fn has_active_pipeline(game: &Game) -> bool {
+    !game.pending_projects.is_empty() || game.acquisition_cooldown > 0
 }
 
 fn signal_lines(game: &Game) -> Vec<String> {
@@ -2172,11 +2130,15 @@ fn signal_lines(game: &Game) -> Vec<String> {
             "Macro",
             macro_credit_tone(game),
             format!(
-                "credit {} | demand {}",
+                "credit {} | demand {} | costs {}",
                 styled(macro_credit_tone(game), game.macro_state.credit_label()),
                 styled(
                     demand_tone(game.macro_state.demand_index),
                     game.macro_state.demand_label()
+                ),
+                styled(
+                    cost_pressure_tone(game.macro_state.cost_pressure),
+                    game.macro_state.cost_label()
                 )
             ),
         ),
@@ -2308,33 +2270,42 @@ fn shock_label(kind: &ShockKind) -> &'static str {
     }
 }
 
-fn action_effect_lines(game: &Game) -> Vec<String> {
-    let mut lines = vec![
-        action_line(
-            "next / n",
-            "finish the quarter; results print below this guide",
-        ),
-        action_line("build gen 400", project_quote_inline("gen", 400.0)),
-        action_line("build lines 600", project_quote_inline("lines", 600.0)),
-        action_line(
-            "marketing 4000",
-            "-$4.0k now; increases customer capture this quarter",
-        ),
-        action_line(
-            "maint 6000",
-            "reliability gain scales down as the asset base grows",
-        ),
-        action_line(
-            format!("rate {:.1}", game.market.standard_rate_cents),
+fn command_footer_lines(game: &Game) -> Vec<String> {
+    let mut lines = vec![action_line(
+        "next/n | preview",
+        "finish the quarter or inspect a command before committing",
+    )];
+
+    if dashboard_width() >= 112 {
+        lines.push(action_line(
+            "build gen/lines",
             format!(
-                "set target; public tolerance near {:.1}c",
-                public_rate_tolerance(&game.market)
+                "gen 400 {} | lines 600 {}",
+                project_quote_inline("gen", 400.0),
+                project_quote_inline("lines", 600.0)
             ),
-        ),
-        action_line(
-            "borrow [amt|max]",
+        ));
+    } else {
+        lines.push(action_line(
+            "build gen 400",
+            project_quote_inline("gen", 400.0),
+        ));
+        lines.push(action_line(
+            "build lines 600",
+            project_quote_inline("lines", 600.0),
+        ));
+    }
+
+    lines.push(action_line(
+        "marketing/maint",
+        "marketing 4000 for demand; maint 6000 for reliability",
+    ));
+    lines.push(action_line(
+        "rate | capital",
+        if dashboard_width() >= 112 {
             format!(
-                "{} available at {} floating",
+                "rate {:.1} near market; borrow max {} at {}; issue/buyback",
+                game.market.standard_rate_cents,
                 styled(
                     borrowing_room_tone(game.borrowing_room()),
                     money(game.borrowing_room())
@@ -2343,18 +2314,26 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
                     interest_rate_tone(game.player_annual_interest_rate()),
                     format!("{:.1}%", game.player_annual_interest_rate() * 100.0)
                 )
-            ),
-        ),
-        action_line(
-            "issue / buyback",
-            "equity raises cash; buybacks spend cash to retire float",
-        ),
-        action_line("rivals / board", "inspect competitors or milestone targets"),
-        action_line(
-            "preview <cmd>",
-            "show immediate effects without taking action",
-        ),
-    ];
+            )
+        } else {
+            format!(
+                "rate {:.1}; borrow max {} @ {}; equity",
+                game.market.standard_rate_cents,
+                styled(
+                    borrowing_room_tone(game.borrowing_room()),
+                    money(game.borrowing_room())
+                ),
+                styled(
+                    interest_rate_tone(game.player_annual_interest_rate()),
+                    format!("{:.1}%", game.player_annual_interest_rate() * 100.0)
+                )
+            )
+        },
+    ));
+    lines.push(action_line(
+        "rivals | board | help",
+        "deeper competitor, objective, and command detail",
+    ));
 
     if let Some((index, price)) = cheapest_diligenced_competitor(game) {
         if game.competitors.len() == 1 {
@@ -2403,8 +2382,6 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
             ));
         }
     }
-
-    lines.push(action_line("help", "full command reference"));
 
     lines
 }
@@ -2512,7 +2489,7 @@ fn should_use_ansi(no_color_set: bool, term: Option<&str>) -> bool {
 fn action_line(command: impl std::fmt::Display, effect: impl std::fmt::Display) -> String {
     format!(
         "{}  {}",
-        styled(BOLD_CYAN, format!("{command:<18}")),
+        styled(BOLD_CYAN, format!("{command:<22}")),
         effect
     )
 }
@@ -2733,7 +2710,7 @@ fn reputation_tone(reputation: f64) -> &'static str {
 }
 
 fn print_box(title: &str, lines: &[String]) {
-    for line in render_box(title, lines, SCREEN_WIDTH) {
+    for line in render_box(title, lines, dashboard_width()) {
         println!("{line}");
     }
 }
@@ -2745,28 +2722,55 @@ fn print_box_pair(
     right_lines: &[String],
 ) {
     let content_height = left_lines.len().max(1).max(right_lines.len().max(1));
+    let (left_width, right_width) = paired_column_widths(dashboard_width());
     let left = render_box(
         left_title,
         &padded_box_lines(left_lines, content_height),
-        COLUMN_WIDTH,
+        left_width,
     );
     let right = render_box(
         right_title,
         &padded_box_lines(right_lines, content_height),
-        COLUMN_WIDTH,
+        right_width,
     );
 
     for index in 0..left.len() {
         let left_line = left
             .get(index)
             .cloned()
-            .unwrap_or_else(|| " ".repeat(COLUMN_WIDTH));
+            .unwrap_or_else(|| " ".repeat(left_width));
         let right_line = right
             .get(index)
             .cloned()
-            .unwrap_or_else(|| " ".repeat(COLUMN_WIDTH));
+            .unwrap_or_else(|| " ".repeat(right_width));
         println!("{left_line}{}{right_line}", " ".repeat(COLUMN_GAP));
     }
+}
+
+fn dashboard_width() -> usize {
+    let columns = std::env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+    dashboard_width_for_columns(columns)
+}
+
+fn dashboard_width_for_columns(columns: Option<usize>) -> usize {
+    columns
+        .unwrap_or(DEFAULT_SCREEN_WIDTH)
+        .clamp(MIN_SCREEN_WIDTH, MAX_SCREEN_WIDTH)
+}
+
+fn content_width() -> usize {
+    dashboard_width().saturating_sub(4)
+}
+
+fn paired_column_widths(total_width: usize) -> (usize, usize) {
+    let available = total_width
+        .saturating_sub(COLUMN_GAP)
+        .max(MIN_SCREEN_WIDTH - COLUMN_GAP);
+    let left = available / 2;
+    let right = available - left;
+    (left, right)
 }
 
 fn padded_box_lines(lines: &[String], height: usize) -> Vec<String> {
@@ -3450,15 +3454,23 @@ mod tests {
 
     #[test]
     fn render_box_preserves_requested_visible_width() {
+        let (column_width, _) = paired_column_widths(DEFAULT_SCREEN_WIDTH);
         let lines = vec![format!(
             "{} {}",
             styled(BOLD_GREEN, "Cash"),
             styled(BOLD_CYAN, "$34.0k")
         )];
 
-        for line in render_box("Capital", &lines, COLUMN_WIDTH) {
-            assert_eq!(visible_width(&line), COLUMN_WIDTH);
+        for line in render_box("Capital", &lines, column_width) {
+            assert_eq!(visible_width(&line), column_width);
         }
+    }
+
+    #[test]
+    fn dashboard_width_uses_wider_default_and_clamps_terminal_columns() {
+        assert_eq!(dashboard_width_for_columns(None), DEFAULT_SCREEN_WIDTH);
+        assert_eq!(dashboard_width_for_columns(Some(72)), MIN_SCREEN_WIDTH);
+        assert_eq!(dashboard_width_for_columns(Some(160)), MAX_SCREEN_WIDTH);
     }
 
     #[test]
