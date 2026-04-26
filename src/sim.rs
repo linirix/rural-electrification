@@ -7,6 +7,11 @@ pub const MIN_GENERATION_PROJECT_MWH: f64 = 60.0;
 pub const MAX_GENERATION_PROJECT_MWH: f64 = 650.0;
 pub const MIN_DISTRIBUTION_PROJECT_CUSTOMERS: f64 = 80.0;
 pub const MAX_DISTRIBUTION_PROJECT_CUSTOMERS: f64 = 900.0;
+pub const ADJACENT_EXPANSION_BASE_COST: f64 = 185_000.0;
+pub const ADJACENT_EXPANSION_DURATION_QUARTERS: u32 = 4;
+pub const ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS: f64 = 2_200.0;
+pub const ADJACENT_EXPANSION_INITIAL_CUSTOMERS: f64 = 260.0;
+pub const ADJACENT_EXPANSION_INCUMBENT_CUSTOMERS: f64 = 380.0;
 const BASE_ANNUAL_RATE: f64 = 0.052;
 const BASE_CREDIT_SPREAD: f64 = 0.018;
 const MAINTENANCE_REFERENCE_ASSET_BASE: f64 = 78_000.0;
@@ -70,6 +75,7 @@ pub struct Game {
     pub integration_strain: f64,
     pub active_shocks: Vec<ActiveShock>,
     pub startup_index: u32,
+    pub adjacent_expansions: u32,
     pub review_completed: bool,
     pub equity_market_fatigue: f64,
     pub diligence_reports: Vec<DiligenceReport>,
@@ -179,8 +185,17 @@ pub struct Project {
 /// Type and scale of a pending capital project.
 #[derive(Clone, Debug)]
 pub enum ProjectKind {
-    Generation { capacity_mwh: f64 },
-    Distribution { customer_capacity: f64 },
+    Generation {
+        capacity_mwh: f64,
+    },
+    Distribution {
+        customer_capacity: f64,
+    },
+    AdjacentTerritory {
+        addressable_customers: f64,
+        initial_customers: f64,
+        incumbent_customers: f64,
+    },
 }
 
 /// Player command accepted by the simulation core.
@@ -198,6 +213,7 @@ pub enum Decision {
     RepayDebt { amount: f64 },
     Diligence { competitor_index: usize },
     Acquire { competitor_index: usize },
+    EnterAdjacentMarket,
     AdjustRate { delta_cents: f64 },
     Maintenance { spend: f64 },
 }
@@ -402,6 +418,7 @@ impl Game {
             integration_strain: 0.0,
             active_shocks: Vec::new(),
             startup_index: 0,
+            adjacent_expansions: 0,
             review_completed: false,
             equity_market_fatigue: 0.0,
             diligence_reports: Vec::new(),
@@ -469,6 +486,28 @@ impl Game {
                     money(cost),
                     customer_capacity,
                     quarters
+                ))
+            }
+            Decision::EnterAdjacentMarket => {
+                self.require_adjacent_expansion_ready()?;
+                let cost = self.adjacent_expansion_cost();
+                self.require_cash(cost)?;
+                self.player.cash -= cost;
+                self.player.asset_base += cost;
+                self.pending_projects.push(Project {
+                    name: "adjacent territory entry".to_string(),
+                    kind: ProjectKind::AdjacentTerritory {
+                        addressable_customers: ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS,
+                        initial_customers: ADJACENT_EXPANSION_INITIAL_CUSTOMERS,
+                        incumbent_customers: ADJACENT_EXPANSION_INCUMBENT_CUSTOMERS,
+                    },
+                    quarters_remaining: ADJACENT_EXPANSION_DURATION_QUARTERS,
+                });
+                Ok(format!(
+                    "Started adjacent territory entry for {}. It will open about {:.0} addressable customers in {} quarter(s), with an initial foothold and a local incumbent rival.",
+                    money(cost),
+                    ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS,
+                    ADJACENT_EXPANSION_DURATION_QUARTERS
                 ))
             }
             Decision::Marketing { spend } => {
@@ -1019,6 +1058,62 @@ impl Game {
             .max(0.0)
     }
 
+    pub fn adjacent_expansion_cost(&self) -> f64 {
+        ADJACENT_EXPANSION_BASE_COST * (1.0 + f64::from(self.adjacent_expansions) * 0.25)
+    }
+
+    pub fn adjacent_expansion_duration(&self) -> u32 {
+        ADJACENT_EXPANSION_DURATION_QUARTERS
+    }
+
+    pub fn adjacent_expansion_pending(&self) -> bool {
+        self.pending_projects
+            .iter()
+            .any(|project| matches!(project.kind, ProjectKind::AdjacentTerritory { .. }))
+    }
+
+    pub fn adjacent_expansion_blocker(&self) -> Option<String> {
+        if self.quarter < 8 && !self.review_completed {
+            return Some("Adjacent expansion unlocks in Year 3.".to_string());
+        }
+        if self.adjacent_expansion_pending() {
+            return Some("Adjacent territory entry is already in the pipeline.".to_string());
+        }
+        if self.adjacent_expansions > 0 {
+            return Some(
+                "Metro has already entered an adjacent territory; broader regional expansion is not modeled yet."
+                    .to_string(),
+            );
+        }
+        if self.player.reliability < 0.82 {
+            return Some(
+                "The board will not underwrite expansion until reliability is at least 82%."
+                    .to_string(),
+            );
+        }
+        if self.market_share() < 0.34 {
+            return Some(
+                "The board wants at least 34% core-market share before funding adjacent expansion."
+                    .to_string(),
+            );
+        }
+        if self.player.debt_to_assets() > 0.95 {
+            return Some(
+                "Lenders will not finance adjacent expansion while debt/assets is above 95%."
+                    .to_string(),
+            );
+        }
+        None
+    }
+
+    fn require_adjacent_expansion_ready(&self) -> Result<(), String> {
+        if let Some(blocker) = self.adjacent_expansion_blocker() {
+            Err(blocker)
+        } else {
+            Ok(())
+        }
+    }
+
     fn equity_issuance_base(&self) -> f64 {
         let market_cap = self.player.market_cap().max(1.0);
         let cash_adjusted_cap = market_cap - self.player.cash.max(0.0) * 0.60;
@@ -1404,6 +1499,70 @@ impl Game {
                         events.push(format!(
                             "The {} opened service to about {:.0} additional customers.",
                             project.name, customer_capacity
+                        ));
+                    }
+                    ProjectKind::AdjacentTerritory {
+                        addressable_customers,
+                        initial_customers,
+                        incumbent_customers,
+                    } => {
+                        let old_serviceable = self.market.serviceable_customers();
+                        self.market.addressable_customers += addressable_customers;
+                        let added_serviceable = addressable_customers * 0.34;
+                        self.market.electrification = ((old_serviceable + added_serviceable)
+                            / self.market.addressable_customers.max(1.0))
+                        .clamp(0.05, 0.68);
+
+                        let added_generation =
+                            initial_customers * self.market.avg_mwh_per_customer * 1.45;
+                        let old_reliability = self.player.reliability;
+                        self.player.generation_capacity_mwh += added_generation;
+                        self.player.distribution_capacity += initial_customers * 1.55;
+                        self.player.customers += initial_customers;
+                        self.player.last_quarter_customers = self.player.customers;
+                        self.player.reliability = generation_reliability_after_new_capacity(
+                            old_reliability,
+                            self.player.generation_capacity_mwh - added_generation,
+                            added_generation,
+                        );
+                        self.player.reputation = (self.player.reputation + 2.0).clamp(0.0, 100.0);
+
+                        self.startup_index += 1;
+                        let mut used_names = vec![self.player.name.clone()];
+                        used_names.extend(
+                            self.competitors
+                                .iter()
+                                .map(|competitor| competitor.name.clone()),
+                        );
+                        let incumbent_name =
+                            draw_competitor_name(&mut self.rng, &used_names, self.startup_index);
+                        let incumbent_rate = (self.market.standard_rate_cents - 0.1
+                            + self.rng.range(-0.35, 0.45))
+                        .clamp(8.4, 13.2);
+                        let incumbent_generation = incumbent_customers
+                            * self.market.avg_mwh_per_customer
+                            * self.rng.range(1.18, 1.42);
+                        let incumbent = Utility {
+                            name: incumbent_name.clone(),
+                            cash: 24_000.0 + self.rng.range(0.0, 8_000.0),
+                            debt: 18_000.0 + self.rng.range(0.0, 8_000.0),
+                            shares: 0.0,
+                            stock_price: 0.0,
+                            customers: incumbent_customers,
+                            generation_capacity_mwh: incumbent_generation,
+                            distribution_capacity: incumbent_customers * self.rng.range(1.20, 1.40),
+                            rate_cents: incumbent_rate,
+                            reputation: 55.0 + self.rng.range(-4.0, 6.0),
+                            reliability: 0.80 + self.rng.range(-0.035, 0.055),
+                            marketing_momentum: 0.22,
+                            asset_base: 95_000.0 + self.rng.range(0.0, 28_000.0),
+                            last_quarter_customers: incumbent_customers,
+                        };
+                        self.competitors.push(incumbent);
+                        self.adjacent_expansions += 1;
+                        events.push(format!(
+                            "The {} opened: Metro connected {:.0} launch customers, the addressable market grew by {:.0}, and {incumbent_name} emerged as the local incumbent.",
+                            project.name, initial_customers, addressable_customers
                         ));
                     }
                 }

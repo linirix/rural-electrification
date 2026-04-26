@@ -6,6 +6,7 @@ use std::{
 #[cfg(test)]
 use crate::sim::ActiveShock;
 use crate::sim::{
+    ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS, ADJACENT_EXPANSION_INITIAL_CUSTOMERS,
     DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
     MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH, MAX_PUBLIC_RATE_PREMIUM_CENTS,
     MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, Outcome, OutcomeKind,
@@ -152,11 +153,13 @@ fn handle_command(game: &mut Game, command: &str) -> CommandResult {
         "preview" | "quote" | "plan" => preview_command(game, &parts),
         "build" | "marketing" | "market" | "advertise" | "issue" | "stock" | "equity"
         | "buyback" | "repurchase" | "debt" | "borrow" | "loan" | "repay" | "paydown" | "buy"
-        | "acquire" | "diligence" | "dilig" | "inspect" | "rate" | "maintenance" | "maint"
-        | "maintain" | "reliability" => match parse_decision(game, &parts) {
-            Ok(decision) => apply(game, decision),
-            Err(message) => CommandResult::Continue(message),
-        },
+        | "acquire" | "diligence" | "dilig" | "inspect" | "expand" | "adjacent" | "territory"
+        | "rate" | "maintenance" | "maint" | "maintain" | "reliability" => {
+            match parse_decision(game, &parts) {
+                Ok(decision) => apply(game, decision),
+                Err(message) => CommandResult::Continue(message),
+            }
+        }
         "competitors" | "rivals" => CommandResult::ShowRivals,
         "board" | "goals" | "objectives" | "milestones" => CommandResult::ShowBoard,
         _ => CommandResult::Continue(format!("Unknown command '{first}'. Type 'help'.")),
@@ -230,6 +233,7 @@ fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, String> {
             }
             _ => Err("Build what? Try 'build gen [MWh]' or 'build lines [customers]'.".to_string()),
         },
+        "expand" | "adjacent" | "territory" => Ok(Decision::EnterAdjacentMarket),
         "marketing" | "market" | "advertise" => {
             let spend = money_amount(parts.get(1).copied(), 4_000.0, "marketing [amount]")?;
             Ok(Decision::Marketing { spend })
@@ -446,8 +450,8 @@ fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
             }
             Ok(length)
         }
-        "marketing" | "market" | "advertise" | "issue" | "buyback" | "repurchase"
-        | "maintenance" | "maint" | "maintain" | "reliability" => {
+        "marketing" | "market" | "advertise" | "issue" | "buyback" | "repurchase" | "expand"
+        | "adjacent" | "territory" | "maintenance" | "maint" | "maintain" | "reliability" => {
             Ok(1 + optional_command_argument(parts.get(1).copied()))
         }
         "repay" | "paydown" => Ok(1 + optional_command_argument(parts.get(1).copied())),
@@ -532,6 +536,9 @@ fn is_preview_action_start(value: &str) -> bool {
             | "diligence"
             | "dilig"
             | "inspect"
+            | "expand"
+            | "adjacent"
+            | "territory"
             | "rate"
             | "maintenance"
             | "maint"
@@ -575,6 +582,28 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
                 distribution_project_duration(size),
                 money(cost / size)
             )]
+        }
+        Decision::EnterAdjacentMarket => {
+            let cost = game.adjacent_expansion_cost();
+            let duration = game.adjacent_expansion_duration();
+            let mut lines = vec![format!(
+                "{} adjacent territory: {} for {:.0} addressable customers, {:.0} launch customers, {}q.",
+                muted("Quote:"),
+                styled(BOLD_YELLOW, money(cost)),
+                ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS,
+                ADJACENT_EXPANSION_INITIAL_CUSTOMERS,
+                duration
+            )];
+            if let Some(blocker) = game.adjacent_expansion_blocker() {
+                lines.push(format!("{} {blocker}", styled(BOLD_RED, "Gate:")));
+            } else if game.player.cash < cost {
+                lines.push(format!(
+                    "{} raise {} more before committing, or preview a financing chain first.",
+                    styled(BOLD_YELLOW, "Financing:"),
+                    money(cost - game.player.cash)
+                ));
+            }
+            lines
         }
         Decision::Marketing { spend } => vec![format!(
             "{} {} spend; clamped to {}-{} and mostly affects next quarter's customer capture.",
@@ -918,6 +947,7 @@ fn print_help() {
             "build lines [customers]".to_string(),
             "marketing [amount]".to_string(),
             "maint [amount]       maintenance".to_string(),
+            "expand               adjacent territory".to_string(),
             "rate 10.0            set target".to_string(),
             "rate up|down [cents] adjust rate".to_string(),
             "preview <command>    inspect first".to_string(),
@@ -2048,6 +2078,10 @@ fn project_lines(game: &Game) -> Vec<String> {
                     crate::sim::ProjectKind::Distribution { customer_capacity } => {
                         format!("lines +{customer_capacity:.0} cust")
                     }
+                    crate::sim::ProjectKind::AdjacentTerritory {
+                        addressable_customers,
+                        ..
+                    } => format!("territory +{addressable_customers:.0} addr"),
                 };
                 format!(
                     "{}   {}",
@@ -2300,6 +2334,9 @@ fn command_footer_lines(game: &Game) -> Vec<String> {
         "marketing/maint",
         "marketing 4000 for demand; maint 6000 for reliability",
     ));
+    if should_show_adjacent_expansion(game) {
+        lines.push(action_line("expand", adjacent_expansion_footer(game)));
+    }
     lines.push(action_line(
         "rate | capital",
         if dashboard_width() >= 112 {
@@ -2384,6 +2421,43 @@ fn command_footer_lines(game: &Game) -> Vec<String> {
     }
 
     lines
+}
+
+fn should_show_adjacent_expansion(game: &Game) -> bool {
+    game.quarter >= 6
+        || game.review_completed
+        || game.adjacent_expansion_pending()
+        || game.adjacent_expansions > 0
+}
+
+fn adjacent_expansion_footer(game: &Game) -> String {
+    let cost = game.adjacent_expansion_cost();
+    if game.adjacent_expansion_pending() {
+        return styled(YELLOW, "adjacent territory entry already in pipeline");
+    }
+    if game.adjacent_expansions > 0 {
+        return styled(
+            DIM,
+            "adjacent territory open; later regional expansion not modeled yet",
+        );
+    }
+    if let Some(blocker) = game.adjacent_expansion_blocker() {
+        return blocker;
+    }
+    if game.player.cash < cost {
+        return format!(
+            "{} | {}q | raise {} more",
+            styled(BOLD_YELLOW, money(cost)),
+            styled(YELLOW, game.adjacent_expansion_duration()),
+            styled(YELLOW, money(cost - game.player.cash))
+        );
+    }
+    format!(
+        "{} | {}q | +{:.0} addressable customers",
+        styled(BOLD_YELLOW, money(cost)),
+        styled(YELLOW, game.adjacent_expansion_duration()),
+        ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS
+    )
 }
 
 fn project_quote_inline(kind: &str, size: f64) -> String {
@@ -2928,6 +3002,17 @@ fn visible_width(line: &str) -> usize {
 mod tests {
     use super::*;
 
+    fn make_adjacent_expansion_ready(game: &mut Game) {
+        game.quarter = 8;
+        game.player.cash = 260_000.0;
+        game.player.debt = 30_000.0;
+        game.player.asset_base = 140_000.0;
+        game.player.customers = 780.0;
+        game.player.generation_capacity_mwh = 260.0;
+        game.player.distribution_capacity = 1_050.0;
+        game.player.reliability = 0.88;
+    }
+
     #[test]
     fn rate_up_with_amount_uses_requested_delta() {
         let parts = vec!["rate", "up", "2"];
@@ -3393,6 +3478,41 @@ mod tests {
             }
             _ => panic!("max financial command chain should show preview output"),
         }
+    }
+
+    #[test]
+    fn expand_command_starts_adjacent_expansion_project() {
+        let mut game = Game::with_seed(121);
+        make_adjacent_expansion_ready(&mut game);
+        let starting_cash = game.player.cash;
+
+        match handle_command(&mut game, "expand") {
+            CommandResult::Continue(message) => assert!(message.contains("adjacent territory")),
+            _ => panic!("expand should apply adjacent territory entry"),
+        }
+
+        assert!(game.player.cash < starting_cash);
+        assert!(game.adjacent_expansion_pending());
+    }
+
+    #[test]
+    fn preview_expand_shows_cost_and_does_not_mutate_game() {
+        let mut game = Game::with_seed(122);
+        make_adjacent_expansion_ready(&mut game);
+        let starting_cash = game.player.cash;
+        let starting_projects = game.pending_projects.len();
+
+        match handle_command(&mut game, "preview expand") {
+            CommandResult::Preview(lines) => {
+                assert!(lines.iter().any(|line| line.contains("adjacent territory")));
+                assert!(lines.iter().any(|line| line.contains("Would succeed")));
+                assert!(lines.iter().any(|line| line.contains("Projects")));
+            }
+            _ => panic!("preview expand should show preview output"),
+        }
+
+        assert_eq!(game.player.cash, starting_cash);
+        assert_eq!(game.pending_projects.len(), starting_projects);
     }
 
     #[test]

@@ -264,6 +264,19 @@ fn assert_utility_sane(utility: &Utility, has_public_stock: bool) {
     }
 }
 
+fn eligible_adjacent_expansion_game() -> Game {
+    let mut game = Game::with_seed(54);
+    game.quarter = 8;
+    game.player.cash = 260_000.0;
+    game.player.debt = 30_000.0;
+    game.player.asset_base = 140_000.0;
+    game.player.customers = 780.0;
+    game.player.generation_capacity_mwh = 260.0;
+    game.player.distribution_capacity = 1_050.0;
+    game.player.reliability = 0.88;
+    game
+}
+
 #[test]
 fn stock_issuance_has_no_fixed_proceeds_cap() {
     let mut game = Game::with_seed(14);
@@ -922,6 +935,104 @@ fn generation_completion_lifts_reliability_from_new_equipment() {
             .iter()
             .any(|event| event.contains("lifting reliability"))
     );
+}
+
+#[test]
+fn adjacent_expansion_requires_a_mature_core_platform() {
+    let mut game = eligible_adjacent_expansion_game();
+    game.quarter = 7;
+    let starting_cash = game.player.cash;
+
+    let early_error = game
+        .apply_decision(Decision::EnterAdjacentMarket)
+        .unwrap_err();
+
+    assert!(early_error.contains("Year 3"));
+    assert!((game.player.cash - starting_cash).abs() < 0.01);
+
+    game.quarter = 8;
+    game.player.reliability = 0.81;
+    let reliability_error = game
+        .apply_decision(Decision::EnterAdjacentMarket)
+        .unwrap_err();
+
+    assert!(reliability_error.contains("82%"));
+}
+
+#[test]
+fn adjacent_expansion_starts_project_and_costs_cash() {
+    let mut game = eligible_adjacent_expansion_game();
+    let starting_cash = game.player.cash;
+    let starting_asset_base = game.player.asset_base;
+    let cost = game.adjacent_expansion_cost();
+
+    let message = game.apply_decision(Decision::EnterAdjacentMarket).unwrap();
+
+    assert!(message.contains("adjacent territory"));
+    assert!((game.player.cash - (starting_cash - cost)).abs() < 0.01);
+    assert!((game.player.asset_base - (starting_asset_base + cost)).abs() < 0.01);
+    assert_eq!(game.pending_projects.len(), 1);
+    match game.pending_projects[0].kind {
+        ProjectKind::AdjacentTerritory {
+            addressable_customers,
+            initial_customers,
+            incumbent_customers,
+        } => {
+            assert!(
+                (addressable_customers - ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS).abs() < 0.01
+            );
+            assert!((initial_customers - ADJACENT_EXPANSION_INITIAL_CUSTOMERS).abs() < 0.01);
+            assert!((incumbent_customers - ADJACENT_EXPANSION_INCUMBENT_CUSTOMERS).abs() < 0.01);
+        }
+        _ => panic!("expected adjacent territory project"),
+    }
+}
+
+#[test]
+fn adjacent_expansion_completion_opens_market_and_adds_incumbent() {
+    let mut game = eligible_adjacent_expansion_game();
+    let starting_addressable = game.market.addressable_customers;
+    let starting_player_customers = game.player.customers;
+    let starting_competitors = game.competitors.len();
+    let mut events = Vec::new();
+
+    game.pending_projects.push(Project {
+        name: "adjacent territory entry".to_string(),
+        kind: ProjectKind::AdjacentTerritory {
+            addressable_customers: ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS,
+            initial_customers: ADJACENT_EXPANSION_INITIAL_CUSTOMERS,
+            incumbent_customers: ADJACENT_EXPANSION_INCUMBENT_CUSTOMERS,
+        },
+        quarters_remaining: 1,
+    });
+
+    game.complete_projects(&mut events);
+
+    assert_eq!(game.adjacent_expansions, 1);
+    assert!(game.market.addressable_customers > starting_addressable);
+    assert!(game.player.customers > starting_player_customers);
+    assert_eq!(game.competitors.len(), starting_competitors + 1);
+    assert!(events.iter().any(|event| event.contains("local incumbent")));
+}
+
+#[test]
+fn adjacent_expansion_cannot_be_started_twice() {
+    let mut game = eligible_adjacent_expansion_game();
+
+    game.apply_decision(Decision::EnterAdjacentMarket).unwrap();
+    let pending_error = game
+        .apply_decision(Decision::EnterAdjacentMarket)
+        .unwrap_err();
+
+    assert!(pending_error.contains("already in the pipeline"));
+
+    game.pending_projects.clear();
+    game.adjacent_expansions = 1;
+    let completed_error = game
+        .apply_decision(Decision::EnterAdjacentMarket)
+        .unwrap_err();
+
+    assert!(completed_error.contains("already entered"));
 }
 
 #[test]
