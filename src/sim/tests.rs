@@ -1319,6 +1319,23 @@ fn rival_counteroffensive_strengthens_largest_rival() {
 }
 
 #[test]
+fn rival_counteroffensive_handles_rates_below_old_floor() {
+    let mut game = Game::with_seed(90);
+    game.player.customers = 900.0;
+    game.player.rate_cents = 5.0;
+    game.competitors[0].customers = 420.0;
+    game.competitors[0].rate_cents = 7.2;
+    game.competitors[1].customers = 180.0;
+    let mut events = Vec::new();
+
+    assert!(game.rival_counteroffensive(&mut events));
+
+    assert!(game.competitors[0].rate_cents.is_finite());
+    assert!(game.competitors[0].rate_cents > 0.0);
+    assert!(game.competitors[0].rate_cents <= 7.2);
+}
+
+#[test]
 fn acquisition_absorbs_target_cash_and_debt() {
     let mut game = Game::with_seed(60);
     game.player.cash = 250_000.0;
@@ -1830,6 +1847,58 @@ fn public_rate_ceiling_still_allows_cuts_from_above_ceiling() {
 
     assert!(
         (game.player.rate_cents - (tolerance + MAX_PUBLIC_RATE_PREMIUM_CENTS + 0.6)).abs() < 0.001
+    );
+}
+
+#[test]
+fn public_rate_tolerance_rises_with_boom_and_strong_service() {
+    let mut game = Game::with_seed(86);
+    let starting_tolerance = public_rate_tolerance(&game.market);
+    game.macro_state.demand_index = 0.62;
+    game.macro_state.annual_base_rate = 0.038;
+    game.macro_state.credit_spread = 0.012;
+    game.macro_state.cost_pressure = -0.012;
+    game.player.reliability = 0.94;
+    for competitor in &mut game.competitors {
+        competitor.reliability = 0.90;
+    }
+    let mut events = Vec::new();
+
+    game.update_public_rate_tolerance(0.0, &mut events);
+
+    assert!(public_rate_tolerance(&game.market) > starting_tolerance + 0.20);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("tolerance improved"))
+    );
+}
+
+#[test]
+fn public_rate_tolerance_falls_with_stress_and_poor_service() {
+    let mut game = Game::with_seed(86);
+    let starting_tolerance = public_rate_tolerance(&game.market);
+    game.macro_state.demand_index = -0.55;
+    game.macro_state.annual_base_rate = 0.10;
+    game.macro_state.credit_spread = 0.06;
+    game.macro_state.cost_pressure = 0.06;
+    game.player.reliability = 0.68;
+    for competitor in &mut game.competitors {
+        competitor.reliability = 0.70;
+    }
+    game.active_shocks.push(ActiveShock {
+        kind: ShockKind::DemandRecession,
+        quarters_remaining: 2,
+    });
+    let mut events = Vec::new();
+
+    game.update_public_rate_tolerance(0.10, &mut events);
+
+    assert!(public_rate_tolerance(&game.market) < starting_tolerance - 0.35);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("tolerance tightened"))
     );
 }
 

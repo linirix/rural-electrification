@@ -38,6 +38,8 @@ const BOARD_CHECKPOINT_QUARTER: u32 = 8;
 const BOARD_CHECKPOINT_SHARE_TARGET: f64 = 0.32;
 const BOARD_CHECKPOINT_REPUTATION_PENALTY: f64 = 3.0;
 const BOARD_CHECKPOINT_EQUITY_FATIGUE: f64 = 0.30;
+const MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = -1.25;
+const MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = 1.35;
 
 mod attribution;
 mod competitors;
@@ -144,6 +146,7 @@ pub struct Market {
     pub baseline_variable_cost_per_mwh: f64,
     pub standard_rate_cents: f64,
     pub civic_patience: f64,
+    pub rate_tolerance_adjustment_cents: f64,
 }
 
 /// Current macro-financing environment that affects debt rates, demand, costs, and valuation.
@@ -328,6 +331,7 @@ impl Game {
             baseline_variable_cost_per_mwh: variable_cost_per_mwh,
             standard_rate_cents,
             civic_patience,
+            rate_tolerance_adjustment_cents: 0.0,
         };
 
         Self {
@@ -938,10 +942,12 @@ impl Game {
             true,
             &mut events,
         );
+        let mut system_demanded_mwh = demanded_mwh_from_finances(&player_finances);
+        let mut system_unmet_mwh = unmet_mwh_from_finances(&player_finances);
         let competitor_count = self.competitors.len();
         for index in 0..competitor_count {
             let competitor = &mut self.competitors[index];
-            settle_utility(
+            let competitor_finances = settle_utility(
                 competitor,
                 &self.market,
                 &self.macro_state,
@@ -949,7 +955,15 @@ impl Game {
                 false,
                 &mut events,
             );
+            system_demanded_mwh += demanded_mwh_from_finances(&competitor_finances);
+            system_unmet_mwh += unmet_mwh_from_finances(&competitor_finances);
         }
+        let system_unmet_demand_ratio = if system_demanded_mwh <= 0.0 {
+            0.0
+        } else {
+            system_unmet_mwh / system_demanded_mwh
+        };
+        self.update_public_rate_tolerance(system_unmet_demand_ratio, &mut events);
 
         self.update_stock_price(&player_finances);
         self.quarter += 1;
@@ -1112,6 +1126,79 @@ impl Game {
         } else {
             Ok(())
         }
+    }
+
+    fn update_public_rate_tolerance(
+        &mut self,
+        system_unmet_demand_ratio: f64,
+        events: &mut Vec<String>,
+    ) {
+        let old_adjustment = self.market.rate_tolerance_adjustment_cents;
+        let reliability = self.weighted_market_reliability();
+        let demand_signal = self.macro_state.demand_index.clamp(-0.60, 0.70) * 0.55;
+        let service_signal = if reliability >= 0.84 && system_unmet_demand_ratio <= 0.012 {
+            ((reliability - 0.84) / 0.10).clamp(0.0, 1.0) * 0.55
+        } else if reliability < 0.78 {
+            -((0.78 - reliability) / 0.18).clamp(0.0, 1.0) * 0.70
+        } else {
+            0.0
+        };
+        let unmet_service_drag = -(system_unmet_demand_ratio * 5.0).clamp(0.0, 0.90);
+        let credit_stress =
+            ((self.macro_state.benchmark_credit_rate() - 0.075).max(0.0) * 4.5).clamp(0.0, 0.55);
+        let cost_stress = (self.macro_state.cost_pressure.max(0.0) * 7.0).clamp(0.0, 0.45);
+        let easy_credit_bonus = if self.macro_state.benchmark_credit_rate() < 0.058 {
+            0.12
+        } else {
+            0.0
+        };
+        let shock_signal = self
+            .active_shocks
+            .iter()
+            .map(|shock| match shock.kind {
+                ShockKind::DemandBoom => 0.25,
+                ShockKind::DemandRecession => -0.35,
+                ShockKind::InputCostShock => -0.20,
+                ShockKind::RateFreeze => -0.25,
+            })
+            .sum::<f64>();
+        let target_adjustment =
+            (demand_signal + service_signal + unmet_service_drag - credit_stress - cost_stress
+                + easy_credit_bonus
+                + shock_signal)
+                .clamp(
+                    MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS,
+                    MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS,
+                );
+        let new_adjustment = (old_adjustment * 0.68 + target_adjustment * 0.32).clamp(
+            MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS,
+            MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS,
+        );
+        self.market.rate_tolerance_adjustment_cents = new_adjustment;
+
+        let delta = new_adjustment - old_adjustment;
+        if delta >= 0.14 {
+            events.push(format!(
+                "Public rate tolerance improved by {:.1}c as demand and service conditions supported higher tariffs.",
+                delta
+            ));
+        } else if delta <= -0.14 {
+            events.push(format!(
+                "Public rate tolerance tightened by {:.1}c under financial stress or weaker service quality.",
+                delta.abs()
+            ));
+        }
+    }
+
+    fn weighted_market_reliability(&self) -> f64 {
+        let mut weighted = self.player.reliability * self.player.customers.max(1.0);
+        let mut total = self.player.customers.max(1.0);
+        for competitor in &self.competitors {
+            let weight = competitor.customers.max(1.0);
+            weighted += competitor.reliability * weight;
+            total += weight;
+        }
+        weighted / total.max(1.0)
     }
 
     fn equity_issuance_base(&self) -> f64 {
@@ -1951,6 +2038,18 @@ fn apply_equipment_fire_damage(utility: &mut Utility, capacity_loss: f64) -> f64
     utility.reliability = (utility.reliability - 0.07).clamp(0.35, 0.98);
     utility.reputation = (utility.reputation - 4.0).clamp(0.0, 100.0);
     lost
+}
+
+fn demanded_mwh_from_finances(finances: &FirmFinances) -> f64 {
+    if finances.unmet_demand_ratio >= 0.999 {
+        finances.served_mwh
+    } else {
+        finances.served_mwh / (1.0 - finances.unmet_demand_ratio).max(0.001)
+    }
+}
+
+fn unmet_mwh_from_finances(finances: &FirmFinances) -> f64 {
+    demanded_mwh_from_finances(finances) * finances.unmet_demand_ratio
 }
 
 pub fn generation_reliability_after_new_capacity(

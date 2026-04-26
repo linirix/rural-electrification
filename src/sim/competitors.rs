@@ -302,6 +302,9 @@ impl Game {
         };
 
         let player_rate = self.player.rate_cents;
+        let market = self.market.clone();
+        let macro_state = self.macro_state.clone();
+        let cost_multiplier = self.cost_shock_multiplier();
         let competitor = &mut self.competitors[index];
         let capital = (12_000.0 + competitor.asset_base * 0.055).clamp(12_000.0, 36_000.0);
         let debt_raise = capital * 0.30;
@@ -314,7 +317,10 @@ impl Game {
         competitor.reliability = (competitor.reliability + 0.018).clamp(0.35, 0.97);
 
         if competitor.rate_cents > player_rate - 0.15 {
-            competitor.rate_cents = (player_rate - 0.20).clamp(8.4, competitor.rate_cents);
+            let defensive_floor =
+                rival_defensive_rate_floor(competitor, &market, &macro_state, cost_multiplier);
+            let target = (player_rate - 0.20).max(defensive_floor).max(0.25);
+            competitor.rate_cents = target.min(competitor.rate_cents);
         }
 
         events.push(format!(

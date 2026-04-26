@@ -220,7 +220,10 @@ fn base_churn_rate_for(
 }
 
 pub fn public_rate_tolerance(market: &Market) -> f64 {
-    market.standard_rate_cents + 2.2 + market.civic_patience * 1.2
+    market.standard_rate_cents
+        + 2.2
+        + market.civic_patience * 1.2
+        + market.rate_tolerance_adjustment_cents
 }
 
 pub(super) fn high_rate_excess(utility: &Utility, market: &Market) -> f64 {
