@@ -1,4 +1,5 @@
 pub mod sim;
+pub mod strategy;
 pub mod terminal;
 
 pub use sim::{
@@ -10,4 +11,7 @@ pub use sim::{
     Market, Outcome, OutcomeKind, Project, ProjectKind, QuarterReport, ShockKind, Utility,
     distribution_project_cost, distribution_project_duration, generation_project_cost,
     generation_project_duration, generation_reliability_after_new_capacity, public_rate_tolerance,
+};
+pub use strategy::{
+    Strategy, StrategySummary, run_strategy_batch, run_strategy_batch_with_observer,
 };
