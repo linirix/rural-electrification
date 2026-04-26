@@ -613,12 +613,12 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
             money(25_000.0)
         )],
         Decision::IssueStock { amount } => vec![format!(
-            "{} issue {}; net proceeds reflect dilution, fees, and current valuation.",
+            "{} issue {}; post-money value reflects discounted pre-money plus net proceeds.",
             muted("Quote:"),
             styled(BOLD_YELLOW, money(*amount))
         )],
         Decision::BuyBackStock { amount } => vec![format!(
-            "{} repurchase request {}; retires float at a premium and reprices remaining shares.",
+            "{} repurchase request {}; post-buyback value reflects transaction value less cash spent.",
             muted("Quote:"),
             styled(BOLD_YELLOW, money(*amount))
         )],

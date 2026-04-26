@@ -21,13 +21,14 @@ const NEW_GENERATION_EQUIPMENT_RELIABILITY: f64 = 0.965;
 const NEW_GENERATION_RELIABILITY_WEIGHT: f64 = 0.35;
 const MAX_GENERATION_RELIABILITY_LIFT: f64 = 0.085;
 const MIN_STOCK_PRICE: f64 = 0.25;
-const FRESH_EQUITY_CASH_MARKET_RECOGNITION: f64 = 0.35;
-const BUYBACK_CASH_MARKET_RECOGNITION: f64 = 0.45;
 const VARIABLE_COST_REVERSION: f64 = 0.14;
 const VARIABLE_COST_PRESSURE_SENSITIVITY: f64 = 2.35;
 const VARIABLE_COST_FLOOR_MULTIPLE: f64 = 0.72;
 const VARIABLE_COST_CEILING_MULTIPLE: f64 = 1.65;
 const MAX_CREDIBLE_RATE_CENTS: f64 = 25.0;
+// Opening scenario guardrails only. Live operating rates use dynamic public-tolerance and cost bounds.
+const MIN_OPENING_RATE_CENTS: f64 = 7.5;
+const MAX_OPENING_RATE_CENTS: f64 = 14.5;
 /// Maximum rate premium above public tolerance that the command layer allows for new increases.
 pub const MAX_PUBLIC_RATE_PREMIUM_CENTS: f64 = 5.0;
 const RECEIVERSHIP_DEBT_TO_ASSETS: f64 = 1.05;
@@ -50,8 +51,9 @@ use competitors::draw_competitor_name;
 #[cfg(test)]
 use competitors::{COMPETITOR_NAME_POOL, StartupEntryReason};
 use economics::{
-    churn_for_market_with_floor, high_rate_excess, maintenance_reliability_gain,
-    maintenance_reputation_gain, positive_amount, settle_utility, weighted_average, weighted_rate,
+    bounded_rate_target, churn_for_market_with_floor, defensive_rate_floor, high_rate_excess,
+    maintenance_reliability_gain, maintenance_reputation_gain, positive_amount, settle_utility,
+    weighted_average, weighted_rate,
 };
 #[cfg(test)]
 use economics::{churn_rate_for, churn_rate_for_market};
@@ -529,7 +531,6 @@ impl Game {
             }
             Decision::IssueStock { amount } => {
                 let amount = positive_amount(amount, "stock issuance")?;
-                let old_market_cap = self.player.market_cap().max(1.0);
                 let old_shares = self.player.shares.max(1.0);
                 let financing_base = self.equity_issuance_base();
                 let pressure = amount / financing_base;
@@ -562,15 +563,13 @@ impl Game {
                 }
                 let underwriting_cost = amount * fee_rate;
                 let net_proceeds = amount - underwriting_cost;
-                let post_money_price = (old_market_cap
-                    + net_proceeds * FRESH_EQUITY_CASH_MARKET_RECOGNITION)
-                    / (old_shares + new_shares);
-                let signal_drag = (effective_pressure * 0.020 + effective_pressure_squared * 0.040)
-                    .clamp(0.0, 0.30);
+                let transaction_pre_money = issue_price * old_shares;
+                let post_money_market_cap = (transaction_pre_money + net_proceeds)
+                    .max((old_shares + new_shares) * MIN_STOCK_PRICE);
                 self.player.cash += net_proceeds;
                 self.player.shares += new_shares;
                 self.player.stock_price =
-                    (post_money_price * (1.0 - signal_drag)).max(MIN_STOCK_PRICE);
+                    (post_money_market_cap / self.player.shares).max(MIN_STOCK_PRICE);
                 self.player.reputation = (self.player.reputation
                     - effective_pressure * 1.5
                     - effective_pressure_squared * 1.5)
@@ -596,9 +595,17 @@ impl Game {
                 let old_market_cap = self.player.market_cap().max(1.0);
                 let old_shares = self.player.shares.max(1.0);
                 let pressure = amount / old_market_cap;
-                let repurchase_premium =
-                    (0.015 + pressure.min(1.6) * 0.085 + pressure.powf(1.20) * 0.012)
-                        .clamp(0.015, 0.30);
+                let remaining_cash_if_filled = self.player.cash - amount.min(self.player.cash);
+                let liquidity_drag = ((8_000.0 - remaining_cash_if_filled).max(0.0) / 8_000.0
+                    * 0.09)
+                    .clamp(0.0, 0.09);
+                let overextension_drag =
+                    ((amount / self.player.cash.max(1.0)) - 0.60).max(0.0) * 0.12;
+                let repurchase_premium = (pressure.min(1.0) * 0.55 + pressure.powf(1.20) * 0.04
+                    - liquidity_drag
+                    - overextension_drag
+                    - self.equity_market_fatigue * 0.45)
+                    .clamp(-0.18, 0.30);
                 let repurchase_price =
                     (self.player.stock_price * (1.0 + repurchase_premium)).max(MIN_STOCK_PRICE);
                 let max_shares = (self.player.shares - 500.0).max(0.0);
@@ -611,21 +618,10 @@ impl Game {
                 let actual_spend = shares_bought * repurchase_price;
                 self.require_cash(actual_spend)?;
                 let remaining_shares = self.player.shares - shares_bought;
-                let remaining_cash = self.player.cash - actual_spend;
                 let float_retired = shares_bought / old_shares;
-                let actual_pressure = actual_spend / old_market_cap;
-                let market_cap_after_cash_use = (old_market_cap
-                    - actual_spend * BUYBACK_CASH_MARKET_RECOGNITION)
+                let transaction_pre_buyback_value = repurchase_price * old_shares;
+                let post_buyback_market_cap = (transaction_pre_buyback_value - actual_spend)
                     .max(remaining_shares * MIN_STOCK_PRICE);
-                let capital_return_signal =
-                    (float_retired * 0.30 + actual_pressure.min(1.0) * 0.04).clamp(0.0, 0.16);
-                let liquidity_drag =
-                    ((8_000.0 - remaining_cash).max(0.0) / 8_000.0 * 0.09).clamp(0.0, 0.09);
-                let overextension_drag =
-                    ((actual_spend / self.player.cash.max(1.0)) - 0.60).max(0.0) * 0.12;
-                let stress_drag = (liquidity_drag + overextension_drag).clamp(0.0, 0.18);
-                let post_buyback_market_cap =
-                    market_cap_after_cash_use * (1.0 + capital_return_signal) * (1.0 - stress_drag);
                 self.player.cash -= actual_spend;
                 self.player.shares = remaining_shares;
                 self.player.stock_price =
@@ -1558,6 +1554,7 @@ impl Game {
 
     fn complete_projects(&mut self, events: &mut Vec<String>) {
         let mut remaining = Vec::new();
+        let cost_multiplier = self.cost_shock_multiplier();
         for mut project in self.pending_projects.drain(..) {
             project.quarters_remaining = project.quarters_remaining.saturating_sub(1);
             if project.quarters_remaining == 0 {
@@ -1623,13 +1620,12 @@ impl Game {
                         );
                         let incumbent_name =
                             draw_competitor_name(&mut self.rng, &used_names, self.startup_index);
-                        let incumbent_rate = (self.market.standard_rate_cents - 0.1
-                            + self.rng.range(-0.35, 0.45))
-                        .clamp(8.4, 13.2);
+                        let incumbent_rate_target =
+                            self.market.standard_rate_cents - 0.1 + self.rng.range(-0.35, 0.45);
                         let incumbent_generation = incumbent_customers
                             * self.market.avg_mwh_per_customer
                             * self.rng.range(1.18, 1.42);
-                        let incumbent = Utility {
+                        let mut incumbent = Utility {
                             name: incumbent_name.clone(),
                             cash: 24_000.0 + self.rng.range(0.0, 8_000.0),
                             debt: 18_000.0 + self.rng.range(0.0, 8_000.0),
@@ -1638,13 +1634,26 @@ impl Game {
                             customers: incumbent_customers,
                             generation_capacity_mwh: incumbent_generation,
                             distribution_capacity: incumbent_customers * self.rng.range(1.20, 1.40),
-                            rate_cents: incumbent_rate,
+                            rate_cents: incumbent_rate_target.max(0.25),
                             reputation: 55.0 + self.rng.range(-4.0, 6.0),
                             reliability: 0.80 + self.rng.range(-0.035, 0.055),
                             marketing_momentum: 0.22,
                             asset_base: 95_000.0 + self.rng.range(0.0, 28_000.0),
                             last_quarter_customers: incumbent_customers,
                         };
+                        let defensive_floor = defensive_rate_floor(
+                            &incumbent,
+                            &self.market,
+                            &self.macro_state,
+                            cost_multiplier,
+                        );
+                        let public_ceiling = public_rate_tolerance(&self.market)
+                            .min(self.market.standard_rate_cents + 2.0);
+                        incumbent.rate_cents = bounded_rate_target(
+                            incumbent_rate_target,
+                            defensive_floor,
+                            public_ceiling,
+                        );
                         self.competitors.push(incumbent);
                         self.adjacent_expansions += 1;
                         events.push(format!(
@@ -2323,7 +2332,8 @@ fn starting_utility(
             .max(20.0),
         distribution_capacity: varied_pct(rng, distribution_capacity, 0.12, initial_variance)
             .max(50.0),
-        rate_cents: varied_abs(rng, rate_cents, 0.35, initial_variance).clamp(7.5, 14.5),
+        rate_cents: varied_abs(rng, rate_cents, 0.35, initial_variance)
+            .clamp(MIN_OPENING_RATE_CENTS, MAX_OPENING_RATE_CENTS),
         reputation: varied_abs(rng, reputation, 6.0, initial_variance).clamp(20.0, 85.0),
         reliability: varied_abs(rng, reliability, 0.045, initial_variance).clamp(0.55, 0.94),
         marketing_momentum: varied_abs(rng, marketing_momentum, 0.025, initial_variance)

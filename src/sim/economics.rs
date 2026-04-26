@@ -126,6 +126,37 @@ pub(super) fn break_even_rate_cents(
     ((operating_cost + interest) / served_mwh / 10.0).max(0.0)
 }
 
+pub(super) fn defensive_rate_floor(
+    utility: &Utility,
+    market: &Market,
+    macro_state: &MacroEnvironment,
+    cost_multiplier: f64,
+) -> f64 {
+    let break_even = break_even_rate_cents(utility, market, macro_state, cost_multiplier);
+    let variable_cost_floor = market.variable_cost_per_mwh / 10.0;
+    (break_even * 0.88)
+        .max(variable_cost_floor * 1.05)
+        .max(0.25)
+}
+
+pub(super) fn bounded_rate_target(target: f64, floor: f64, ceiling: f64) -> f64 {
+    let floor = if floor.is_finite() {
+        floor.max(0.25)
+    } else {
+        0.25
+    };
+    let ceiling = if ceiling.is_finite() {
+        ceiling.max(floor)
+    } else {
+        floor
+    };
+    if target.is_finite() {
+        target.clamp(floor, ceiling)
+    } else {
+        floor
+    }
+}
+
 fn operating_cost_for(
     utility: &Utility,
     market: &Market,

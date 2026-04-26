@@ -101,6 +101,37 @@ fn rival_merger_combines_two_largest_competitors() {
 }
 
 #[test]
+fn rival_merger_respects_low_rate_environment_without_old_floor() {
+    let mut game = Game::with_seed(33);
+    game.market.standard_rate_cents = 5.2;
+    game.market.variable_cost_per_mwh = 12.0;
+    game.market.baseline_variable_cost_per_mwh = 12.0;
+    game.macro_state.annual_base_rate = 0.035;
+    game.macro_state.credit_spread = 0.008;
+    game.competitors[0].customers = 420.0;
+    game.competitors[0].rate_cents = 5.4;
+    game.competitors[0].asset_base = 65_000.0;
+    game.competitors[1].customers = 360.0;
+    game.competitors[1].rate_cents = 5.2;
+    game.competitors[1].asset_base = 60_000.0;
+    game.competitors[2].customers = 90.0;
+    let mut events = Vec::new();
+
+    assert!(game.merge_largest_rivals(&mut events));
+
+    let merged_rate = game
+        .competitors
+        .iter()
+        .find(|competitor| competitor.customers > 700.0)
+        .map(|competitor| competitor.rate_cents)
+        .expect("expected merged competitor");
+    assert!(
+        merged_rate < 8.4,
+        "merged rival should not inherit the old 8.4c floor; rate was {merged_rate}"
+    );
+}
+
+#[test]
 fn default_initial_variance_stays_within_playable_bounds() {
     for seed in 1..=250 {
         let game = Game::with_seed_and_initial_variance(seed, InitialVariance::default());
@@ -303,8 +334,33 @@ fn large_stock_issue_does_not_add_full_cash_to_market_cap() {
 
     assert!(cash_gain > 90_000.0);
     assert!(
-        market_cap_gain < cash_gain * 0.65,
-        "market cap gain {market_cap_gain} should stay well below cash gain {cash_gain}"
+        market_cap_gain < cash_gain,
+        "market cap gain {market_cap_gain} should stay below net cash gain {cash_gain} because the issue reprices pre-money equity"
+    );
+}
+
+#[test]
+fn stock_issuance_uses_pre_and_post_money_valuation() {
+    let mut game = Game::with_seed(14);
+    let starting_cash = game.player.cash;
+    let starting_shares = game.player.shares;
+    let amount = 45_000.0;
+
+    game.apply_decision(Decision::IssueStock { amount })
+        .unwrap();
+
+    let issued_shares = game.player.shares - starting_shares;
+    let issue_price = amount / issued_shares;
+    let implied_pre_money = issue_price * starting_shares;
+    let net_proceeds = game.player.cash - starting_cash;
+    let expected_post_money = implied_pre_money + net_proceeds;
+
+    assert!(issued_shares > 0.0);
+    assert!(
+        (game.player.market_cap() - expected_post_money).abs() < 0.01,
+        "post-money market cap should equal implied pre-money plus net proceeds: actual {}, expected {}",
+        game.player.market_cap(),
+        expected_post_money
     );
 }
 
@@ -402,6 +458,58 @@ fn material_buyback_lifts_per_share_price_without_lifting_market_cap() {
     assert!(
         game.player.market_cap() < starting_market_cap,
         "buybacks should not create total market-cap value from cash spend"
+    );
+}
+
+#[test]
+fn stock_buyback_uses_reverse_post_money_valuation() {
+    let mut game = Game::with_seed(10);
+    game.player.cash = 100_000.0;
+    let starting_cash = game.player.cash;
+    let starting_shares = game.player.shares;
+    let amount = game.player.market_cap() * 0.12;
+
+    game.apply_decision(Decision::BuyBackStock { amount })
+        .unwrap();
+
+    let shares_bought = starting_shares - game.player.shares;
+    let actual_spend = starting_cash - game.player.cash;
+    let repurchase_price = actual_spend / shares_bought;
+    let implied_pre_buyback_value = repurchase_price * starting_shares;
+    let expected_post_buyback_value = implied_pre_buyback_value - actual_spend;
+
+    assert!(shares_bought > 0.0);
+    assert!(
+        (game.player.market_cap() - expected_post_buyback_value).abs() < 0.01,
+        "post-buyback market cap should equal transaction value less cash spent: actual {}, expected {}",
+        game.player.market_cap(),
+        expected_post_buyback_value
+    );
+}
+
+#[test]
+fn issue_then_buyback_roundtrip_loses_value_to_discount_and_fees() {
+    let mut game = Game::with_seed(10);
+    game.player.cash = 100_000.0;
+    let starting_cash = game.player.cash;
+    let starting_market_cap = game.player.market_cap();
+    let starting_shares = game.player.shares;
+
+    game.apply_decision(Decision::IssueStock { amount: 20_000.0 })
+        .unwrap();
+    game.apply_decision(Decision::BuyBackStock { amount: 20_000.0 })
+        .unwrap();
+
+    assert!(game.player.cash < starting_cash);
+    assert!(
+        game.player.market_cap() < starting_market_cap * 1.02,
+        "roundtrip should not manufacture market cap: {} -> {}",
+        starting_market_cap,
+        game.player.market_cap()
+    );
+    assert!(
+        game.player.shares > starting_shares,
+        "roundtrip should leave dilution when stock is issued at a discount and repurchased through the market"
     );
 }
 
@@ -1016,6 +1124,36 @@ fn adjacent_expansion_completion_opens_market_and_adds_incumbent() {
 }
 
 #[test]
+fn adjacent_incumbent_rate_uses_current_market_not_old_floor() {
+    let mut game = eligible_adjacent_expansion_game();
+    game.market.standard_rate_cents = 5.0;
+    game.market.variable_cost_per_mwh = 12.0;
+    game.market.baseline_variable_cost_per_mwh = 12.0;
+    game.macro_state.annual_base_rate = 0.035;
+    game.macro_state.credit_spread = 0.008;
+    let starting_competitors = game.competitors.len();
+    let mut events = Vec::new();
+
+    game.pending_projects.push(Project {
+        name: "adjacent territory entry".to_string(),
+        kind: ProjectKind::AdjacentTerritory {
+            addressable_customers: ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS,
+            initial_customers: ADJACENT_EXPANSION_INITIAL_CUSTOMERS,
+            incumbent_customers: ADJACENT_EXPANSION_INCUMBENT_CUSTOMERS,
+        },
+        quarters_remaining: 1,
+    });
+
+    game.complete_projects(&mut events);
+
+    let incumbent_rate = game.competitors[starting_competitors].rate_cents;
+    assert!(
+        incumbent_rate < 8.4,
+        "adjacent incumbent should not inherit the old 8.4c floor; rate was {incumbent_rate}"
+    );
+}
+
+#[test]
 fn adjacent_expansion_cannot_be_started_twice() {
     let mut game = eligible_adjacent_expansion_game();
 
@@ -1333,6 +1471,48 @@ fn rival_counteroffensive_handles_rates_below_old_floor() {
     assert!(game.competitors[0].rate_cents.is_finite());
     assert!(game.competitors[0].rate_cents > 0.0);
     assert!(game.competitors[0].rate_cents <= 7.2);
+}
+
+#[test]
+fn low_rate_extended_market_advances_without_rate_bound_panic() {
+    let mut game = Game::with_seed(91);
+    game.review_completed = true;
+    game.quarter = 28;
+    game.market.standard_rate_cents = 4.0;
+    game.market.rate_tolerance_adjustment_cents = 0.4;
+    game.market.variable_cost_per_mwh = 12.0;
+    game.market.baseline_variable_cost_per_mwh = 12.0;
+    game.macro_state.annual_base_rate = 0.035;
+    game.macro_state.credit_spread = 0.008;
+    game.player.cash = 220_000.0;
+    game.player.debt = 55_000.0;
+    game.player.asset_base = 360_000.0;
+    game.player.customers = 1_100.0;
+    game.player.generation_capacity_mwh = 3_300.0;
+    game.player.distribution_capacity = 1_650.0;
+    game.player.rate_cents = 5.0;
+    game.player.reliability = 0.91;
+    game.player.reputation = 76.0;
+    for (index, competitor) in game.competitors.iter_mut().enumerate() {
+        competitor.cash = 85_000.0;
+        competitor.debt = 25_000.0;
+        competitor.asset_base = 95_000.0;
+        competitor.customers = 240.0 + index as f64 * 70.0;
+        competitor.generation_capacity_mwh = competitor.customers * 2.4;
+        competitor.distribution_capacity = competitor.customers * 1.35;
+        competitor.rate_cents = 6.2 + index as f64 * 0.2;
+        competitor.reliability = 0.84;
+        competitor.reputation = 58.0;
+    }
+
+    for _ in 0..12 {
+        game.advance_quarter();
+        assert!(game.player.rate_cents.is_finite());
+        for competitor in &game.competitors {
+            assert!(competitor.rate_cents.is_finite());
+            assert!(competitor.rate_cents > 0.0);
+        }
+    }
 }
 
 #[test]
@@ -2197,6 +2377,31 @@ fn competitors_can_defend_below_former_rate_floor_without_chasing_zero() {
     assert!(
         ending_rate > break_even * 0.80,
         "rival should not chase a zero-rate price war; ended at {ending_rate}, break-even {break_even}"
+    );
+}
+
+#[test]
+fn competitors_can_raise_above_old_fixed_ceiling_when_public_tolerance_supports_it() {
+    let mut game = Game::with_seed(97);
+    game.market.standard_rate_cents = 14.5;
+    game.market.civic_patience = 0.90;
+    game.market.rate_tolerance_adjustment_cents = 1.0;
+    game.player.rate_cents = 15.4;
+    game.player.customers = 800.0;
+    game.competitors[0].rate_cents = 13.45;
+    game.competitors[0].customers = 500.0;
+    game.competitors[0].last_quarter_customers = 500.0;
+    game.competitors[0].distribution_capacity = 510.0;
+    game.competitors[0].generation_capacity_mwh =
+        game.competitors[0].customers * game.market.avg_mwh_per_customer * 1.01;
+    let mut events = Vec::new();
+
+    game.competitor_plans(&mut events);
+
+    assert!(
+        game.competitors[0].rate_cents > 13.5,
+        "rival rate should not be capped by the old fixed 13.5c ceiling; ended at {}",
+        game.competitors[0].rate_cents
     );
 }
 

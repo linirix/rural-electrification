@@ -1,4 +1,4 @@
-use super::economics::break_even_rate_cents;
+use super::economics::{bounded_rate_target, defensive_rate_floor};
 use super::{
     Game, MacroEnvironment, Market, Rng, Utility, high_rate_excess, maintenance_reliability_gain,
     public_rate_tolerance,
@@ -53,19 +53,16 @@ impl Game {
             return;
         }
 
-        let undercut = match reason {
-            StartupEntryReason::ConcentratedMarket => (market_avg_rate - 0.7).clamp(8.4, 12.8),
+        let raw_rate_target = match reason {
+            StartupEntryReason::ConcentratedMarket => market_avg_rate - 0.7,
             StartupEntryReason::HighRates => {
-                let target = if high_rate_excess(&self.player, &self.market) > 0.75 {
+                if high_rate_excess(&self.player, &self.market) > 0.75 {
                     self.player.rate_cents - 1.2
                 } else {
                     market_avg_rate - 0.8
-                };
-                target.clamp(8.5, 12.9)
+                }
             }
-            StartupEntryReason::StagnantMarket => {
-                (self.market.standard_rate_cents - 0.4).clamp(8.6, 11.6)
-            }
+            StartupEntryReason::StagnantMarket => self.market.standard_rate_cents - 0.4,
         };
         self.startup_index += 1;
         let mut used_names = vec![self.player.name.clone()];
@@ -85,7 +82,7 @@ impl Game {
             }
         };
         let starting_customers = (30.0 + self.rng.range(0.0, 25.0)) * scale;
-        let startup = Utility {
+        let mut startup = Utility {
             name: name.clone(),
             cash: 6_000.0 + self.rng.range(0.0, 2_500.0) * scale,
             debt: 3_500.0 + self.rng.range(0.0, 2_000.0),
@@ -94,7 +91,7 @@ impl Game {
             customers: starting_customers,
             generation_capacity_mwh: (26.0 + self.rng.range(0.0, 14.0)) * scale,
             distribution_capacity: (90.0 + self.rng.range(0.0, 40.0)) * scale,
-            rate_cents: undercut,
+            rate_cents: raw_rate_target.max(0.25),
             reputation: 47.0 + self.rng.range(0.0, 6.0) + if scale > 1.0 { 2.5 } else { 0.0 },
             reliability: 0.74 + self.rng.range(0.0, 0.05) + if scale > 1.0 { 0.02 } else { 0.0 },
             marketing_momentum: 0.10
@@ -106,6 +103,16 @@ impl Game {
             asset_base: (22_000.0 + self.rng.range(0.0, 5_000.0)) * scale,
             last_quarter_customers: starting_customers,
         };
+        let defensive_floor = defensive_rate_floor(
+            &startup,
+            &self.market,
+            &self.macro_state,
+            self.cost_shock_multiplier(),
+        );
+        let public_ceiling =
+            public_rate_tolerance(&self.market).min(self.market.standard_rate_cents + 2.0);
+        startup.rate_cents = bounded_rate_target(raw_rate_target, defensive_floor, public_ceiling);
+        let undercut = startup.rate_cents;
         self.competitors.push(startup);
         events.push(format!(
             "{} {} at {:.1}c/kWh.",
@@ -266,13 +273,23 @@ impl Game {
             customers: combined_customers * 0.99,
             generation_capacity_mwh: total_generation * 0.97,
             distribution_capacity: (a.distribution_capacity + b.distribution_capacity) * 0.98,
-            rate_cents: (weighted_rate - 0.25).clamp(8.4, 13.2),
+            rate_cents: weighted_rate,
             reputation: (weighted_reputation + 4.0).clamp(0.0, 100.0),
             reliability: (weighted_reliability + 0.015).clamp(0.35, 0.96),
             marketing_momentum: a.marketing_momentum + b.marketing_momentum + 0.20,
             asset_base: (a.asset_base + b.asset_base) * 0.94,
             last_quarter_customers: combined_customers,
         };
+        let defensive_floor = defensive_rate_floor(
+            &merged,
+            &self.market,
+            &self.macro_state,
+            self.cost_shock_multiplier(),
+        );
+        let public_ceiling = public_rate_tolerance(&self.market).min(weighted_rate + 1.5);
+        let mut merged = merged;
+        merged.rate_cents =
+            bounded_rate_target(weighted_rate - 0.25, defensive_floor, public_ceiling);
         self.competitors.push(merged);
         events.push(format!(
             "{name} formed from {a_name} and {b_name}, creating a stronger rival to challenge Metro's lead."
@@ -318,7 +335,7 @@ impl Game {
 
         if competitor.rate_cents > player_rate - 0.15 {
             let defensive_floor =
-                rival_defensive_rate_floor(competitor, &market, &macro_state, cost_multiplier);
+                defensive_rate_floor(competitor, &market, &macro_state, cost_multiplier);
             let target = (player_rate - 0.20).max(defensive_floor).max(0.25);
             competitor.rate_cents = target.min(competitor.rate_cents);
         }
@@ -407,12 +424,14 @@ impl Game {
         let near_capacity =
             competitor.capacity_headroom(&context.market) < competitor.customers * 0.06;
 
-        let defensive_floor = rival_defensive_rate_floor(
+        let defensive_floor = defensive_rate_floor(
             competitor,
             &context.market,
             &context.macro_state,
             context.cost_multiplier,
         );
+        let dynamic_ceiling =
+            (public_rate_tolerance(&context.market) + 2.0).max(defensive_floor + 0.30);
         if lost_share && player_undercutting && competitor.rate_cents > defensive_floor + 0.05 {
             let target = (context.player_rate + 0.35).max(defensive_floor);
             let cut = 0.4_f64.min((competitor.rate_cents - target).max(0.0));
@@ -426,9 +445,9 @@ impl Game {
         } else if !context.rate_frozen
             && player_premium_pricing
             && near_capacity
-            && competitor.rate_cents < 13.4
+            && competitor.rate_cents < dynamic_ceiling - 0.05
         {
-            let raise = 0.3_f64.min(13.5 - competitor.rate_cents);
+            let raise = 0.3_f64.min((dynamic_ceiling - competitor.rate_cents).max(0.0));
             if raise > 0.0 {
                 competitor.rate_cents += raise;
                 return Some(format!(
@@ -556,19 +575,6 @@ fn competitor_lost_share(competitor: &Utility, context: &CompetitorPlanContext) 
     let share_now = competitor.customers / context.total_now;
     let share_last = competitor.last_quarter_customers / context.total_last;
     competitor.last_quarter_customers > 0.0 && share_now < share_last - 0.005
-}
-
-fn rival_defensive_rate_floor(
-    competitor: &Utility,
-    market: &super::Market,
-    macro_state: &super::MacroEnvironment,
-    cost_multiplier: f64,
-) -> f64 {
-    let break_even = break_even_rate_cents(competitor, market, macro_state, cost_multiplier);
-    let variable_cost_floor = market.variable_cost_per_mwh / 10.0;
-    (break_even * 0.88)
-        .max(variable_cost_floor * 1.05)
-        .max(0.25)
 }
 
 fn startup_entry_message(reason: StartupEntryReason) -> &'static str {
