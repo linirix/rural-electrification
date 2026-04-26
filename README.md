@@ -1,4 +1,4 @@
-# more corgi's Rural Electrification!
+# Electrification
 
 A terminal-first economic and management simulator about running a small electric utility in a newly expanding power market.
 
@@ -21,17 +21,23 @@ build gen 300
 build lines
 build lines 500
 marketing 4000
-stock 20000
+issue 20000
 stock issue 20000
 buyback 10000
 stock buyback 10000
-debt 20000
+borrow 20000
+borrow max
 repay 10000
+repay max
 debt repay 10000
+rate 10.0
 rate up 2
 rate down 1
 maint 4500
 buy 1
+preview borrow 10000 buy 3
+rivals
+board
 n
 help
 quit
@@ -39,11 +45,12 @@ quit
 
 Capital action limits:
 
-- `stock issue [amount]` has no fixed proceeds cap. Larger issues are possible, but they face steeper issue discounts, fees, dilution, and reputation pressure.
+- `issue [amount]` has no fixed proceeds cap. Larger issues are possible, but they face steeper issue discounts, fees, dilution, reputation pressure, and equity-market fatigue.
 - `buyback [amount]` has no fixed command cap, but it cannot spend cash you do not have and cannot retire the last public float.
-- `debt [amount]` is floating-rate and limited by borrowing room, which is based on the asset base, current debt, and current credit conditions.
-- `repay [amount]` is limited by cash on hand and outstanding debt.
+- `borrow [amount|max]` is floating-rate and limited by borrowing room, which is based on the asset base, current debt, and current credit conditions.
+- `repay [amount|max]` is limited by cash on hand and outstanding debt.
 - `maintenance [amount]` has diminishing reliability and reputation impact as the asset base grows, so larger systems need larger maintenance budgets.
+- `stock issue`, `stock buyback`, `debt`, and `debt repay` remain supported aliases.
 
 Macroeconomic inputs change each quarter. Base rates, credit spreads, demand conditions, and cost pressure affect debt service, borrowing room, growth, operating costs, and equity financing appetite. Higher leverage now raises the annual floating rate paid on outstanding debt, so leveraged firms are more exposed when credit tightens.
 

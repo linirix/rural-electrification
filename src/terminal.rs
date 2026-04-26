@@ -168,19 +168,26 @@ fn apply(game: &mut Game, decision: Decision) -> CommandResult {
     }
 }
 
-fn borrow_amount(game: &Game, value: Option<&str>) -> f64 {
+fn money_amount(value: Option<&str>, default: f64, usage: &str) -> Result<f64, String> {
     match value {
-        Some("max") => game.borrowing_room(),
-        Some(value) => parse_money(value).unwrap_or(20_000.0),
-        None => 20_000.0,
+        Some(value) => parse_money(value).ok_or_else(|| format!("Use '{usage}'.")),
+        None => Ok(default),
     }
 }
 
-fn repay_amount(game: &Game, value: Option<&str>) -> f64 {
+fn borrow_amount(game: &Game, value: Option<&str>) -> Result<f64, String> {
     match value {
-        Some("max") => game.player.debt.min(game.player.cash),
-        Some(value) => parse_money(value).unwrap_or(10_000.0),
-        None => 10_000.0,
+        Some("max") => Ok(game.borrowing_room()),
+        Some(value) => parse_money(value).ok_or_else(|| "Use 'borrow [amount|max]'.".to_string()),
+        None => Ok(20_000.0),
+    }
+}
+
+fn repay_amount(game: &Game, value: Option<&str>) -> Result<f64, String> {
+    match value {
+        Some("max") => Ok(game.player.debt.min(game.player.cash)),
+        Some(value) => parse_money(value).ok_or_else(|| "Use 'repay [amount|max]'.".to_string()),
+        None => Ok(10_000.0),
     }
 }
 
@@ -220,32 +227,21 @@ fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, String> {
             _ => Err("Build what? Try 'build gen [MWh]' or 'build lines [customers]'.".to_string()),
         },
         "marketing" | "market" | "advertise" => {
-            let spend = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(4_000.0);
+            let spend = money_amount(parts.get(1).copied(), 4_000.0, "marketing [amount]")?;
             Ok(Decision::Marketing { spend })
         }
         "issue" => {
-            let amount = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(20_000.0);
+            let amount = money_amount(parts.get(1).copied(), 20_000.0, "issue [amount]")?;
             Ok(Decision::IssueStock { amount })
         }
         "stock" | "equity" => match parts.get(1).copied() {
             Some("issue" | "sell") => {
-                let amount = parts
-                    .get(2)
-                    .and_then(|value| parse_money(value))
-                    .unwrap_or(20_000.0);
+                let amount = money_amount(parts.get(2).copied(), 20_000.0, "stock issue [amount]")?;
                 Ok(Decision::IssueStock { amount })
             }
             Some("buyback" | "repurchase" | "buy") => {
-                let amount = parts
-                    .get(2)
-                    .and_then(|value| parse_money(value))
-                    .unwrap_or(10_000.0);
+                let amount =
+                    money_amount(parts.get(2).copied(), 10_000.0, "stock buyback [amount]")?;
                 Ok(Decision::BuyBackStock { amount })
             }
             Some(value) if parse_money(value).is_some() => {
@@ -258,22 +254,19 @@ fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, String> {
             _ => Ok(Decision::IssueStock { amount: 20_000.0 }),
         },
         "buyback" | "repurchase" => {
-            let amount = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(10_000.0);
+            let amount = money_amount(parts.get(1).copied(), 10_000.0, "buyback [amount]")?;
             Ok(Decision::BuyBackStock { amount })
         }
         "debt" | "borrow" | "loan" => {
             if first == "debt" && matches!(parts.get(1).copied(), Some("repay" | "pay" | "down")) {
-                let amount = repay_amount(game, parts.get(2).copied());
+                let amount = repay_amount(game, parts.get(2).copied())?;
                 return Ok(Decision::RepayDebt { amount });
             }
-            let amount = borrow_amount(game, parts.get(1).copied());
+            let amount = borrow_amount(game, parts.get(1).copied())?;
             Ok(Decision::Borrow { amount })
         }
         "repay" | "paydown" => {
-            let amount = repay_amount(game, parts.get(1).copied());
+            let amount = repay_amount(game, parts.get(1).copied())?;
             Ok(Decision::RepayDebt { amount })
         }
         "buy" | "acquire" => {
@@ -301,10 +294,7 @@ fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, String> {
             Ok(Decision::AdjustRate { delta_cents: delta })
         }
         "maintenance" | "maint" | "maintain" | "reliability" => {
-            let spend = parts
-                .get(1)
-                .and_then(|value| parse_money(value))
-                .unwrap_or(4_500.0);
+            let spend = money_amount(parts.get(1).copied(), 4_500.0, "maintenance [amount]")?;
             Ok(Decision::Maintenance { spend })
         }
         _ => Err(format!("Unknown command '{first}'. Type 'help'.")),
@@ -435,7 +425,7 @@ fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
             }
             if parts
                 .get(2)
-                .is_some_and(|value| parse_number(value).is_some())
+                .is_some_and(|value| !is_preview_action_start(value))
             {
                 length = 3;
             }
@@ -443,12 +433,12 @@ fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
         }
         "marketing" | "market" | "advertise" | "issue" | "buyback" | "repurchase"
         | "maintenance" | "maint" | "maintain" | "reliability" => {
-            Ok(1 + optional_money_argument(parts.get(1).copied()))
+            Ok(1 + optional_command_argument(parts.get(1).copied()))
         }
-        "repay" | "paydown" => Ok(1 + optional_money_or_max_argument(parts.get(1).copied())),
+        "repay" | "paydown" => Ok(1 + optional_command_argument(parts.get(1).copied())),
         "stock" | "equity" => match parts.get(1).copied() {
             Some("issue" | "sell" | "buyback" | "repurchase" | "buy") => {
-                Ok(2 + optional_money_argument(parts.get(2).copied()))
+                Ok(2 + optional_command_argument(parts.get(2).copied()))
             }
             Some(value) if parse_money(value).is_some() => Ok(2),
             Some(value) if is_preview_action_start(value) => Ok(1),
@@ -457,14 +447,14 @@ fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
         },
         "debt" => match parts.get(1).copied() {
             Some("repay" | "pay" | "down") => {
-                Ok(2 + optional_money_or_max_argument(parts.get(2).copied()))
+                Ok(2 + optional_command_argument(parts.get(2).copied()))
             }
             Some(value) if is_money_or_max_argument(value) => Ok(2),
             Some(value) if is_preview_action_start(value) => Ok(1),
             Some(_) => Ok(2),
             None => Ok(1),
         },
-        "borrow" | "loan" => Ok(1 + optional_money_or_max_argument(parts.get(1).copied())),
+        "borrow" | "loan" => Ok(1 + optional_command_argument(parts.get(1).copied())),
         "buy" | "acquire" => Ok(if parts.get(1).is_some() { 2 } else { 1 }),
         "rate" => match parts.get(1).copied() {
             Some("up" | "down" | "+" | "-") => {
@@ -479,15 +469,9 @@ fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
     }
 }
 
-fn optional_money_argument(value: Option<&str>) -> usize {
+fn optional_command_argument(value: Option<&str>) -> usize {
     value
-        .filter(|value| parse_money(value).is_some())
-        .map_or(0, |_| 1)
-}
-
-fn optional_money_or_max_argument(value: Option<&str>) -> usize {
-    value
-        .filter(|value| is_money_or_max_argument(value))
+        .filter(|value| !is_preview_action_start(value))
         .map_or(0, |_| 1)
 }
 
@@ -614,7 +598,7 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
                     .acquisition_terms(*competitor_index)
                     .expect("competitor exists for acquisition quote");
                 vec![format!(
-                    "{} buy {} for {}; net cash {}, assumes debt {}, adds {:.0} customers.",
+                    "{} buy {} for {}; net cost {}, assumes debt {}, adds {:.0} customers.",
                     muted("Quote:"),
                     styled(BOLD, shorten_plain(&competitor.name, 16)),
                     styled(BOLD_YELLOW, money(terms.price)),
@@ -862,10 +846,10 @@ fn print_help() {
             "build gen [MWh]".to_string(),
             "build lines [customers]".to_string(),
             "marketing [amount]".to_string(),
-            "maintenance [amount]  alias: maint".to_string(),
-            "rate up|down [cents]".to_string(),
-            "rate 10.0             set target".to_string(),
-            "preview <command>     inspect first".to_string(),
+            "maint [amount]       maintenance".to_string(),
+            "rate 10.0            set target".to_string(),
+            "rate up|down [cents] adjust rate".to_string(),
+            "preview <command>    inspect first".to_string(),
         ],
         "Capital",
         &[
@@ -873,28 +857,29 @@ fn print_help() {
             "buyback [amount]     repurchase shares".to_string(),
             "borrow [amount|max]  raise debt".to_string(),
             "repay [amount|max]   pay debt down".to_string(),
-            "buy <number>          acquire rival".to_string(),
-            "stock / debt forms remain aliases".to_string(),
+            "buy <number>         acquire rival".to_string(),
+            "stock issue/buyback  aliases".to_string(),
+            "debt / debt repay    aliases".to_string(),
         ],
     );
     print_box_pair(
         "Navigation",
         &[
-            "status     show dashboard".to_string(),
-            "rivals     competitor and M&A terms".to_string(),
-            "board      objectives and milestones".to_string(),
-            "quote      alias for preview".to_string(),
-            "help       command reference".to_string(),
-            "next       finish quarter".to_string(),
-            "n          finish quarter".to_string(),
-            "continue   keep playing after review".to_string(),
-            "quit       leave game".to_string(),
+            "status / s     show dashboard".to_string(),
+            "rivals         competitor detail".to_string(),
+            "board          objectives".to_string(),
+            "preview/quote  inspect command".to_string(),
+            "next / n / end finish quarter".to_string(),
+            "continue       post-review play".to_string(),
+            "help / ?       command reference".to_string(),
+            "quit / exit    leave game".to_string(),
         ],
         "Input Notes",
         &[
             "Money accepts 20000 or 20k.".to_string(),
+            "Invalid amounts are rejected.".to_string(),
             "Build sizes are clamped to sane bounds.".to_string(),
-            "Rate changes are in cents per kWh.".to_string(),
+            "Rates above 25c are rejected.".to_string(),
             "Use the dashboard guide for live costs.".to_string(),
         ],
     );
@@ -1809,7 +1794,7 @@ fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> Vec<String> 
         "   {} {}   {} {}   {} {}",
         muted("M&A price"),
         styled(BOLD_YELLOW, money(terms.price)),
-        muted("net cash"),
+        muted("net cost"),
         styled(cash_tone(terms.post_cash), money(terms.net_cash_cost)),
         muted("assume debt"),
         styled(YELLOW, money(terms.assumed_debt))
@@ -2179,6 +2164,13 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
             "reliability gain scales down as the asset base grows",
         ),
         action_line(
+            format!("rate {:.1}", game.market.standard_rate_cents),
+            format!(
+                "set target; public tolerance near {:.1}c",
+                public_rate_tolerance(&game.market)
+            ),
+        ),
+        action_line(
             "borrow [amt|max]",
             format!(
                 "{} available at {} floating",
@@ -2221,7 +2213,7 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
             lines.push(action_line(
                 format!("buy {}", index + 1),
                 format!(
-                    "{} cash plus assumed debt; immediate customers/capacity",
+                    "{} cash plus debt; integration strain follows",
                     styled(BOLD_YELLOW, money(price))
                 ),
             ));
@@ -2769,7 +2761,7 @@ mod tests {
         let lines = rival_detail_lines(&game);
 
         assert!(lines.iter().any(|line| line.contains("M&A price")));
-        assert!(lines.iter().any(|line| line.contains("net cash")));
+        assert!(lines.iter().any(|line| line.contains("net cost")));
         assert!(lines.iter().any(|line| line.contains("assume debt")));
         assert!(lines.iter().any(|line| line.contains("post debt/assets")));
         assert!(
@@ -2818,6 +2810,35 @@ mod tests {
 
         assert!(game.player.cash > starting_cash);
         assert!(game.player.shares > starting_shares);
+    }
+
+    #[test]
+    fn invalid_money_amounts_are_rejected_without_defaulting() {
+        let mut game = Game::with_seed(118);
+        let starting_cash = game.player.cash;
+        let starting_debt = game.player.debt;
+
+        match handle_command(&mut game, "borrow bananas") {
+            CommandResult::Continue(message) => assert!(message.contains("borrow [amount|max]")),
+            _ => panic!("invalid borrow amount should return an error message"),
+        }
+
+        assert_eq!(game.player.cash, starting_cash);
+        assert_eq!(game.player.debt, starting_debt);
+    }
+
+    #[test]
+    fn preview_invalid_money_amount_stays_with_failing_command() {
+        let mut game = Game::with_seed(119);
+
+        match handle_command(&mut game, "preview issue bananas borrow 1000") {
+            CommandResult::Preview(lines) => {
+                assert!(lines.iter().any(|line| line.contains("Cannot preview")));
+                assert!(lines.iter().any(|line| line.contains("issue [amount]")));
+                assert!(!lines.iter().any(|line| line.contains("Step 2")));
+            }
+            _ => panic!("invalid preview amount should show preview error"),
+        }
     }
 
     #[test]
