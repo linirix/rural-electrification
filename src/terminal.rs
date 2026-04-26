@@ -678,11 +678,20 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
             }
             lines
         }
-        Decision::Maintenance { spend } => vec![format!(
-            "{} {} maintenance; immediate reliability gain with scale diminishing returns.",
-            muted("Quote:"),
-            styled(BOLD_YELLOW, money(*spend))
-        )],
+        Decision::Maintenance { spend } => {
+            if game.player.reliability >= 0.9795 {
+                vec![format!(
+                    "{} reliability is already at 98%; maintenance would not be accepted.",
+                    styled(BOLD_RED, "Quote:")
+                )]
+            } else {
+                vec![format!(
+                    "{} {} maintenance; immediate reliability gain with scale diminishing returns.",
+                    muted("Quote:"),
+                    styled(BOLD_YELLOW, money(*spend))
+                )]
+            }
+        }
     }
 }
 
@@ -3212,6 +3221,24 @@ mod tests {
 
         assert_eq!(game.player.cash, starting_cash);
         assert_eq!(game.player.reliability, starting_reliability);
+    }
+
+    #[test]
+    fn preview_maintenance_at_cap_fails_without_mutating_game() {
+        let mut game = Game::with_seed(106);
+        game.player.reliability = 0.98;
+        let starting_cash = game.player.cash;
+
+        match handle_command(&mut game, "preview maint 4500") {
+            CommandResult::Preview(lines) => {
+                assert!(lines.iter().any(|line| line.contains("already at 98%")));
+                assert!(lines.iter().any(|line| line.contains("Would fail")));
+            }
+            _ => panic!("preview maint should show preview output"),
+        }
+
+        assert_eq!(game.player.cash, starting_cash);
+        assert_eq!(game.player.reliability, 0.98);
     }
 
     #[test]

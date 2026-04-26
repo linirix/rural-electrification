@@ -8,6 +8,7 @@ use super::{
 
 const SERVICE_REPUTATION_RELIABILITY_THRESHOLD: f64 = 0.84;
 const SERVICE_REPUTATION_UTILIZATION_LIMIT: f64 = 0.82;
+const MIN_REPUTATION_EVENT_POINTS: f64 = 0.05;
 
 pub(super) fn maintenance_reliability_gain(utility: &Utility, spend: f64) -> f64 {
     (spend / 22_000.0)
@@ -86,11 +87,13 @@ pub(super) fn settle_utility(
 
     let service_reputation_gain = service_reputation_gain(utility, market, unmet_demand_ratio);
     if service_reputation_gain > 0.0 {
-        utility.reputation = (utility.reputation + service_reputation_gain).clamp(0.0, 100.0);
-        if is_player {
+        let old_reputation = utility.reputation;
+        utility.reputation = (old_reputation + service_reputation_gain).clamp(0.0, 100.0);
+        let actual_gain = utility.reputation - old_reputation;
+        if is_player && actual_gain >= MIN_REPUTATION_EVENT_POINTS {
             events.push(format!(
                 "Reliable service with manageable utilization lifted Metro's reputation by {:.1} points.",
-                service_reputation_gain
+                actual_gain
             ));
         }
     }

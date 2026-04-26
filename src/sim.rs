@@ -23,6 +23,8 @@ const VARIABLE_COST_PRESSURE_SENSITIVITY: f64 = 2.35;
 const VARIABLE_COST_FLOOR_MULTIPLE: f64 = 0.72;
 const VARIABLE_COST_CEILING_MULTIPLE: f64 = 1.65;
 const MAX_CREDIBLE_RATE_CENTS: f64 = 25.0;
+const MAX_RELIABILITY: f64 = 0.98;
+const MIN_MAINTENANCE_RELIABILITY_GAIN: f64 = 0.0005;
 const DILIGENCE_DURATION_QUARTERS: u32 = 3;
 
 mod attribution;
@@ -95,6 +97,7 @@ pub struct ActiveShock {
 pub struct DiligenceReport {
     pub competitor_name: String,
     pub quarters_remaining: u32,
+    pub quoted_terms: AcquisitionTerms,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -616,13 +619,19 @@ impl Game {
                 if let Some(report) = self
                     .diligence_reports
                     .iter_mut()
-                    .find(|report| report.competitor_name == name)
+                    .find(|report| report.competitor_name == name && report.quarters_remaining > 0)
                 {
                     report.quarters_remaining = DILIGENCE_DURATION_QUARTERS;
                 } else {
+                    let quoted_terms = self
+                        .current_acquisition_terms(competitor_index)
+                        .expect("competitor index checked before diligence terms quote");
+                    self.diligence_reports
+                        .retain(|report| report.competitor_name != name);
                     self.diligence_reports.push(DiligenceReport {
                         competitor_name: name.clone(),
                         quarters_remaining: DILIGENCE_DURATION_QUARTERS,
+                        quoted_terms,
                     });
                 }
                 Ok(format!(
@@ -759,17 +768,22 @@ impl Game {
             Decision::Maintenance { spend } => {
                 let spend = positive_amount(spend, "maintenance spend")?;
                 let spend = spend.clamp(1_500.0, 20_000.0);
+                let gain = maintenance_reliability_gain(&self.player, spend);
+                let new_reliability = (self.player.reliability + gain).clamp(0.35, MAX_RELIABILITY);
+                let actual_gain = new_reliability - self.player.reliability;
+                if actual_gain < MIN_MAINTENANCE_RELIABILITY_GAIN {
+                    return Err("Reliability is already at the 98% operating cap; maintenance would not improve service enough to justify spending.".to_string());
+                }
                 self.require_cash(spend)?;
                 self.player.cash -= spend;
-                let gain = maintenance_reliability_gain(&self.player, spend);
-                self.player.reliability = (self.player.reliability + gain).clamp(0.35, 0.98);
+                self.player.reliability = new_reliability;
                 self.player.reputation = (self.player.reputation
                     + maintenance_reputation_gain(&self.player, spend))
                 .clamp(0.0, 100.0);
                 Ok(format!(
                     "Spent {} on reliability work; gained {:.1} reliability points.",
                     money(spend),
-                    gain * 100.0
+                    actual_gain * 100.0
                 ))
             }
         }
@@ -997,6 +1011,21 @@ impl Game {
     }
 
     pub fn acquisition_terms(&self, competitor_index: usize) -> Option<AcquisitionTerms> {
+        if let Some(report) = self.active_diligence_report(competitor_index) {
+            return Some(self.terms_with_current_financing_context(report.quoted_terms.clone()));
+        }
+
+        self.current_acquisition_terms(competitor_index)
+    }
+
+    fn active_diligence_report(&self, competitor_index: usize) -> Option<&DiligenceReport> {
+        let competitor = self.competitors.get(competitor_index)?;
+        self.diligence_reports.iter().find(|report| {
+            report.quarters_remaining > 0 && report.competitor_name == competitor.name
+        })
+    }
+
+    fn current_acquisition_terms(&self, competitor_index: usize) -> Option<AcquisitionTerms> {
         let competitor = self.competitors.get(competitor_index)?;
         let acquired_customers = competitor.customers * 0.92;
         let acquired_generation_capacity_mwh = competitor.generation_capacity_mwh * 0.86;
@@ -1052,6 +1081,17 @@ impl Game {
             post_asset_base,
             post_debt_to_assets,
         })
+    }
+
+    fn terms_with_current_financing_context(
+        &self,
+        mut terms: AcquisitionTerms,
+    ) -> AcquisitionTerms {
+        terms.post_cash = self.player.cash - terms.price + terms.absorbed_cash;
+        terms.post_debt = self.player.debt + terms.assumed_debt;
+        terms.post_asset_base = self.player.asset_base + terms.acquired_asset_base;
+        terms.post_debt_to_assets = terms.post_debt / terms.post_asset_base.max(1.0);
+        terms
     }
 
     fn require_cash(&self, amount: f64) -> Result<(), String> {

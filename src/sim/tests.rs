@@ -945,6 +945,62 @@ fn diligence_expires_after_three_quarters() {
 }
 
 #[test]
+fn diligence_freezes_acquisition_price_until_window_expires() {
+    let mut game = Game::with_seed(31);
+    game.player.cash = 500_000.0;
+    game.apply_decision(Decision::Diligence {
+        competitor_index: 0,
+    })
+    .unwrap();
+    let quoted = game.acquisition_terms(0).unwrap();
+
+    game.player.customers += 1_200.0;
+    game.competitors[0].customers += 300.0;
+    game.competitors[0].cash += 60_000.0;
+    game.competitors[0].debt += 20_000.0;
+    let live_terms = game.current_acquisition_terms(0).unwrap();
+
+    assert!(
+        (live_terms.price - quoted.price).abs() > 10_000.0,
+        "test setup should materially move live price: quoted {}, live {}",
+        quoted.price,
+        live_terms.price
+    );
+    assert!((game.acquisition_price(0) - quoted.price).abs() < 0.01);
+    assert!((game.acquisition_terms(0).unwrap().absorbed_cash - quoted.absorbed_cash).abs() < 0.01);
+    assert!((game.acquisition_terms(0).unwrap().assumed_debt - quoted.assumed_debt).abs() < 0.01);
+
+    game.diligence_reports[0].quarters_remaining = 0;
+    game.prune_diligence_reports();
+
+    assert!(!game.has_diligence(0));
+    assert!((game.acquisition_price(0) - live_terms.price).abs() < 0.01);
+}
+
+#[test]
+fn frozen_diligence_quote_recalculates_current_financing_context() {
+    let mut game = Game::with_seed(32);
+    game.player.cash = 250_000.0;
+    game.apply_decision(Decision::Diligence {
+        competitor_index: 1,
+    })
+    .unwrap();
+    let quoted = game.acquisition_terms(1).unwrap();
+
+    game.player.cash += 40_000.0;
+    game.player.debt += 15_000.0;
+    let updated = game.acquisition_terms(1).unwrap();
+
+    assert!((updated.price - quoted.price).abs() < 0.01);
+    assert!((updated.absorbed_cash - quoted.absorbed_cash).abs() < 0.01);
+    assert!((updated.assumed_debt - quoted.assumed_debt).abs() < 0.01);
+    assert!(
+        (updated.post_cash - (game.player.cash - quoted.price + quoted.absorbed_cash)).abs() < 0.01
+    );
+    assert!((updated.post_debt - (game.player.debt + quoted.assumed_debt)).abs() < 0.01);
+}
+
+#[test]
 fn acquisition_integration_blocks_immediate_rollup() {
     let mut game = Game::with_seed(30);
     game.apply_decision(Decision::IssueStock { amount: 60_000.0 })
@@ -1207,6 +1263,40 @@ fn maintenance_has_diminishing_returns_at_high_reliability() {
 }
 
 #[test]
+fn maintenance_at_reliability_cap_is_rejected_without_spending() {
+    let mut game = Game::with_seed(73);
+    game.player.reliability = MAX_RELIABILITY;
+    game.player.reputation = 50.0;
+    let starting_cash = game.player.cash;
+    let starting_reputation = game.player.reputation;
+
+    let error = game
+        .apply_decision(Decision::Maintenance { spend: 6_000.0 })
+        .unwrap_err();
+
+    assert!(error.contains("98% operating cap"));
+    assert_eq!(game.player.cash, starting_cash);
+    assert_eq!(game.player.reliability, MAX_RELIABILITY);
+    assert_eq!(game.player.reputation, starting_reputation);
+}
+
+#[test]
+fn maintenance_reports_actual_capped_reliability_gain() {
+    let mut game = Game::with_seed(74);
+    game.player.reliability = 0.976;
+    game.player.cash = 50_000.0;
+    let starting_reliability = game.player.reliability;
+
+    let message = game
+        .apply_decision(Decision::Maintenance { spend: 20_000.0 })
+        .unwrap();
+
+    let actual_gain_points = (game.player.reliability - starting_reliability) * 100.0;
+    assert_eq!(game.player.reliability, MAX_RELIABILITY);
+    assert!(message.contains(&format!("{actual_gain_points:.1} reliability points")));
+}
+
+#[test]
 fn maintenance_has_diminishing_returns_as_asset_base_grows() {
     let mut small = Game::with_seed(72);
     let mut large = Game::with_seed(72);
@@ -1268,6 +1358,34 @@ fn reliable_service_at_reasonable_utilization_lifts_reputation() {
     assert!(game.player.reputation > starting_reputation);
     assert!(
         events
+            .iter()
+            .any(|event| event.contains("manageable utilization"))
+    );
+}
+
+#[test]
+fn reliable_service_reputation_event_suppressed_when_displayed_gain_is_zero() {
+    let mut game = Game::with_seed(73);
+    game.player.cash = 80_000.0;
+    game.player.customers = 500.0;
+    game.player.generation_capacity_mwh = 180.0;
+    game.player.distribution_capacity = 800.0;
+    game.player.reliability = 0.92;
+    game.player.reputation = 99.99;
+    let mut events = Vec::new();
+
+    settle_utility(
+        &mut game.player,
+        &game.market,
+        &game.macro_state,
+        1.0,
+        true,
+        &mut events,
+    );
+
+    assert_eq!(game.player.reputation, 100.0);
+    assert!(
+        !events
             .iter()
             .any(|event| event.contains("manageable utilization"))
     );
