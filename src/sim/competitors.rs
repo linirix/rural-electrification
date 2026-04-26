@@ -192,6 +192,88 @@ impl Game {
         }
     }
 
+    pub(super) fn maybe_merge_rivals(&mut self, events: &mut Vec<String>) {
+        if self.quarter < 8 || self.competitors.len() < 2 {
+            return;
+        }
+
+        let player_share = self.market_share();
+        if player_share < 0.52 {
+            return;
+        }
+
+        let probability = (0.10 + (player_share - 0.52) * 0.85).clamp(0.08, 0.34);
+        if self.rng.chance(probability) {
+            self.merge_largest_rivals(events);
+        }
+    }
+
+    pub(super) fn merge_largest_rivals(&mut self, events: &mut Vec<String>) -> bool {
+        if self.competitors.len() < 2 {
+            return false;
+        }
+
+        let mut indexes = (0..self.competitors.len()).collect::<Vec<_>>();
+        indexes.sort_by(|left, right| {
+            self.competitors[*right]
+                .customers
+                .total_cmp(&self.competitors[*left].customers)
+        });
+        let first = indexes[0];
+        let second = indexes[1];
+        let (higher, lower) = if first > second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let a = self.competitors.remove(higher);
+        let b = self.competitors.remove(lower);
+        let a_name = a.name.clone();
+        let b_name = b.name.clone();
+        let combined_customers = (a.customers + b.customers).max(1.0);
+        let total_generation = a.generation_capacity_mwh + b.generation_capacity_mwh;
+        let weighted_rate =
+            (a.rate_cents * a.customers + b.rate_cents * b.customers) / combined_customers;
+        let weighted_reputation =
+            (a.reputation * a.customers + b.reputation * b.customers) / combined_customers;
+        let weighted_reliability = if total_generation <= 0.0 {
+            (a.reliability + b.reliability) / 2.0
+        } else {
+            (a.reliability * a.generation_capacity_mwh + b.reliability * b.generation_capacity_mwh)
+                / total_generation
+        };
+
+        self.startup_index += 1;
+        let mut used_names = vec![self.player.name.clone()];
+        used_names.extend(
+            self.competitors
+                .iter()
+                .map(|competitor| competitor.name.clone()),
+        );
+        let name = draw_competitor_name(&mut self.rng, &used_names, self.startup_index);
+        let merged = Utility {
+            name: name.clone(),
+            cash: a.cash + b.cash + 12_000.0,
+            debt: a.debt + b.debt + 12_000.0,
+            shares: 0.0,
+            stock_price: 0.0,
+            customers: combined_customers * 0.99,
+            generation_capacity_mwh: total_generation * 0.97,
+            distribution_capacity: (a.distribution_capacity + b.distribution_capacity) * 0.98,
+            rate_cents: (weighted_rate - 0.25).clamp(8.4, 13.2),
+            reputation: (weighted_reputation + 4.0).clamp(0.0, 100.0),
+            reliability: (weighted_reliability + 0.015).clamp(0.35, 0.96),
+            marketing_momentum: a.marketing_momentum + b.marketing_momentum + 0.20,
+            asset_base: (a.asset_base + b.asset_base) * 0.94,
+            last_quarter_customers: combined_customers,
+        };
+        self.competitors.push(merged);
+        events.push(format!(
+            "{name} formed from {a_name} and {b_name}, creating a stronger rival to challenge Metro's lead."
+        ));
+        true
+    }
+
     pub(super) fn competitor_plans(&mut self, events: &mut Vec<String>) {
         let player_rate = self.player.rate_cents;
         let player_share = self.market_share();

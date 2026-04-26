@@ -77,6 +77,30 @@ fn competitor_name_draw_avoids_active_names_until_pool_is_exhausted() {
 }
 
 #[test]
+fn rival_merger_combines_two_largest_competitors() {
+    let mut game = Game::with_seed(32);
+    game.competitors[0].customers = 300.0;
+    game.competitors[1].customers = 220.0;
+    game.competitors[2].customers = 90.0;
+    let starting_count = game.competitors.len();
+    let mut events = Vec::new();
+
+    assert!(game.merge_largest_rivals(&mut events));
+
+    assert_eq!(game.competitors.len(), starting_count - 1);
+    assert!(
+        game.competitors
+            .iter()
+            .any(|competitor| competitor.customers > 500.0)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("creating a stronger rival"))
+    );
+}
+
+#[test]
 fn default_initial_variance_stays_within_playable_bounds() {
     for seed in 1..=250 {
         let game = Game::with_seed_and_initial_variance(seed, InitialVariance::default());
@@ -679,6 +703,9 @@ fn acquisition_integration_blocks_immediate_rollup() {
     })
     .unwrap();
 
+    assert!(game.acquisition_cooldown >= 4);
+    assert!(game.integration_strain > 0.0);
+
     let error = game
         .apply_decision(Decision::Acquire {
             competitor_index: 1,
@@ -686,6 +713,38 @@ fn acquisition_integration_blocks_immediate_rollup() {
         .unwrap_err();
 
     assert!(error.contains("Integration capacity"));
+}
+
+#[test]
+fn acquisition_cooldown_scales_with_target_size() {
+    let small = acquisition_integration_cooldown(1_000.0, 50.0);
+    let midsize = acquisition_integration_cooldown(1_000.0, 400.0);
+    let peer_sized = acquisition_integration_cooldown(1_000.0, 1_000.0);
+
+    assert_eq!(small, 2);
+    assert!(midsize > small);
+    assert!(peer_sized > midsize);
+}
+
+#[test]
+fn acquisition_strain_temporarily_drags_operations() {
+    let mut game = Game::with_seed(30);
+    game.integration_strain = acquisition_integration_strain(1_000.0, 500.0);
+    let starting_strain = game.integration_strain;
+    let starting_reliability = game.player.reliability;
+    let starting_reputation = game.player.reputation;
+    let mut events = Vec::new();
+
+    game.apply_integration_strain(&mut events);
+
+    assert!(game.integration_strain < starting_strain);
+    assert!(game.player.reliability < starting_reliability);
+    assert!(game.player.reputation < starting_reputation);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("Acquisition integration strained"))
+    );
 }
 
 #[test]
@@ -1066,6 +1125,19 @@ fn rates_can_exceed_old_fifteen_cent_cap() {
 }
 
 #[test]
+fn extreme_rates_are_rejected_as_not_credible() {
+    let mut game = Game::with_seed(85);
+    let starting_rate = game.player.rate_cents;
+
+    let error = game
+        .apply_decision(Decision::AdjustRate { delta_cents: 40.0 })
+        .unwrap_err();
+
+    assert!(error.contains("not a credible tariff"));
+    assert!((game.player.rate_cents - starting_rate).abs() < 0.001);
+}
+
+#[test]
 fn rates_above_public_tolerance_churn_harder() {
     let mut game = Game::with_seed(86);
     game.player.rate_cents = public_rate_tolerance(&game.market) + 3.5;
@@ -1187,6 +1259,25 @@ fn cost_shock_increases_operating_cost() {
         normal_report.operating_cost,
         shocked_report.operating_cost
     );
+}
+
+#[test]
+fn equipment_fire_damage_can_apply_to_any_utility() {
+    let mut game = Game::with_seed(94);
+    let player_generation = game.player.generation_capacity_mwh;
+    let player_reliability = game.player.reliability;
+    let rival_generation = game.competitors[0].generation_capacity_mwh;
+    let rival_reliability = game.competitors[0].reliability;
+
+    let player_lost = apply_equipment_fire_damage(&mut game.player, 0.10);
+    let rival_lost = apply_equipment_fire_damage(&mut game.competitors[0], 0.10);
+
+    assert!((player_lost - player_generation * 0.10).abs() < 0.01);
+    assert!((rival_lost - rival_generation * 0.10).abs() < 0.01);
+    assert!(game.player.generation_capacity_mwh < player_generation);
+    assert!(game.competitors[0].generation_capacity_mwh < rival_generation);
+    assert!(game.player.reliability < player_reliability);
+    assert!(game.competitors[0].reliability < rival_reliability);
 }
 
 #[test]

@@ -21,6 +21,7 @@ const VARIABLE_COST_REVERSION: f64 = 0.14;
 const VARIABLE_COST_PRESSURE_SENSITIVITY: f64 = 2.35;
 const VARIABLE_COST_FLOOR_MULTIPLE: f64 = 0.72;
 const VARIABLE_COST_CEILING_MULTIPLE: f64 = 1.65;
+const MAX_CREDIBLE_RATE_CENTS: f64 = 25.0;
 
 mod attribution;
 mod competitors;
@@ -51,6 +52,7 @@ pub struct Game {
     pub competitors: Vec<Utility>,
     pub pending_projects: Vec<Project>,
     pub acquisition_cooldown: u32,
+    pub integration_strain: f64,
     pub active_shocks: Vec<ActiveShock>,
     pub startup_index: u32,
     pub review_completed: bool,
@@ -213,6 +215,8 @@ pub struct Outcome {
     pub kind: OutcomeKind,
     pub headline: String,
     pub details: String,
+    /// True for formal review outcomes where the company can continue into sandbox play.
+    /// False for terminal operating failures such as receivership or lost market access.
     pub can_continue: bool,
 }
 
@@ -346,6 +350,7 @@ impl Game {
             ],
             pending_projects: Vec::new(),
             acquisition_cooldown: 0,
+            integration_strain: 0.0,
             active_shocks: Vec::new(),
             startup_index: 0,
             review_completed: false,
@@ -619,12 +624,17 @@ impl Game {
                 self.player.reliability = combined_reliability;
                 self.player.reliability = (self.player.reliability - 0.035).clamp(0.35, 0.98);
                 self.player.reputation = (self.player.reputation - 1.5).clamp(0.0, 100.0);
-                self.acquisition_cooldown = 3;
+                self.acquisition_cooldown =
+                    acquisition_integration_cooldown(starting_customers, terms.acquired_customers);
+                self.integration_strain = (self.integration_strain
+                    + acquisition_integration_strain(starting_customers, terms.acquired_customers))
+                .clamp(0.0, 1.6);
                 Ok(format!(
-                    "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt).",
+                    "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt). Integration will take {} quarter(s).",
                     money(terms.price),
                     money(terms.absorbed_cash),
-                    money(terms.assumed_debt)
+                    money(terms.assumed_debt),
+                    self.acquisition_cooldown
                 ))
             }
             Decision::AdjustRate { delta_cents } => {
@@ -635,7 +645,14 @@ impl Game {
                     );
                 }
                 let old = self.player.rate_cents;
-                self.player.rate_cents = (self.player.rate_cents + delta_cents).max(7.0);
+                let requested_rate = (self.player.rate_cents + delta_cents).max(7.0);
+                if requested_rate > MAX_CREDIBLE_RATE_CENTS {
+                    return Err(format!(
+                        "A {:.1}c rate is not a credible tariff. Keep rates at or below {:.1}c and let market consequences do the rest.",
+                        requested_rate, MAX_CREDIBLE_RATE_CENTS
+                    ));
+                }
+                self.player.rate_cents = requested_rate;
                 let actual_delta = self.player.rate_cents - old;
                 if actual_delta > 0.0 {
                     self.player.reputation =
@@ -714,9 +731,11 @@ impl Game {
         self.advance_shocks(&mut events);
         self.advance_macro_environment(&mut events);
         self.maybe_spawn_startup(&mut events);
+        self.maybe_merge_rivals(&mut events);
         self.complete_projects(&mut events);
         self.grow_market(&mut events);
         self.competitor_plans(&mut events);
+        self.apply_integration_strain(&mut events);
 
         self.player.marketing_momentum *= 0.55;
         self.equity_market_fatigue *= 0.55;
@@ -887,7 +906,7 @@ impl Game {
         let market_position_value = competitor.reputation * 90.0;
         let premium = 8_000.0 + competitor.reliability * 4_000.0;
         let share = self.market_share();
-        let consolidation_premium = 1.0 + share * 0.4 + share * share * 1.3;
+        let consolidation_premium = 1.0 + share * 0.4 + share * share * 2.0;
         let enterprise_value =
             (customer_value + generation_value + line_value + market_position_value + premium)
                 * consolidation_premium;
@@ -1040,16 +1059,22 @@ impl Game {
         }
 
         if self.rng.chance(0.025) {
+            let target = self.rng.next_index(self.competitors.len() + 1);
             let capacity_loss = 0.08 + self.rng.range(0.0, 0.07);
-            let lost = self.player.generation_capacity_mwh * capacity_loss;
-            self.player.generation_capacity_mwh =
-                (self.player.generation_capacity_mwh - lost).max(20.0);
-            self.player.reliability = (self.player.reliability - 0.07).clamp(0.35, 0.98);
-            self.player.reputation = (self.player.reputation - 4.0).clamp(0.0, 100.0);
-            events.push(format!(
-                "An equipment fire knocked {:.0} MWh/quarter of generation offline.",
-                lost
-            ));
+            if target == 0 {
+                let lost = apply_equipment_fire_damage(&mut self.player, capacity_loss);
+                events.push(format!(
+                    "An equipment fire at Metro knocked {:.0} MWh/quarter of generation offline.",
+                    lost
+                ));
+            } else if let Some(competitor) = self.competitors.get_mut(target - 1) {
+                let name = competitor.name.clone();
+                let lost = apply_equipment_fire_damage(competitor, capacity_loss);
+                events.push(format!(
+                    "An equipment fire at {name} knocked {:.0} MWh/quarter of rival generation offline.",
+                    lost
+                ));
+            }
         }
     }
 
@@ -1148,6 +1173,32 @@ impl Game {
             }
         }
         self.pending_projects = remaining;
+    }
+
+    fn apply_integration_strain(&mut self, events: &mut Vec<String>) {
+        if self.integration_strain <= 0.01 {
+            self.integration_strain = 0.0;
+            return;
+        }
+
+        let reliability_drag = (0.006 + self.integration_strain * 0.018).min(0.035);
+        let reputation_drag = (0.8 + self.integration_strain * 2.8).min(5.0);
+        let marketing_drag = (1.0 - self.integration_strain * 0.08).clamp(0.75, 1.0);
+        self.player.reliability = (self.player.reliability - reliability_drag).clamp(0.35, 0.98);
+        self.player.reputation = (self.player.reputation - reputation_drag).clamp(0.0, 100.0);
+        self.player.marketing_momentum *= marketing_drag;
+
+        if self.integration_strain >= 0.25 {
+            events.push(format!(
+                "Acquisition integration strained service quality and reputation by {:.1} points.",
+                reputation_drag
+            ));
+        }
+
+        self.integration_strain *= 0.62;
+        if self.integration_strain < 0.05 {
+            self.integration_strain = 0.0;
+        }
     }
 
     fn grow_market(&mut self, events: &mut Vec<String>) {
@@ -1456,6 +1507,26 @@ impl Default for Game {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn acquisition_integration_cooldown(starting_customers: f64, acquired_customers: f64) -> u32 {
+    let post_customers = (starting_customers + acquired_customers).max(1.0);
+    let acquired_share = (acquired_customers / post_customers).clamp(0.0, 1.0);
+    (2 + (acquired_share * 8.0).floor() as u32).clamp(2, 7)
+}
+
+fn acquisition_integration_strain(starting_customers: f64, acquired_customers: f64) -> f64 {
+    let post_customers = (starting_customers + acquired_customers).max(1.0);
+    let acquired_share = (acquired_customers / post_customers).clamp(0.0, 1.0);
+    acquired_share * 1.35
+}
+
+fn apply_equipment_fire_damage(utility: &mut Utility, capacity_loss: f64) -> f64 {
+    let lost = utility.generation_capacity_mwh * capacity_loss;
+    utility.generation_capacity_mwh = (utility.generation_capacity_mwh - lost).max(20.0);
+    utility.reliability = (utility.reliability - 0.07).clamp(0.35, 0.98);
+    utility.reputation = (utility.reputation - 4.0).clamp(0.0, 100.0);
+    lost
 }
 
 pub fn generation_reliability_after_new_capacity(

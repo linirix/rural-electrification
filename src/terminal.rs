@@ -1,5 +1,7 @@
 use std::io::{self, Write};
 
+#[cfg(test)]
+use crate::sim::ActiveShock;
 use crate::sim::{
     DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
     MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH,
@@ -1968,7 +1970,22 @@ fn project_lines(game: &Game) -> Vec<String> {
 }
 
 fn signal_lines(game: &Game) -> Vec<String> {
-    let mut lines = Vec::new();
+    #[derive(Clone)]
+    struct SignalCandidate {
+        priority: u8,
+        order: usize,
+        line: String,
+    }
+
+    let mut lines: Vec<SignalCandidate> = Vec::new();
+    let mut push_line = |priority: u8, line: String| {
+        let order = lines.len();
+        lines.push(SignalCandidate {
+            priority,
+            order,
+            line,
+        });
+    };
 
     if !game.active_shocks.is_empty() {
         let descriptors: Vec<String> = game
@@ -1976,123 +1993,164 @@ fn signal_lines(game: &Game) -> Vec<String> {
             .iter()
             .map(|shock| format!("{} {}q", shock_label(&shock.kind), shock.quarters_remaining))
             .collect();
-        lines.push(signal_line("Shock", BOLD_RED, descriptors.join(" | ")));
+        push_line(100, signal_line("Shock", BOLD_RED, descriptors.join(" | ")));
     }
 
     if let Some(report) = &game.last_report {
         let net_customers = report.new_customers - report.lost_customers;
-        lines.push(signal_line(
-            "Trend",
-            CYAN,
-            format!(
-                "net {} | churn {}",
-                styled(
-                    customer_tone(net_customers),
-                    format!("{:+.0}", net_customers)
+        push_line(
+            45,
+            signal_line(
+                "Trend",
+                CYAN,
+                format!(
+                    "net {} | churn {}",
+                    styled(
+                        customer_tone(net_customers),
+                        format!("{:+.0}", net_customers)
+                    ),
+                    styled(
+                        churn_tone(report.lost_customer_rate),
+                        format_churn_rate(report.lost_customer_rate)
+                    )
                 ),
-                styled(
-                    churn_tone(report.lost_customer_rate),
-                    format_churn_rate(report.lost_customer_rate)
-                )
             ),
-        ));
+        );
     } else {
-        lines.push(signal_line("Trend", CYAN, "no prior quarter yet"));
+        push_line(45, signal_line("Trend", CYAN, "no prior quarter yet"));
     }
 
-    lines.push(signal_line(
-        "Macro",
-        macro_credit_tone(game),
-        format!(
-            "credit {} | demand {}",
-            styled(macro_credit_tone(game), game.macro_state.credit_label()),
-            styled(
-                demand_tone(game.macro_state.demand_index),
-                game.macro_state.demand_label()
-            )
+    push_line(
+        40,
+        signal_line(
+            "Macro",
+            macro_credit_tone(game),
+            format!(
+                "credit {} | demand {}",
+                styled(macro_credit_tone(game), game.macro_state.credit_label()),
+                styled(
+                    demand_tone(game.macro_state.demand_index),
+                    game.macro_state.demand_label()
+                )
+            ),
         ),
-    ));
+    );
 
     let average_rate = market_average_rate(game);
     let rate_gap = game.player.rate_cents - average_rate;
     let tolerance = public_rate_tolerance(&game.market);
     if game.player.rate_cents > tolerance {
-        lines.push(signal_line(
-            "Rate",
-            RED,
-            format!(
-                "{} above public tolerance; intervention risk",
-                styled(
-                    BOLD_RED,
-                    format!("{:.1}c", game.player.rate_cents - tolerance)
-                )
+        push_line(
+            86,
+            signal_line(
+                "Rate",
+                RED,
+                format!(
+                    "{} above public tolerance; intervention risk",
+                    styled(
+                        BOLD_RED,
+                        format!("{:.1}c", game.player.rate_cents - tolerance)
+                    )
+                ),
             ),
-        ));
+        );
     } else if rate_gap >= 0.4 {
-        lines.push(signal_line(
-            "Rate",
-            YELLOW,
-            format!(
-                "{} above market; churn pressure",
-                styled(BOLD_YELLOW, format!("{:.1}c", rate_gap))
+        push_line(
+            60,
+            signal_line(
+                "Rate",
+                YELLOW,
+                format!(
+                    "{} above market; churn pressure",
+                    styled(BOLD_YELLOW, format!("{:.1}c", rate_gap))
+                ),
             ),
-        ));
+        );
     } else if rate_gap <= -0.4 {
-        lines.push(signal_line(
-            "Rate",
-            CYAN,
-            format!(
-                "{} below market; margin tightens",
-                styled(BOLD_CYAN, format!("{:.1}c", rate_gap.abs()))
+        push_line(
+            60,
+            signal_line(
+                "Rate",
+                CYAN,
+                format!(
+                    "{} below market; margin tightens",
+                    styled(BOLD_CYAN, format!("{:.1}c", rate_gap.abs()))
+                ),
             ),
-        ));
+        );
     } else {
-        lines.push(signal_line("Rate", CYAN, "near market average"));
+        push_line(35, signal_line("Rate", CYAN, "near market average"));
     }
 
     let capacity = game.player.customer_capacity(&game.market);
     let headroom = capacity - game.player.customers;
     let firm_generation_reserve = game.player.firm_generation_reserve_mwh(&game.market);
     if headroom < 60.0 {
-        lines.push(signal_line("Capacity", RED, "tight; build capacity first"));
+        push_line(
+            84,
+            signal_line("Capacity", RED, "tight; build capacity first"),
+        );
     } else if headroom < 140.0 {
-        lines.push(signal_line("Capacity", YELLOW, "adequate, but narrowing"));
+        push_line(
+            55,
+            signal_line("Capacity", YELLOW, "adequate, but narrowing"),
+        );
     } else {
-        lines.push(signal_line("Capacity", GREEN, "growth headroom available"));
+        push_line(
+            25,
+            signal_line("Capacity", GREEN, "growth headroom available"),
+        );
     }
     if firm_generation_reserve < 15.0 {
-        lines.push(signal_line(
-            "Generation",
-            reserve_tone(firm_generation_reserve),
-            "firm reserve thin",
-        ));
+        push_line(
+            82,
+            signal_line(
+                "Generation",
+                reserve_tone(firm_generation_reserve),
+                "firm reserve thin",
+            ),
+        );
     }
 
     let leverage = game.player.debt_to_assets();
     if leverage > 0.85 {
-        lines.push(signal_line("Debt", RED, "high leverage; lender risk"));
+        push_line(80, signal_line("Debt", RED, "high leverage; lender risk"));
     } else if leverage < 0.55 {
-        lines.push(signal_line("Debt", GREEN, "borrowing capacity available"));
+        push_line(
+            30,
+            signal_line("Debt", GREEN, "borrowing capacity available"),
+        );
     } else {
-        lines.push(signal_line("Debt", YELLOW, "usable, but no longer cheap"));
+        push_line(
+            35,
+            signal_line("Debt", YELLOW, "usable, but no longer cheap"),
+        );
     }
 
     if game.player.reliability < 0.74 {
-        lines.push(signal_line(
-            "Reliability",
-            RED,
-            "below target; fund maintenance",
-        ));
+        push_line(
+            78,
+            signal_line("Reliability", RED, "below target; fund maintenance"),
+        );
     } else if game.player.reliability > 0.88 {
-        lines.push(signal_line(
-            "Reliability",
-            GREEN,
-            "strong; expansion can lead",
-        ));
+        push_line(
+            25,
+            signal_line("Reliability", GREEN, "strong; expansion can lead"),
+        );
     }
 
-    lines.truncate(6);
-    lines
+    if lines.len() > 6 {
+        lines.sort_by(|left, right| {
+            right
+                .priority
+                .cmp(&left.priority)
+                .then_with(|| left.order.cmp(&right.order))
+        });
+        lines.truncate(6);
+        lines.sort_by_key(|candidate| candidate.order);
+    }
+
+    lines.into_iter().map(|candidate| candidate.line).collect()
 }
 
 fn shock_label(kind: &ShockKind) -> &'static str {
@@ -2929,6 +2987,48 @@ mod tests {
         for line in render_box("Capital", &lines, COLUMN_WIDTH) {
             assert_eq!(visible_width(&line), COLUMN_WIDTH);
         }
+    }
+
+    #[test]
+    fn signal_panel_keeps_critical_items_when_crowded() {
+        let mut game = Game::with_seed(117);
+        game.active_shocks.push(ActiveShock {
+            kind: ShockKind::InputCostShock,
+            quarters_remaining: 2,
+        });
+        game.last_report = Some(QuarterReport {
+            label: "Year 3 Q1".to_string(),
+            revenue: 0.0,
+            operating_cost: 0.0,
+            interest: 0.0,
+            profit: 0.0,
+            new_customers: 0.0,
+            lost_customers: 10.0,
+            lost_customer_rate: 0.05,
+            market_share: 0.40,
+            prior_market_share: 0.42,
+            attributions: Vec::new(),
+            events: Vec::new(),
+        });
+        game.player.rate_cents = public_rate_tolerance(&game.market) + 3.0;
+        game.player.customers = 1_000.0;
+        game.player.distribution_capacity = 1_010.0;
+        game.player.generation_capacity_mwh = 200.0;
+        game.player.reliability = 0.68;
+        game.player.asset_base = 100_000.0;
+        game.player.debt = 90_000.0;
+
+        let lines = signal_lines(&game);
+        let joined = lines.join("\n");
+
+        assert_eq!(lines.len(), 6);
+        assert!(joined.contains("Shock"));
+        assert!(joined.contains("Rate"));
+        assert!(joined.contains("Capacity"));
+        assert!(joined.contains("Generation"));
+        assert!(joined.contains("Debt"));
+        assert!(joined.contains("Reliability"));
+        assert!(!joined.contains("Trend"));
     }
 
     #[test]
