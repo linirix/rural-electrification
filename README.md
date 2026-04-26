@@ -1,4 +1,4 @@
-# Electrification
+# more corgi's Rural Electrification!
 
 A terminal-first economic and management simulator about running a small electric utility in a newly expanding power market.
 
