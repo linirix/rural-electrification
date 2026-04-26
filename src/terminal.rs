@@ -6,7 +6,7 @@ use crate::sim::{
     DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
     MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH,
     MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, Outcome, OutcomeKind,
-    QuarterReport, ShockKind, distribution_project_cost, distribution_project_duration,
+    QuarterReport, ShockKind, Utility, distribution_project_cost, distribution_project_duration,
     generation_project_cost, generation_project_duration,
     generation_reliability_after_new_capacity, money, public_rate_tolerance,
 };
@@ -640,9 +640,12 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
                     )]
                 } else {
                     let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
+                    let (low, high) = public_acquisition_range(game, *competitor_index);
                     vec![format!(
-                        "{} run diligence first; {} reveals exact terms for {}.",
+                        "{} public estimate {}-{}; {} diligence reveals exact terms for {}.",
                         muted("Quote:"),
+                        styled(YELLOW, money(low)),
+                        styled(YELLOW, money(high)),
                         styled(BOLD_YELLOW, money(cost)),
                         styled(BOLD, shorten_plain(&competitor.name, 16))
                     )]
@@ -1690,8 +1693,10 @@ fn competitor_lines(game: &Game) -> Vec<String> {
     }
 
     let mut lines = Vec::new();
+    let total_connected = game.total_connected_customers().max(1.0);
     for (index, competitor) in game.competitors.iter().enumerate() {
         let (acquisition_note, acquisition_tone) = acquisition_status(game, index);
+        let (health_label, health_tone) = rival_health_label(competitor);
 
         let rate_tone = if competitor.rate_cents + 0.4 < game.player.rate_cents {
             RED
@@ -1700,7 +1705,6 @@ fn competitor_lines(game: &Game) -> Vec<String> {
         } else {
             CYAN
         };
-        let rate_gap = competitor.rate_cents - game.player.rate_cents;
         lines.push(format!(
             "{} {}  {} acct  {}",
             styled(DIM, index + 1),
@@ -1710,13 +1714,13 @@ fn competitor_lines(game: &Game) -> Vec<String> {
         ));
         lines.push(format!(
             "  {} {}  {} {}  {} {}",
-            muted("rel"),
+            muted("share"),
             styled(
-                reliability_tone(competitor.reliability),
-                format!("{:.0}%", competitor.reliability * 100.0)
+                BOLD,
+                format!("{:.0}%", competitor.customers / total_connected * 100.0)
             ),
-            muted("vs you"),
-            styled(rate_tone, format!("{:+.1}c", rate_gap)),
+            muted("health"),
+            styled(health_tone, health_label),
             muted("buy"),
             styled(acquisition_tone, acquisition_note)
         ));
@@ -1782,9 +1786,8 @@ fn rival_detail_lines(game: &Game) -> Vec<String> {
         } else {
             CYAN
         };
-        let headroom = competitor.capacity_headroom(&game.market);
-        let firm_reserve = competitor.firm_generation_reserve_mwh(&game.market);
         let (acquisition_note, acquisition_tone) = acquisition_status(game, index);
+        let has_diligence = game.has_diligence(index);
 
         lines.push(format!(
             "{}. {}",
@@ -1805,28 +1808,30 @@ fn rival_detail_lines(game: &Game) -> Vec<String> {
             styled(rate_tone, format!("{:.1}c", competitor.rate_cents)),
             styled(rate_tone, format!("{:+.1}c vs you", rate_gap))
         ));
-        lines.push(format!(
-            "   {} {}   {} {}   {} {}",
-            muted("reliability"),
-            styled(
-                reliability_tone(competitor.reliability),
-                format!("{:.0}%", competitor.reliability * 100.0)
-            ),
-            muted("headroom"),
-            styled(headroom_tone(headroom), format!("{:.0}", headroom.max(0.0))),
-            muted("firm reserve"),
-            styled(
-                reserve_tone(firm_reserve),
-                format!("{:+.0} MWh", firm_reserve)
-            )
-        ));
-        if game.has_diligence(index) {
+        if has_diligence {
+            let headroom = competitor.capacity_headroom(&game.market);
+            let firm_reserve = competitor.firm_generation_reserve_mwh(&game.market);
             let quarters = game
                 .diligence_reports
                 .iter()
                 .find(|report| report.competitor_name == competitor.name)
                 .map(|report| report.quarters_remaining)
                 .unwrap_or(0);
+            lines.push(format!(
+                "   {} {}   {} {}   {} {}",
+                muted("reliability"),
+                styled(
+                    reliability_tone(competitor.reliability),
+                    format!("{:.0}%", competitor.reliability * 100.0)
+                ),
+                muted("headroom"),
+                styled(headroom_tone(headroom), format!("{:.0}", headroom.max(0.0))),
+                muted("firm reserve"),
+                styled(
+                    reserve_tone(firm_reserve),
+                    format!("{:+.0} MWh", firm_reserve)
+                )
+            ));
             lines.push(format!(
                 "   {} {}   {} {}   {} {}",
                 muted("cash"),
@@ -1836,13 +1841,26 @@ fn rival_detail_lines(game: &Game) -> Vec<String> {
                     leverage_tone(competitor.debt_to_assets()),
                     format!("{:.0}%", competitor.debt_to_assets() * 100.0)
                 ),
+                muted("assets"),
+                styled(BOLD, money(competitor.asset_base))
+            ));
+            lines.push(format!(
+                "   {} {}   {} {}",
+                muted("reputation"),
+                styled(
+                    reputation_tone(competitor.reputation),
+                    format!("{:.0}", competitor.reputation)
+                ),
                 muted("diligence"),
                 styled(GREEN, format!("{quarters}q left"))
             ));
         } else {
             let cost = game.diligence_cost(index).unwrap_or(0.0);
+            let (health_label, health_tone) = rival_health_label(competitor);
             lines.push(format!(
-                "   {} {}   {} {}",
+                "   {} {}   {} {}   {} {}",
+                muted("health"),
+                styled(health_tone, health_label),
                 muted("financials"),
                 styled(DIM, "public estimates only"),
                 muted("diligence"),
@@ -1893,7 +1911,7 @@ fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> Vec<String> 
             styled(BOLD_CYAN, format!("diligence {}", competitor_index + 1))
         ));
         lines.push(format!(
-            "   {} hidden until diligence: cash, debt, closing cost, leverage, concessions ({})",
+            "   {} hidden until diligence: balance sheet, closing cost, leverage, concessions ({})",
             muted("terms"),
             money(cost)
         ));
@@ -2617,6 +2635,42 @@ fn reserve_tone(reserve: f64) -> &'static str {
     }
 }
 
+fn rival_health_label(competitor: &Utility) -> (&'static str, &'static str) {
+    let mut score = 0;
+    if competitor.cash >= 20_000.0 {
+        score += 1;
+    } else if competitor.cash < 5_000.0 {
+        score -= 1;
+    }
+
+    let leverage = competitor.debt_to_assets();
+    if leverage <= 0.65 {
+        score += 1;
+    } else if leverage >= 0.85 {
+        score -= 1;
+    }
+
+    if competitor.reliability >= 0.82 {
+        score += 1;
+    } else if competitor.reliability < 0.72 {
+        score -= 1;
+    }
+
+    if competitor.reputation >= 60.0 {
+        score += 1;
+    } else if competitor.reputation < 48.0 {
+        score -= 1;
+    }
+
+    if score >= 2 {
+        ("healthy", BOLD_GREEN)
+    } else if score <= -2 {
+        ("vulnerable", BOLD_RED)
+    } else {
+        ("strained", BOLD_YELLOW)
+    }
+}
+
 fn utilization_tone(utilization: f64) -> &'static str {
     if utilization > 0.92 {
         BOLD_RED
@@ -2956,6 +3010,16 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_rival_lines_show_public_health_not_exact_operations() {
+        let game = Game::with_seed(113);
+        let lines = dashboard_competitor_lines(&game);
+
+        assert!(lines.iter().any(|line| line.contains("health")));
+        assert!(lines.iter().any(|line| line.contains("share")));
+        assert!(!lines.iter().any(|line| line.contains("rel")));
+    }
+
+    #[test]
     fn rival_detail_includes_acquisition_economics() {
         let mut game = Game::with_seed(114);
         game.player.cash = 100_000.0;
@@ -2969,6 +3033,12 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("net cost")));
         assert!(lines.iter().any(|line| line.contains("assume debt")));
         assert!(lines.iter().any(|line| line.contains("post debt/assets")));
+        assert!(lines.iter().any(|line| line.contains("reliability")));
+        assert!(lines.iter().any(|line| line.contains("headroom")));
+        assert!(lines.iter().any(|line| line.contains("firm reserve")));
+        assert!(lines.iter().any(|line| line.contains("cash")));
+        assert!(lines.iter().any(|line| line.contains("assets")));
+        assert!(lines.iter().any(|line| line.contains("reputation")));
         assert!(
             lines
                 .iter()
@@ -2988,6 +3058,13 @@ mod tests {
                 .any(|line| line.contains("public estimates only"))
         );
         assert!(!lines.iter().any(|line| line.contains("post debt/assets")));
+        assert!(!lines.iter().any(|line| line.contains("reliability")));
+        assert!(!lines.iter().any(|line| line.contains("headroom")));
+        assert!(!lines.iter().any(|line| line.contains("firm reserve")));
+        assert!(!lines.iter().any(|line| line.contains("debt/assets")));
+        assert!(!lines.iter().any(|line| line.contains("reputation")));
+        assert!(!lines.iter().any(|line| line.contains("assets")));
+        assert!(!lines.iter().any(|line| line.contains("cash ")));
     }
 
     #[test]
@@ -3005,6 +3082,19 @@ mod tests {
 
         assert!(lines.iter().any(|line| line.contains("need")));
         assert!(lines.iter().any(|line| line.contains("cash to close")));
+    }
+
+    #[test]
+    fn acquisition_preview_without_diligence_shows_public_range() {
+        let mut game = Game::with_seed(116);
+
+        match handle_command(&mut game, "preview buy 1") {
+            CommandResult::Preview(lines) => {
+                assert!(lines.iter().any(|line| line.contains("public estimate")));
+                assert!(lines.iter().any(|line| line.contains("diligence reveals")));
+            }
+            _ => panic!("preview buy should show preview output"),
+        }
     }
 
     #[test]
