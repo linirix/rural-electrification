@@ -1,3 +1,24 @@
-/target
-/.DS_Store
-/.claude
+# Rust build output
+/target/
+
+# Local save files if a custom save root is pointed at the repository
+/.electrification/
+*.save
+*.sav
+
+# Local editor and OS files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Local agent/tooling scratch
+/.claude/
+/.codex/
+
+# Logs and profiling/coverage artifacts
+*.log
+*.profraw
+*.profdata
+/coverage/
+/tarpaulin-report.html

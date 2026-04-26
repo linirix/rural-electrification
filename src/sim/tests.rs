@@ -45,6 +45,41 @@ fn seeded_initial_variance_changes_starting_conditions() {
 }
 
 #[test]
+fn serialized_game_round_trip_preserves_next_quarter() {
+    let mut original = Game::with_seed(88);
+    original
+        .apply_decision(Decision::Borrow { amount: 15_000.0 })
+        .unwrap();
+    original
+        .apply_decision(Decision::Marketing { spend: 2_000.0 })
+        .unwrap();
+    original.advance_quarter();
+
+    let json = serde_json::to_string(&original).unwrap();
+    let mut loaded: Game = serde_json::from_str(&json).unwrap();
+
+    let original_report = original.advance_quarter();
+    let loaded_report = loaded.advance_quarter();
+
+    assert_eq!(loaded.quarter, original.quarter);
+    assert_eq!(loaded_report.label, original_report.label);
+    assert_eq!(loaded_report.events, original_report.events);
+    assert_eq!(loaded_report.attributions, original_report.attributions);
+    assert!((loaded_report.profit - original_report.profit).abs() < 0.01);
+    assert!((loaded_report.market_share - original_report.market_share).abs() < 0.000001);
+    assert!((loaded.player.cash - original.player.cash).abs() < 0.01);
+    assert!((loaded.player.customers - original.player.customers).abs() < 0.000001);
+    assert_eq!(loaded.competitors.len(), original.competitors.len());
+    for (loaded_competitor, original_competitor) in
+        loaded.competitors.iter().zip(original.competitors.iter())
+    {
+        assert_eq!(loaded_competitor.name, original_competitor.name);
+        assert!((loaded_competitor.customers - original_competitor.customers).abs() < 0.000001);
+        assert!((loaded_competitor.cash - original_competitor.cash).abs() < 0.01);
+    }
+}
+
+#[test]
 fn opening_competitor_names_are_drawn_from_pool_without_duplicates() {
     let game = Game::with_seed(7);
     let names = game

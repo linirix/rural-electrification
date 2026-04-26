@@ -46,6 +46,8 @@ mod attribution;
 mod competitors;
 mod economics;
 
+use serde::{Deserialize, Serialize};
+
 use attribution::{AttributionContext, PointInTime, quarter_attributions};
 use competitors::draw_competitor_name;
 #[cfg(test)]
@@ -66,7 +68,7 @@ pub use economics::{
 ///
 /// `Game` owns the market, player utility, rivals, pending projects, macro shocks, and current
 /// outcome. Consumers normally mutate it through `apply_decision` and `advance_quarter`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Game {
     pub quarter: u32,
     pub campaign_quarters: u32,
@@ -92,7 +94,7 @@ pub struct Game {
 ///
 /// `amplitude` is clamped to `0.0..=2.0` when applied: `0.0` gives the fixed baseline, `1.0` is
 /// the normal game variance, and `2.0` is a deliberately wide opening spread.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct InitialVariance {
     pub amplitude: f64,
 }
@@ -113,14 +115,14 @@ impl CustomerAllocationKind {
 }
 
 /// A temporary market-wide shock that modifies demand, rates, costs, or valuation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActiveShock {
     pub kind: ShockKind,
     pub quarters_remaining: u32,
 }
 
 /// Time-limited due-diligence record for a competitor, including frozen acquisition terms.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DiligenceReport {
     pub competitor_name: String,
     pub quarters_remaining: u32,
@@ -128,7 +130,7 @@ pub struct DiligenceReport {
 }
 
 /// Types of macro shocks that can be active during a quarter.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ShockKind {
     RateFreeze,
     DemandRecession,
@@ -137,7 +139,7 @@ pub enum ShockKind {
 }
 
 /// Core market conditions shared by the player and competitors.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Market {
     pub territory: String,
     pub start_year: u32,
@@ -152,7 +154,7 @@ pub struct Market {
 }
 
 /// Current macro-financing environment that affects debt rates, demand, costs, and valuation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MacroEnvironment {
     pub annual_base_rate: f64,
     pub credit_spread: f64,
@@ -161,7 +163,7 @@ pub struct MacroEnvironment {
 }
 
 /// Operating and balance-sheet state for the player utility or a competitor.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Utility {
     pub name: String,
     pub cash: f64,
@@ -180,7 +182,7 @@ pub struct Utility {
 }
 
 /// Capital project under construction and waiting to complete in a future quarter.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
     pub kind: ProjectKind,
@@ -188,7 +190,7 @@ pub struct Project {
 }
 
 /// Type and scale of a pending capital project.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ProjectKind {
     Generation {
         capacity_mwh: f64,
@@ -207,7 +209,7 @@ pub enum ProjectKind {
 ///
 /// The terminal layer parses text into these variants; the simulation validates cash,
 /// financing, market-access, and regulatory constraints when applying them.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Decision {
     BuildGeneration { capacity_mwh: f64 },
     BuildDistribution { customer_capacity: f64 },
@@ -224,7 +226,7 @@ pub enum Decision {
 }
 
 /// Result of one processed quarter, suitable for terminal display or automated playtests.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QuarterReport {
     pub label: String,
     pub revenue: f64,
@@ -241,7 +243,7 @@ pub struct QuarterReport {
 }
 
 /// Income-statement and service-output summary for a settled utility in one quarter.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FirmFinances {
     pub revenue: f64,
     pub operating_cost: f64,
@@ -252,7 +254,7 @@ pub struct FirmFinances {
 }
 
 /// Full acquisition economics for a target, including the post-close player balance sheet.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AcquisitionTerms {
     pub price: f64,
     pub absorbed_cash: f64,
@@ -271,7 +273,7 @@ pub struct AcquisitionTerms {
 }
 
 /// High-level category for a formal review or terminal operating outcome.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutcomeKind {
     Victory,
     Defeat,
@@ -282,7 +284,7 @@ pub enum OutcomeKind {
 /// `can_continue` is true for formal review outcomes that can be cleared with
 /// `Game::continue_after_review`; it is false for terminal operating failures such as
 /// receivership or lost market access.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Outcome {
     pub kind: OutcomeKind,
     pub headline: String,
@@ -290,7 +292,7 @@ pub struct Outcome {
     pub can_continue: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Rng {
     state: u64,
 }

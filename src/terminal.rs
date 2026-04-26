@@ -1,5 +1,7 @@
 use std::{
+    fs,
     io::{self, Write},
+    path::{Path, PathBuf},
     sync::OnceLock,
 };
 
@@ -145,6 +147,33 @@ fn handle_command(game: &mut Game, command: &str) -> CommandResult {
         "help" | "?" => CommandResult::ShowHelp,
         "status" | "s" => CommandResult::ShowStatus,
         "next" | "n" | "end" => CommandResult::Advanced(game.advance_quarter()),
+        "save" => {
+            if parts.len() > 2 {
+                CommandResult::Continue(
+                    "Cannot save: use 'save [name]' with a single slot name.".to_string(),
+                )
+            } else {
+                match save_game(game, parts.get(1).copied()) {
+                    Ok(message) => CommandResult::Continue(message),
+                    Err(message) => CommandResult::Continue(format!("Cannot save: {message}")),
+                }
+            }
+        }
+        "load" => {
+            if parts.len() > 2 {
+                CommandResult::Continue(
+                    "Cannot load: use 'load [name]' with a single slot name.".to_string(),
+                )
+            } else {
+                match load_game(parts.get(1).copied()) {
+                    Ok((loaded, message)) => {
+                        *game = loaded;
+                        CommandResult::Continue(message)
+                    }
+                    Err(message) => CommandResult::Continue(format!("Cannot load: {message}")),
+                }
+            }
+        }
         "continue" | "resume" | "sandbox" => match game.continue_after_review() {
             Ok(message) => CommandResult::Continue(message),
             Err(message) => CommandResult::Continue(format!("Cannot continue: {message}")),
@@ -171,6 +200,72 @@ fn apply(game: &mut Game, decision: Decision) -> CommandResult {
         Ok(message) => CommandResult::Continue(message),
         Err(error) => CommandResult::Continue(format!("Cannot do that: {error}")),
     }
+}
+
+fn save_game(game: &Game, name: Option<&str>) -> Result<String, String> {
+    save_game_to_dir(game, name.unwrap_or("autosave"), &default_save_dir()?)
+}
+
+fn load_game(name: Option<&str>) -> Result<(Game, String), String> {
+    load_game_from_dir(name.unwrap_or("autosave"), &default_save_dir()?)
+}
+
+fn default_save_dir() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .ok_or_else(|| "could not find a home directory for save files".to_string())?;
+    Ok(PathBuf::from(home).join(".electrification"))
+}
+
+fn save_game_to_dir(game: &Game, raw_name: &str, root: &Path) -> Result<String, String> {
+    let path = save_file_path(root, raw_name)?;
+    fs::create_dir_all(root).map_err(|error| {
+        format!(
+            "could not create save directory {}: {error}",
+            root.display()
+        )
+    })?;
+    let json = serde_json::to_string_pretty(game)
+        .map_err(|error| format!("could not serialize game: {error}"))?;
+    fs::write(&path, json)
+        .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+    Ok(format!("Saved game to {}.", path.display()))
+}
+
+fn load_game_from_dir(raw_name: &str, root: &Path) -> Result<(Game, String), String> {
+    let path = save_file_path(root, raw_name)?;
+    let json = fs::read_to_string(&path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let game = serde_json::from_str::<Game>(&json)
+        .map_err(|error| format!("could not parse {}: {error}", path.display()))?;
+    Ok((game, format!("Loaded game from {}.", path.display())))
+}
+
+fn save_file_path(root: &Path, raw_name: &str) -> Result<PathBuf, String> {
+    let name = normalized_save_name(raw_name)?;
+    Ok(root.join(format!("{name}.json")))
+}
+
+fn normalized_save_name(raw_name: &str) -> Result<String, String> {
+    let trimmed = raw_name.trim();
+    let trimmed = trimmed.strip_suffix(".json").unwrap_or(trimmed);
+
+    if trimmed.is_empty() {
+        return Err("save name cannot be empty".to_string());
+    }
+
+    if trimmed == "." || trimmed == ".." {
+        return Err("save name cannot be a path".to_string());
+    }
+
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err("save names may use letters, numbers, '-' and '_' only".to_string());
+    }
+
+    Ok(trimmed.to_string())
 }
 
 fn money_amount(value: Option<&str>, default: f64, usage: &str) -> Result<f64, String> {
@@ -973,6 +1068,8 @@ fn print_help() {
             "preview/quote  inspect command".to_string(),
             "next / n / end finish quarter".to_string(),
             "continue       post-review play".to_string(),
+            "save [name]    write save file".to_string(),
+            "load [name]    restore save file".to_string(),
             "help / ?       command reference".to_string(),
             "quit / exit    leave game".to_string(),
         ],
@@ -982,6 +1079,7 @@ fn print_help() {
             "Invalid amounts are rejected.".to_string(),
             "Build sizes are clamped to sane bounds.".to_string(),
             "Large rate increases above public tolerance are rejected.".to_string(),
+            "Saves live in ~/.electrification.".to_string(),
             "Use the dashboard guide for live costs.".to_string(),
         ],
     );
@@ -2368,8 +2466,8 @@ fn command_footer_lines(game: &Game) -> Vec<String> {
         },
     ));
     lines.push(action_line(
-        "rivals | board | help",
-        "deeper competitor, objective, and command detail",
+        "rivals | board | save",
+        "competitor detail, objectives, and save/load",
     ));
 
     if let Some((index, price)) = cheapest_diligenced_competitor(game) {
@@ -3002,6 +3100,14 @@ fn visible_width(line: &str) -> usize {
 mod tests {
     use super::*;
 
+    fn unique_test_save_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("electrification-{label}-{nanos}"))
+    }
+
     fn make_adjacent_expansion_ready(game: &mut Game) {
         game.quarter = 8;
         game.player.cash = 260_000.0;
@@ -3011,6 +3117,35 @@ mod tests {
         game.player.generation_capacity_mwh = 260.0;
         game.player.distribution_capacity = 1_050.0;
         game.player.reliability = 0.88;
+    }
+
+    #[test]
+    fn save_and_load_round_trip_from_directory() {
+        let root = unique_test_save_dir("round-trip");
+        let mut game = Game::with_seed(130);
+        game.player.cash = 123_456.0;
+        game.player.rate_cents = 5.5;
+        game.advance_quarter();
+
+        let save_message = save_game_to_dir(&game, "slot1", &root).unwrap();
+        let (loaded, load_message) = load_game_from_dir("slot1", &root).unwrap();
+
+        assert!(save_message.contains("Saved game"));
+        assert!(load_message.contains("Loaded game"));
+        assert_eq!(loaded.quarter, game.quarter);
+        assert!((loaded.player.cash - game.player.cash).abs() < 0.01);
+        assert!((loaded.player.rate_cents - 5.5).abs() < 0.001);
+        assert_eq!(loaded.competitors.len(), game.competitors.len());
+    }
+
+    #[test]
+    fn save_name_rejects_paths_and_allows_simple_slots() {
+        assert!(normalized_save_name("../bad").is_err());
+        assert!(normalized_save_name("bad/name").is_err());
+        assert!(normalized_save_name("bad\\name").is_err());
+        assert!(normalized_save_name("..").is_err());
+        assert_eq!(normalized_save_name("slot_1").unwrap(), "slot_1");
+        assert_eq!(normalized_save_name("slot-1.json").unwrap(), "slot-1");
     }
 
     #[test]
