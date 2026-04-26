@@ -34,8 +34,8 @@ use competitors::draw_competitor_name;
 #[cfg(test)]
 use competitors::{COMPETITOR_NAME_POOL, StartupEntryReason};
 use economics::{
-    churn_for_market, high_rate_excess, maintenance_reliability_gain, maintenance_reputation_gain,
-    positive_amount, settle_utility, weighted_average, weighted_rate,
+    churn_for_market_with_floor, high_rate_excess, maintenance_reliability_gain,
+    maintenance_reputation_gain, positive_amount, settle_utility, weighted_average, weighted_rate,
 };
 #[cfg(test)]
 use economics::{churn_rate_for, churn_rate_for_market};
@@ -721,7 +721,12 @@ impl Game {
                     );
                 }
                 let old = self.player.rate_cents;
-                let requested_rate = (self.player.rate_cents + delta_cents).max(7.0);
+                let requested_rate = self.player.rate_cents + delta_cents;
+                if requested_rate <= 0.0 {
+                    return Err(
+                        "Rates must stay above 0.0c/kWh; use a positive tariff.".to_string()
+                    );
+                }
                 if requested_rate > MAX_CREDIBLE_RATE_CENTS {
                     return Err(format!(
                         "A {:.1}c rate is not a credible tariff. Keep rates at or below {:.1}c and let market consequences do the rest.",
@@ -1372,8 +1377,14 @@ impl Game {
         let competitor_alternative_rates = (0..self.competitors.len())
             .map(|index| self.alternative_rate_for_competitor(index))
             .collect::<Vec<_>>();
+        let natural_churn_floor = self.natural_churn_floor();
 
-        let player_loss = churn_for_market(&self.player, player_alternative_rate, &self.market);
+        let player_loss = churn_for_market_with_floor(
+            &self.player,
+            player_alternative_rate,
+            &self.market,
+            natural_churn_floor,
+        );
         self.player.customers -= player_loss;
         let mut player_switch_gain = self.allocate_customers_from(
             player_loss,
@@ -1386,7 +1397,12 @@ impl Game {
             .iter()
             .zip(competitor_alternative_rates)
             .map(|(competitor, alternative_rate)| {
-                churn_for_market(competitor, alternative_rate, &self.market)
+                churn_for_market_with_floor(
+                    competitor,
+                    alternative_rate,
+                    &self.market,
+                    natural_churn_floor,
+                )
             })
             .collect::<Vec<_>>();
 
@@ -1408,6 +1424,13 @@ impl Game {
         }
 
         player_loss
+    }
+
+    fn natural_churn_floor(&mut self) -> f64 {
+        let patience_pressure = (1.0 - self.market.civic_patience) * 0.0012;
+        let demand_mobility = self.macro_state.demand_index.max(0.0) * 0.0010;
+        (0.0035 + patience_pressure + demand_mobility + self.rng.range(-0.0010, 0.0012))
+            .clamp(0.0024, 0.0065)
     }
 
     fn rival_average_rate_for_player(&self) -> f64 {

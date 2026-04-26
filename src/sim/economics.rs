@@ -43,16 +43,7 @@ pub(super) fn settle_utility(
     };
 
     let revenue = served_mwh * utility.rate_cents * 10.0;
-    let maintenance_load = if utility.reliability < 0.72 {
-        1.14
-    } else {
-        1.0
-    };
-    let operating_cost = (served_mwh * market.variable_cost_per_mwh * maintenance_load
-        + 850.0
-        + utility.customers * 2.65
-        + utility.asset_base * 0.0105)
-        * cost_multiplier;
+    let operating_cost = operating_cost_for(utility, market, served_mwh, cost_multiplier);
     let interest = utility.debt * macro_state.annual_interest_rate_for(utility) / 4.0;
     let profit = revenue - operating_cost - interest;
 
@@ -114,6 +105,42 @@ pub(super) fn settle_utility(
     }
 }
 
+pub(super) fn break_even_rate_cents(
+    utility: &Utility,
+    market: &Market,
+    macro_state: &MacroEnvironment,
+    cost_multiplier: f64,
+) -> f64 {
+    let demanded_mwh = utility.customers * market.avg_mwh_per_customer;
+    let served_mwh =
+        demanded_mwh.min(utility.generation_capacity_mwh * utility.reliability.max(0.45));
+    if served_mwh <= 0.0 {
+        return 0.0;
+    }
+
+    let operating_cost = operating_cost_for(utility, market, served_mwh, cost_multiplier);
+    let interest = utility.debt * macro_state.annual_interest_rate_for(utility) / 4.0;
+    ((operating_cost + interest) / served_mwh / 10.0).max(0.0)
+}
+
+fn operating_cost_for(
+    utility: &Utility,
+    market: &Market,
+    served_mwh: f64,
+    cost_multiplier: f64,
+) -> f64 {
+    let maintenance_load = if utility.reliability < 0.72 {
+        1.14
+    } else {
+        1.0
+    };
+    (served_mwh * market.variable_cost_per_mwh * maintenance_load
+        + 850.0
+        + utility.customers * 2.65
+        + utility.asset_base * 0.0105)
+        * cost_multiplier
+}
+
 fn service_reputation_gain(utility: &Utility, market: &Market, unmet_demand_ratio: f64) -> f64 {
     if unmet_demand_ratio > 0.01
         || utility.reliability < SERVICE_REPUTATION_RELIABILITY_THRESHOLD
@@ -133,20 +160,46 @@ fn service_reputation_gain(utility: &Utility, market: &Market, unmet_demand_rati
     (0.20 + reliability_quality * 0.35 + utilization_cushion * 0.15).min(0.70) * reputation_headroom
 }
 
-pub(super) fn churn_for_market(utility: &Utility, average_rate: f64, market: &Market) -> f64 {
-    utility.customers * churn_rate_for_market(utility, average_rate, market)
+pub(super) fn churn_for_market_with_floor(
+    utility: &Utility,
+    average_rate: f64,
+    market: &Market,
+    natural_churn_floor: f64,
+) -> f64 {
+    utility.customers
+        * churn_rate_for_market_with_floor(utility, average_rate, market, natural_churn_floor)
 }
 
 #[cfg(test)]
 pub(super) fn churn_rate_for(utility: &Utility, average_rate: f64) -> f64 {
-    base_churn_rate_for(utility, average_rate, 0.0)
+    base_churn_rate_for(utility, average_rate, 0.0, 0.004)
 }
 
+#[cfg(test)]
 pub(super) fn churn_rate_for_market(utility: &Utility, average_rate: f64, market: &Market) -> f64 {
-    base_churn_rate_for(utility, average_rate, high_rate_excess(utility, market))
+    churn_rate_for_market_with_floor(utility, average_rate, market, 0.004)
 }
 
-fn base_churn_rate_for(utility: &Utility, average_rate: f64, rate_excess: f64) -> f64 {
+fn churn_rate_for_market_with_floor(
+    utility: &Utility,
+    average_rate: f64,
+    market: &Market,
+    natural_churn_floor: f64,
+) -> f64 {
+    base_churn_rate_for(
+        utility,
+        average_rate,
+        high_rate_excess(utility, market),
+        natural_churn_floor,
+    )
+}
+
+fn base_churn_rate_for(
+    utility: &Utility,
+    average_rate: f64,
+    rate_excess: f64,
+    natural_churn_floor: f64,
+) -> f64 {
     let rate_gap = utility.rate_cents - average_rate;
     let rate_pressure = rate_gap.max(0.0) * 0.006;
     let rate_retention = (-rate_gap).max(0.0) * 0.0025;
@@ -158,8 +211,9 @@ fn base_churn_rate_for(utility: &Utility, average_rate: f64, rate_excess: f64) -
     let churn_rate =
         0.010 + rate_pressure + public_rate_pressure + outage_pressure + reputation_pressure;
     let churn_cap = (0.075 + rate_excess * 0.035).clamp(0.075, 0.50);
+    let churn_floor = natural_churn_floor.clamp(0.0024, 0.0065);
     (churn_rate - rate_retention - reliability_retention - reputation_retention)
-        .clamp(0.004, churn_cap)
+        .clamp(churn_floor, churn_cap)
 }
 
 pub fn public_rate_tolerance(market: &Market) -> f64 {

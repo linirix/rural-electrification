@@ -655,7 +655,13 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
             }
         }
         Decision::AdjustRate { delta_cents } => {
-            let target = (game.player.rate_cents + delta_cents).max(7.0);
+            let target = game.player.rate_cents + delta_cents;
+            if target <= 0.0 {
+                return vec![format!(
+                    "{} rates must stay above 0.0c/kWh.",
+                    styled(BOLD_RED, "Quote:")
+                )];
+            }
             let mut lines = vec![format!(
                 "{} rate would move from {:.1}c to {:.1}c/kWh.",
                 muted("Quote:"),
@@ -2823,6 +2829,34 @@ mod tests {
     fn bare_rate_number_sets_target_rate() {
         let parts = vec!["rate", "9.5"];
         assert_eq!(parse_rate_delta(&parts, 10.5).unwrap(), Some(-1.0));
+    }
+
+    #[test]
+    fn rate_command_accepts_below_former_floor() {
+        let mut game = Game::with_seed(100);
+        game.player.rate_cents = 7.2;
+
+        match handle_command(&mut game, "rate 6.0") {
+            CommandResult::Continue(message) => assert!(message.contains("Cut the rate")),
+            _ => panic!("rate command should apply a below-floor target"),
+        }
+
+        assert!((game.player.rate_cents - 6.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn rate_preview_does_not_floor_below_seven_cents() {
+        let mut game = Game::with_seed(100);
+        game.player.rate_cents = 7.2;
+
+        match handle_command(&mut game, "preview rate 6.0") {
+            CommandResult::Preview(lines) => {
+                assert!(lines.iter().any(|line| line.contains("6.0c/kWh")));
+            }
+            _ => panic!("preview rate should show the below-floor target"),
+        }
+
+        assert!((game.player.rate_cents - 7.2).abs() < 0.001);
     }
 
     #[test]

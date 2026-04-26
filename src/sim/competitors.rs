@@ -1,3 +1,4 @@
+use super::economics::break_even_rate_cents;
 use super::{
     Game, Rng, Utility, high_rate_excess, maintenance_reliability_gain, public_rate_tolerance,
 };
@@ -337,6 +338,8 @@ impl Game {
         let demand_signal = self.macro_state.demand_index;
         let competitor_count = self.competitors.len();
         let rate_frozen = self.rate_frozen();
+        let macro_state = self.macro_state.clone();
+        let cost_multiplier = self.cost_shock_multiplier();
 
         let total_now = self.total_connected_customers().max(1.0);
         let total_last = (self.player.last_quarter_customers
@@ -366,8 +369,11 @@ impl Game {
             let player_premium_pricing = player_rate > competitor.rate_cents + 0.5;
             let near_capacity = competitor.capacity_headroom(&market) < competitor.customers * 0.06;
 
-            if lost_share && player_undercutting && competitor.rate_cents > 8.4 {
-                let cut = 0.4_f64.min(competitor.rate_cents - 8.4);
+            let defensive_floor =
+                rival_defensive_rate_floor(competitor, &market, &macro_state, cost_multiplier);
+            if lost_share && player_undercutting && competitor.rate_cents > defensive_floor + 0.05 {
+                let target = (player_rate + 0.35).max(defensive_floor);
+                let cut = 0.4_f64.min((competitor.rate_cents - target).max(0.0));
                 if cut > 0.0 {
                     competitor.rate_cents -= cut;
                     events.push(format!(
@@ -442,6 +448,19 @@ impl Game {
             }
         }
     }
+}
+
+fn rival_defensive_rate_floor(
+    competitor: &Utility,
+    market: &super::Market,
+    macro_state: &super::MacroEnvironment,
+    cost_multiplier: f64,
+) -> f64 {
+    let break_even = break_even_rate_cents(competitor, market, macro_state, cost_multiplier);
+    let variable_cost_floor = market.variable_cost_per_mwh / 10.0;
+    (break_even * 0.88)
+        .max(variable_cost_floor * 1.05)
+        .max(0.25)
 }
 
 fn startup_entry_message(reason: StartupEntryReason) -> &'static str {

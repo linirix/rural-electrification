@@ -655,6 +655,35 @@ fn quarter_report_includes_churn_rate() {
 }
 
 #[test]
+fn natural_churn_floor_varies_between_quarters() {
+    let mut game = Game::with_seed(47);
+    game.competitors.clear();
+    game.player.customers = 1_000.0;
+    game.player.distribution_capacity = 2_000.0;
+    game.player.generation_capacity_mwh = 700.0;
+    game.player.rate_cents = 6.0;
+    game.player.reliability = 0.96;
+    game.player.reputation = 88.0;
+    game.market.standard_rate_cents = 10.5;
+    game.macro_state.demand_index = 0.0;
+
+    let mut observed_basis_points = std::collections::BTreeSet::new();
+    for _ in 0..10 {
+        game.player.customers = 1_000.0;
+        let lost_customers = game.customer_churn(&mut Vec::new());
+        let churn_rate = lost_customers / 1_000.0;
+
+        assert!((0.0024..=0.0065).contains(&churn_rate));
+        observed_basis_points.insert((churn_rate * 10_000.0).round() as i32);
+    }
+
+    assert!(
+        observed_basis_points.len() > 1,
+        "natural churn floor should vary across quarters, saw {observed_basis_points:?}"
+    );
+}
+
+#[test]
 fn quarter_report_includes_prior_market_share() {
     let mut game = Game::with_seed(48);
     let starting_share = game.market_share();
@@ -1372,6 +1401,83 @@ fn rate_freeze_allows_rate_cuts() {
 }
 
 #[test]
+fn rates_can_be_cut_below_former_seven_cent_floor() {
+    let mut game = Game::with_seed(92);
+    game.player.rate_cents = 7.2;
+
+    game.apply_decision(Decision::AdjustRate { delta_cents: -1.0 })
+        .unwrap();
+
+    assert!((game.player.rate_cents - 6.2).abs() < 0.001);
+}
+
+#[test]
+fn nonpositive_rates_are_rejected_without_clamping() {
+    let mut game = Game::with_seed(92);
+    game.player.rate_cents = 6.2;
+
+    let error = game
+        .apply_decision(Decision::AdjustRate { delta_cents: -6.2 })
+        .unwrap_err();
+
+    assert!(error.contains("above 0.0c"));
+    assert!((game.player.rate_cents - 6.2).abs() < 0.001);
+}
+
+#[test]
+fn below_cost_rates_reduce_quarter_profit() {
+    let game = Game::with_seed(92);
+    let mut normal = game.player.clone();
+    let mut underpriced = game.player.clone();
+    normal.rate_cents = 10.0;
+    underpriced.rate_cents = 4.0;
+
+    let normal_profit = settle_utility(
+        &mut normal,
+        &game.market,
+        &game.macro_state,
+        1.0,
+        true,
+        &mut Vec::new(),
+    )
+    .profit;
+    let underpriced_profit = settle_utility(
+        &mut underpriced,
+        &game.market,
+        &game.macro_state,
+        1.0,
+        true,
+        &mut Vec::new(),
+    )
+    .profit;
+
+    assert!(
+        underpriced_profit < normal_profit - 1_000.0,
+        "underpriced profit {underpriced_profit} should trail normal profit {normal_profit}"
+    );
+}
+
+#[test]
+fn sustained_below_cost_rates_create_financing_stress() {
+    let mut normal = Game::with_seed(93);
+    let mut underpriced = normal.clone();
+    normal.player.rate_cents = 9.5;
+    underpriced.player.rate_cents = 4.0;
+
+    for _ in 0..8 {
+        normal.advance_quarter();
+        underpriced.advance_quarter();
+    }
+
+    let normal_net_liquidity = normal.player.cash - normal.player.debt;
+    let underpriced_net_liquidity = underpriced.player.cash - underpriced.player.debt;
+    assert!(
+        underpriced_net_liquidity < normal_net_liquidity - 12_000.0,
+        "underpriced net liquidity {underpriced_net_liquidity} should trail normal {normal_net_liquidity}"
+    );
+}
+
+#[test]
 fn rates_can_exceed_old_fifteen_cent_cap() {
     let mut game = Game::with_seed(85);
     game.player.rate_cents = 14.6;
@@ -1649,6 +1755,48 @@ fn competitors_react_to_player_undercutting() {
     }
 
     assert!(any_cut, "expected at least one competitor to cut rates");
+}
+
+#[test]
+fn competitors_can_defend_below_former_rate_floor_without_chasing_zero() {
+    let mut game = Game::with_seed(96);
+    game.player.rate_cents = 5.0;
+    game.player.customers = 1_100.0;
+    game.player.last_quarter_customers = 700.0;
+    game.player.reliability = 0.94;
+    game.player.reputation = 82.0;
+
+    for competitor in &mut game.competitors {
+        competitor.rate_cents = 8.5;
+        competitor.customers = 260.0;
+        competitor.last_quarter_customers = 390.0;
+        competitor.debt = 0.0;
+        competitor.reliability = 0.88;
+        competitor.generation_capacity_mwh = 180.0;
+        competitor.distribution_capacity = 500.0;
+    }
+
+    let starting_rate = game.competitors[0].rate_cents;
+    let break_even = economics::break_even_rate_cents(
+        &game.competitors[0],
+        &game.market,
+        &game.macro_state,
+        game.cost_shock_multiplier(),
+    );
+
+    let mut events = Vec::new();
+    game.competitor_plans(&mut events);
+
+    let ending_rate = game.competitors[0].rate_cents;
+    assert!(
+        ending_rate < 8.4,
+        "rival should be able to defend below the old 8.4c floor; ended at {ending_rate}"
+    );
+    assert!(ending_rate < starting_rate);
+    assert!(
+        ending_rate > break_even * 0.80,
+        "rival should not chase a zero-rate price war; ended at {ending_rate}, break-even {break_even}"
+    );
 }
 
 #[test]
