@@ -17,6 +17,7 @@ const NEW_GENERATION_RELIABILITY_WEIGHT: f64 = 0.35;
 const MAX_GENERATION_RELIABILITY_LIFT: f64 = 0.085;
 const MIN_STOCK_PRICE: f64 = 0.25;
 const FRESH_EQUITY_CASH_MARKET_RECOGNITION: f64 = 0.35;
+const BUYBACK_CASH_MARKET_RECOGNITION: f64 = 0.45;
 const VARIABLE_COST_REVERSION: f64 = 0.14;
 const VARIABLE_COST_PRESSURE_SENSITIVITY: f64 = 2.35;
 const VARIABLE_COST_FLOOR_MULTIPLE: f64 = 0.72;
@@ -389,6 +390,7 @@ impl Game {
 
         match decision {
             Decision::BuildGeneration { capacity_mwh } => {
+                let capacity_mwh = positive_amount(capacity_mwh, "generation project size")?;
                 let capacity_mwh =
                     capacity_mwh.clamp(MIN_GENERATION_PROJECT_MWH, MAX_GENERATION_PROJECT_MWH);
                 let cost = generation_project_cost(capacity_mwh);
@@ -409,6 +411,8 @@ impl Game {
                 ))
             }
             Decision::BuildDistribution { customer_capacity } => {
+                let customer_capacity =
+                    positive_amount(customer_capacity, "distribution project size")?;
                 let customer_capacity = customer_capacity.clamp(
                     MIN_DISTRIBUTION_PROJECT_CUSTOMERS,
                     MAX_DISTRIBUTION_PROJECT_CUSTOMERS,
@@ -431,6 +435,7 @@ impl Game {
                 ))
             }
             Decision::Marketing { spend } => {
+                let spend = positive_amount(spend, "marketing spend")?;
                 let spend = spend.clamp(1_000.0, 25_000.0);
                 self.require_cash(spend)?;
                 self.player.cash -= spend;
@@ -509,8 +514,11 @@ impl Game {
                 }
                 let amount = positive_amount(amount, "stock buyback")?;
                 let old_market_cap = self.player.market_cap().max(1.0);
+                let old_shares = self.player.shares.max(1.0);
                 let pressure = amount / old_market_cap;
-                let repurchase_premium = 0.02 + pressure.min(3.0) * 0.06;
+                let repurchase_premium =
+                    (0.015 + pressure.min(1.6) * 0.085 + pressure.powf(1.20) * 0.012)
+                        .clamp(0.015, 0.30);
                 let repurchase_price =
                     (self.player.stock_price * (1.0 + repurchase_premium)).max(MIN_STOCK_PRICE);
                 let max_shares = (self.player.shares - 500.0).max(0.0);
@@ -523,19 +531,31 @@ impl Game {
                 let actual_spend = shares_bought * repurchase_price;
                 self.require_cash(actual_spend)?;
                 let remaining_shares = self.player.shares - shares_bought;
-                let remaining_equity_value =
-                    (old_market_cap - actual_spend).max(remaining_shares * MIN_STOCK_PRICE);
-                let theoretical_price = remaining_equity_value / remaining_shares.max(1.0);
-                let confidence_lift = (pressure * 0.05).clamp(0.0, 0.10);
+                let remaining_cash = self.player.cash - actual_spend;
+                let float_retired = shares_bought / old_shares;
+                let actual_pressure = actual_spend / old_market_cap;
+                let market_cap_after_cash_use = (old_market_cap
+                    - actual_spend * BUYBACK_CASH_MARKET_RECOGNITION)
+                    .max(remaining_shares * MIN_STOCK_PRICE);
+                let capital_return_signal =
+                    (float_retired * 0.30 + actual_pressure.min(1.0) * 0.04).clamp(0.0, 0.16);
+                let liquidity_drag =
+                    ((8_000.0 - remaining_cash).max(0.0) / 8_000.0 * 0.09).clamp(0.0, 0.09);
+                let overextension_drag =
+                    ((actual_spend / self.player.cash.max(1.0)) - 0.60).max(0.0) * 0.12;
+                let stress_drag = (liquidity_drag + overextension_drag).clamp(0.0, 0.18);
+                let post_buyback_market_cap =
+                    market_cap_after_cash_use * (1.0 + capital_return_signal) * (1.0 - stress_drag);
                 self.player.cash -= actual_spend;
                 self.player.shares = remaining_shares;
                 self.player.stock_price =
-                    (theoretical_price * (1.0 + confidence_lift)).max(MIN_STOCK_PRICE);
+                    (post_buyback_market_cap / remaining_shares.max(1.0)).max(MIN_STOCK_PRICE);
                 Ok(format!(
-                    "Bought back {:.0} shares at ${:.2}, spending {}. Shares outstanding now {:.0}; stock is ${:.2}.",
+                    "Bought back {:.0} shares at ${:.2}, spending {} and retiring {:.1}% of the float. Shares outstanding now {:.0}; stock is ${:.2}.",
                     shares_bought,
                     repurchase_price,
                     money(actual_spend),
+                    float_retired * 100.0,
                     self.player.shares,
                     self.player.stock_price
                 ))
@@ -691,6 +711,9 @@ impl Game {
                 ))
             }
             Decision::AdjustRate { delta_cents } => {
+                if !delta_cents.is_finite() {
+                    return Err("The rate change must be a finite number.".to_string());
+                }
                 if delta_cents > 0.0 && self.rate_frozen() {
                     return Err(
                         "The market-wide rate freeze blocks any rate increase right now."
@@ -729,6 +752,7 @@ impl Game {
                 }
             }
             Decision::Maintenance { spend } => {
+                let spend = positive_amount(spend, "maintenance spend")?;
                 let spend = spend.clamp(1_500.0, 20_000.0);
                 self.require_cash(spend)?;
                 self.player.cash -= spend;
@@ -1440,10 +1464,10 @@ impl Game {
         }
 
         let mut scores = self.competition_scores(allocation_kind);
-        if let Some(index) = excluded_utility_index {
-            if index < scores.len() {
-                scores[index] = 0.0;
-            }
+        if let Some(index) = excluded_utility_index
+            && index < scores.len()
+        {
+            scores[index] = 0.0;
         }
         let score_total: f64 = scores.iter().sum();
         if score_total <= 0.0 {
@@ -1864,6 +1888,7 @@ fn fresh_seed() -> u64 {
         ^ 0x9E37_79B9_7F4A_7C15
 }
 
+#[allow(clippy::too_many_arguments)]
 fn starting_utility(
     name: &str,
     cash: f64,

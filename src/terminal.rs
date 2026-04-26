@@ -169,7 +169,9 @@ fn apply(game: &mut Game, decision: Decision) -> CommandResult {
 
 fn money_amount(value: Option<&str>, default: f64, usage: &str) -> Result<f64, String> {
     match value {
-        Some(value) => parse_money(value).ok_or_else(|| format!("Use '{usage}'.")),
+        Some(value) => parse_money(value)
+            .filter(|amount| amount.is_finite() && *amount > 0.0)
+            .ok_or_else(|| format!("Use '{usage}' with a positive amount.")),
         None => Ok(default),
     }
 }
@@ -498,9 +500,7 @@ fn optional_rate_argument(value: Option<&str>) -> usize {
 }
 
 fn is_rate_argument(value: &str) -> bool {
-    if value.starts_with('+') && value.len() > 1 {
-        parse_rate_number(&value[1..]).is_ok()
-    } else if value.starts_with('-') && value.len() > 1 {
+    if (value.starts_with('+') || value.starts_with('-')) && value.len() > 1 {
         parse_rate_number(&value[1..]).is_ok()
     } else {
         parse_rate_number(value).is_ok()
@@ -586,7 +586,7 @@ fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<String> {
             styled(BOLD_YELLOW, money(*amount))
         )],
         Decision::BuyBackStock { amount } => vec![format!(
-            "{} repurchase request {}; actual spend is limited by cash and public float.",
+            "{} repurchase request {}; retires float at a premium and reprices remaining shares.",
             muted("Quote:"),
             styled(BOLD_YELLOW, money(*amount))
         )],
@@ -2290,7 +2290,7 @@ fn action_effect_lines(game: &Game) -> Vec<String> {
         ),
         action_line(
             "issue / buyback",
-            "equity raises cash with dilution; buybacks spend cash",
+            "equity raises cash; buybacks spend cash to retire float",
         ),
         action_line("rivals / board", "inspect competitors or milestone targets"),
         action_line(
@@ -2720,7 +2720,7 @@ fn fit_line(line: &str, width: usize) -> String {
             truncated.push(ch);
             if matches!(chars.peek(), Some(&'[')) {
                 truncated.push(chars.next().expect("peeked CSI introducer"));
-                while let Some(sequence_char) = chars.next() {
+                for sequence_char in chars.by_ref() {
                     truncated.push(sequence_char);
                     if ('@'..='~').contains(&sequence_char) {
                         break;
@@ -2777,7 +2777,7 @@ fn visible_width(line: &str) -> usize {
         if ch == '\x1B' {
             if matches!(chars.peek(), Some(&'[')) {
                 chars.next();
-                while let Some(sequence_char) = chars.next() {
+                for sequence_char in chars.by_ref() {
                     if ('@'..='~').contains(&sequence_char) {
                         break;
                     }
@@ -2984,6 +2984,21 @@ mod tests {
 
         assert_eq!(game.player.cash, starting_cash);
         assert_eq!(game.player.debt, starting_debt);
+    }
+
+    #[test]
+    fn nonpositive_money_amounts_are_rejected_without_minimum_spend() {
+        let mut game = Game::with_seed(120);
+        let starting_cash = game.player.cash;
+        let starting_reputation = game.player.reputation;
+
+        match handle_command(&mut game, "marketing -100") {
+            CommandResult::Continue(message) => assert!(message.contains("positive amount")),
+            _ => panic!("negative marketing spend should return an error message"),
+        }
+
+        assert_eq!(game.player.cash, starting_cash);
+        assert_eq!(game.player.reputation, starting_reputation);
     }
 
     #[test]

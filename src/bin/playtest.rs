@@ -486,7 +486,7 @@ fn naive_policy(game: &mut Game) {
         }
     }
 
-    if game.quarter % 4 == 0 && game.player.cash > 7_000.0 {
+    if game.quarter.is_multiple_of(4) && game.player.cash > 7_000.0 {
         let _ = game.apply_decision(Decision::Marketing { spend: 2_500.0 });
     }
 
@@ -605,7 +605,7 @@ fn mna_policy(game: &mut Game) {
         });
     }
 
-    if game.quarter % 3 == 0 && game.player.cash > 8_000.0 {
+    if game.quarter.is_multiple_of(3) && game.player.cash > 8_000.0 {
         let _ = game.apply_decision(Decision::Marketing { spend: 5_500.0 });
     }
 
@@ -620,14 +620,13 @@ fn mna_policy(game: &mut Game) {
 
     if let Some((index, price)) = cheapest_competitor(game) {
         let can_absorb_debt = game.player.debt_to_assets() < 0.82;
-        if !game.has_diligence(index) {
-            if let Some(cost) = game.diligence_cost(index) {
-                if game.player.cash > cost + 5_000.0 {
-                    let _ = game.apply_decision(Decision::Diligence {
-                        competitor_index: index,
-                    });
-                }
-            }
+        if !game.has_diligence(index)
+            && let Some(cost) = game.diligence_cost(index)
+            && game.player.cash > cost + 5_000.0
+        {
+            let _ = game.apply_decision(Decision::Diligence {
+                competitor_index: index,
+            });
         }
         if game.player.cash > price + 10_000.0 && can_absorb_debt {
             let _ = game.apply_decision(Decision::Acquire {
@@ -656,7 +655,7 @@ fn run_organic_program(game: &mut Game, plan: OrganicPlan) {
     build_distribution_to_headroom(game, plan);
     build_generation_to_reserve(game, plan);
 
-    if plan.marketing_interval > 0 && game.quarter % plan.marketing_interval == 0 {
+    if plan.marketing_interval > 0 && game.quarter.is_multiple_of(plan.marketing_interval) {
         let marketing_buffer = plan.cash_reserve * 0.75;
         finance_to_cash(
             game,

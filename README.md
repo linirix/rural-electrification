@@ -47,7 +47,7 @@ quit
 Capital action limits:
 
 - `issue [amount]` has no fixed proceeds cap. Larger issues are possible, but they face steeper issue discounts, fees, dilution, reputation pressure, and equity-market fatigue.
-- `buyback [amount]` has no fixed command cap, but it cannot spend cash you do not have and cannot retire the last public float.
+- `buyback [amount]` has no fixed command cap, but it cannot spend cash you do not have and cannot retire the last public float. Material buybacks retire shares at a premium, reprice the remaining float, and are dampened if they leave the company short on cash.
 - `borrow [amount|max]` is floating-rate and limited by borrowing room, which is based on the asset base, current debt, and current credit conditions.
 - `repay [amount|max]` is limited by cash on hand and outstanding debt.
 - `diligence <number>` reveals exact acquisition terms for a rival for three quarters. Without diligence, the rival screen shows public estimates rather than exact cash, debt, closing cost, and post-deal leverage.

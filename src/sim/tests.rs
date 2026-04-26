@@ -114,6 +114,157 @@ fn default_initial_variance_stays_within_playable_bounds() {
 }
 
 #[test]
+fn simulation_state_stays_sane_across_extended_policy_runs() {
+    for seed in 1..=80 {
+        let mut game = Game::with_seed(seed);
+        game.campaign_quarters = 80;
+
+        for _ in 0..40 {
+            run_sanity_policy(&mut game);
+            let report = game.advance_quarter();
+            assert_report_sane(&report);
+            assert_game_sane(&game);
+
+            if game
+                .outcome
+                .as_ref()
+                .is_some_and(|outcome| !outcome.can_continue)
+            {
+                break;
+            }
+        }
+    }
+}
+
+#[test]
+fn nonfinite_and_negative_decision_inputs_are_rejected_without_mutation() {
+    let decisions = [
+        Decision::BuildGeneration {
+            capacity_mwh: f64::NAN,
+        },
+        Decision::BuildDistribution {
+            customer_capacity: -50.0,
+        },
+        Decision::Marketing {
+            spend: f64::NEG_INFINITY,
+        },
+        Decision::Maintenance { spend: -100.0 },
+        Decision::AdjustRate {
+            delta_cents: f64::NAN,
+        },
+    ];
+
+    for decision in decisions {
+        let mut game = Game::with_seed(12);
+        let starting_cash = game.player.cash;
+        let starting_asset_base = game.player.asset_base;
+        let starting_rate = game.player.rate_cents;
+        let starting_projects = game.pending_projects.len();
+
+        assert!(game.apply_decision(decision).is_err());
+        assert_eq!(game.player.cash, starting_cash);
+        assert_eq!(game.player.asset_base, starting_asset_base);
+        assert_eq!(game.player.rate_cents, starting_rate);
+        assert_eq!(game.pending_projects.len(), starting_projects);
+        assert_game_sane(&game);
+    }
+}
+
+fn run_sanity_policy(game: &mut Game) {
+    if game.outcome.is_some() {
+        return;
+    }
+
+    if game.player.cash < 7_000.0 && game.borrowing_room() > 1_000.0 {
+        let amount = game.borrowing_room().min(12_000.0);
+        let _ = game.apply_decision(Decision::Borrow { amount });
+    }
+
+    if game.player.reliability < 0.78 && game.player.cash > 6_500.0 {
+        let _ = game.apply_decision(Decision::Maintenance { spend: 4_500.0 });
+    }
+
+    if game.player.firm_generation_reserve_mwh(&game.market) < 35.0 {
+        let cost = generation_project_cost(GENERATION_PROJECT_CAPACITY_MWH);
+        if game.player.cash > cost + 5_000.0 {
+            let _ = game.apply_decision(Decision::BuildGeneration {
+                capacity_mwh: GENERATION_PROJECT_CAPACITY_MWH,
+            });
+        }
+    }
+
+    if game.player.capacity_headroom(&game.market) < 90.0 {
+        let cost = distribution_project_cost(DISTRIBUTION_PROJECT_CAPACITY);
+        if game.player.cash > cost + 5_000.0 {
+            let _ = game.apply_decision(Decision::BuildDistribution {
+                customer_capacity: DISTRIBUTION_PROJECT_CAPACITY,
+            });
+        }
+    }
+
+    if game.quarter.is_multiple_of(3) && game.player.cash > 7_000.0 {
+        let _ = game.apply_decision(Decision::Marketing { spend: 3_000.0 });
+    }
+
+    if game.market_share() < 0.35 && game.player.rate_cents > game.market.standard_rate_cents {
+        let _ = game.apply_decision(Decision::AdjustRate { delta_cents: -0.25 });
+    }
+}
+
+fn assert_report_sane(report: &QuarterReport) {
+    assert!(report.revenue.is_finite() && report.revenue >= 0.0);
+    assert!(report.operating_cost.is_finite() && report.operating_cost >= 0.0);
+    assert!(report.interest.is_finite() && report.interest >= 0.0);
+    assert!(report.profit.is_finite());
+    assert!(report.new_customers.is_finite() && report.new_customers >= 0.0);
+    assert!(report.lost_customers.is_finite() && report.lost_customers >= 0.0);
+    assert!(report.lost_customer_rate.is_finite() && report.lost_customer_rate >= 0.0);
+    assert!(report.market_share.is_finite() && (0.0..=1.0).contains(&report.market_share));
+    assert!(
+        report.prior_market_share.is_finite() && (0.0..=1.0).contains(&report.prior_market_share)
+    );
+}
+
+fn assert_game_sane(game: &Game) {
+    assert!(
+        game.market.addressable_customers.is_finite() && game.market.addressable_customers > 0.0
+    );
+    assert!(game.market.electrification.is_finite());
+    assert!((0.05..=0.68).contains(&game.market.electrification));
+    assert!(game.market.avg_mwh_per_customer.is_finite() && game.market.avg_mwh_per_customer > 0.0);
+    assert!(
+        game.market.variable_cost_per_mwh.is_finite() && game.market.variable_cost_per_mwh > 0.0
+    );
+    assert!(game.macro_state.annual_base_rate.is_finite());
+    assert!(game.macro_state.credit_spread.is_finite());
+    assert!(game.macro_state.demand_index.is_finite());
+    assert!(game.macro_state.cost_pressure.is_finite());
+    assert!(game.market_share().is_finite() && (0.0..=1.0).contains(&game.market_share()));
+    assert_utility_sane(&game.player, true);
+    for competitor in &game.competitors {
+        assert_utility_sane(competitor, false);
+    }
+}
+
+fn assert_utility_sane(utility: &Utility, has_public_stock: bool) {
+    assert!(utility.cash.is_finite() && utility.cash >= 0.0);
+    assert!(utility.debt.is_finite() && utility.debt >= 0.0);
+    assert!(utility.customers.is_finite() && utility.customers >= 0.0);
+    assert!(utility.generation_capacity_mwh.is_finite() && utility.generation_capacity_mwh > 0.0);
+    assert!(utility.distribution_capacity.is_finite() && utility.distribution_capacity > 0.0);
+    assert!(utility.rate_cents.is_finite() && utility.rate_cents > 0.0);
+    assert!(utility.reputation.is_finite() && (0.0..=100.0).contains(&utility.reputation));
+    assert!(utility.reliability.is_finite() && (0.35..=0.98).contains(&utility.reliability));
+    assert!(utility.marketing_momentum.is_finite() && utility.marketing_momentum >= 0.0);
+    assert!(utility.asset_base.is_finite() && utility.asset_base > 0.0);
+    assert!(utility.last_quarter_customers.is_finite() && utility.last_quarter_customers >= 0.0);
+    if has_public_stock {
+        assert!(utility.shares.is_finite() && utility.shares > 0.0);
+        assert!(utility.stock_price.is_finite() && utility.stock_price >= MIN_STOCK_PRICE);
+    }
+}
+
+#[test]
 fn stock_issuance_has_no_fixed_proceeds_cap() {
     let mut game = Game::with_seed(14);
     let starting_cash = game.player.cash;
@@ -216,6 +367,29 @@ fn stock_buyback_reduces_cash_and_share_count() {
     assert!(game.player.shares < starting_shares);
     assert_eq!(game.player.debt, starting_debt);
     assert!(game.player.stock_price >= MIN_STOCK_PRICE);
+}
+
+#[test]
+fn material_buyback_lifts_per_share_price_without_lifting_market_cap() {
+    let mut game = Game::with_seed(10);
+    game.player.cash = 100_000.0;
+    let starting_price = game.player.stock_price;
+    let starting_market_cap = game.player.market_cap();
+    let amount = starting_market_cap * 0.10;
+
+    game.apply_decision(Decision::BuyBackStock { amount })
+        .unwrap();
+
+    assert!(
+        game.player.stock_price > starting_price * 1.05,
+        "10% market-cap buyback should materially lift per-share price: {} -> {}",
+        starting_price,
+        game.player.stock_price
+    );
+    assert!(
+        game.player.market_cap() < starting_market_cap,
+        "buybacks should not create total market-cap value from cash spend"
+    );
 }
 
 #[test]
