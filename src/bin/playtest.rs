@@ -252,6 +252,7 @@ fn parse_strategy(raw: &str) -> Option<StrategySelection> {
         "naive" | "baseline" => Some(StrategySelection::One(Strategy::Naive)),
         "organic" | "growth" => Some(StrategySelection::One(Strategy::Organic)),
         "balanced" | "hybrid" => Some(StrategySelection::One(Strategy::Balanced)),
+        "regional" | "expansion" | "platform" => Some(StrategySelection::One(Strategy::Regional)),
         "mna" | "ma" | "m&a" | "acquire" | "acquisition" | "expert" => {
             Some(StrategySelection::One(Strategy::Mna))
         }

@@ -1,6 +1,8 @@
 use crate::sim::{
     MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH, MAX_PUBLIC_RATE_PREMIUM_CENTS,
-    MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, public_rate_tolerance,
+    MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH,
+    REGIONAL_MANDATE_EXPANSION_TARGET, REGIONAL_MANDATE_LEVERAGE_LIMIT,
+    REGIONAL_MANDATE_RELIABILITY_TARGET, REGIONAL_MANDATE_SHARE_TARGET, public_rate_tolerance,
 };
 use crate::{
     AcquisitionTerms, DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH,
@@ -13,16 +15,18 @@ pub enum Strategy {
     Naive,
     Organic,
     Balanced,
+    Regional,
     Mna,
     Glonzo,
 }
 
 impl Strategy {
-    pub fn all() -> [Strategy; 5] {
+    pub fn all() -> [Strategy; 6] {
         [
             Strategy::Naive,
             Strategy::Organic,
             Strategy::Balanced,
+            Strategy::Regional,
             Strategy::Mna,
             Strategy::Glonzo,
         ]
@@ -33,9 +37,14 @@ impl Strategy {
             Strategy::Naive => "naive",
             Strategy::Organic => "organic",
             Strategy::Balanced => "balanced",
+            Strategy::Regional => "regional",
             Strategy::Mna => "mna",
             Strategy::Glonzo => "glonzo",
         }
+    }
+
+    fn continues_to_regional_mandate(self) -> bool {
+        matches!(self, Strategy::Regional)
     }
 }
 
@@ -221,7 +230,17 @@ where
         summary.start_rate_range.observe(start_rate);
         summary.start_headroom_range.observe(start_headroom);
 
-        while game.outcome.is_none() {
+        loop {
+            if let Some(outcome) = &game.outcome {
+                if strategy.continues_to_regional_mandate()
+                    && outcome.can_continue
+                    && !game.regional_mandate_completed
+                {
+                    let _ = game.continue_after_review();
+                } else {
+                    break;
+                }
+            }
             run_policy(strategy, &mut game, &mut state);
             let report = game.advance_quarter();
             after_quarter(seed, &game, &report);
@@ -254,6 +273,7 @@ fn run_policy(strategy: Strategy, game: &mut Game, state: &mut StrategyState) {
         Strategy::Naive => naive_policy(game),
         Strategy::Organic => organic_policy(game),
         Strategy::Balanced => balanced_policy(game),
+        Strategy::Regional => regional_policy(game),
         Strategy::Mna => mna_policy(game),
         Strategy::Glonzo => {
             if let StrategyState::Glonzo(rng) = state {
@@ -365,6 +385,56 @@ fn balanced_policy(game: &mut Game) {
             max_deal_share,
             max_execution_risk,
         );
+    }
+}
+
+fn regional_policy(game: &mut Game) {
+    let post_review = game.review_completed;
+    let plan = if post_review {
+        OrganicPlan {
+            target_rate_cents: 7.80,
+            marketing_spend: 16_000.0,
+            marketing_interval: 1,
+            reliability_floor: REGIONAL_MANDATE_RELIABILITY_TARGET + 0.04,
+            headroom_target: 720.0,
+            firm_reserve_target_mwh: 250.0,
+            distribution_project_customers: 1_100.0,
+            generation_project_mwh: 780.0,
+            cash_reserve: 20_000.0,
+            max_debt_to_assets: 0.84,
+        }
+    } else {
+        OrganicPlan {
+            target_rate_cents: 8.00,
+            marketing_spend: 12_250.0,
+            marketing_interval: 1,
+            reliability_floor: 0.84,
+            headroom_target: 450.0,
+            firm_reserve_target_mwh: 155.0,
+            distribution_project_customers: 820.0,
+            generation_project_mwh: 575.0,
+            cash_reserve: 12_000.0,
+            max_debt_to_assets: 0.78,
+        }
+    };
+
+    run_organic_program(game, plan);
+    monetize_established_share(game, 0.46);
+
+    if game.quarter >= 8 || post_review {
+        try_enter_adjacent_market(game, 24_000.0, 0.86);
+    }
+
+    if game.regional_integration > 0.10 && game.player.cash > 16_000.0 {
+        let _ = game.apply_decision(Decision::Marketing { spend: 8_000.0 });
+    }
+
+    if game.player.debt_to_assets() > REGIONAL_MANDATE_LEVERAGE_LIMIT - 0.03 {
+        repay_excess_cash(game, 24_000.0);
+    }
+
+    if post_review && game.market_share() < REGIONAL_MANDATE_SHARE_TARGET - 0.005 {
+        let _ = try_acquire_opportunistically(game, 18_000.0, 0.84, 0.96, 0.24, 0.26);
     }
 }
 
@@ -757,6 +827,36 @@ fn monetize_established_share(game: &mut Game, share_floor: f64) {
 
     let delta = (target - game.player.rate_cents).min(0.50);
     let _ = game.apply_decision(Decision::AdjustRate { delta_cents: delta });
+}
+
+fn try_enter_adjacent_market(game: &mut Game, reserve: f64, max_debt_to_assets: f64) -> bool {
+    if game.adjacent_expansions >= REGIONAL_MANDATE_EXPANSION_TARGET {
+        let can_absorb_optional_expansion = game.market_share()
+            >= REGIONAL_MANDATE_SHARE_TARGET + 0.02
+            && game.player.debt_to_assets() <= REGIONAL_MANDATE_LEVERAGE_LIMIT - 0.12;
+        if !can_absorb_optional_expansion {
+            return false;
+        }
+    }
+    if game.adjacent_expansion_blocker().is_some() {
+        return false;
+    }
+
+    let cost = game.adjacent_expansion_cost();
+    finance_to_cash(game, cost + reserve, max_debt_to_assets);
+    if game.player.cash <= cost + reserve * 0.50 {
+        return false;
+    }
+
+    game.apply_decision(Decision::EnterAdjacentMarket).is_ok()
+}
+
+fn repay_excess_cash(game: &mut Game, reserve: f64) {
+    let excess_cash = (game.player.cash - reserve).max(0.0);
+    let amount = excess_cash.min(game.player.debt);
+    if amount >= 1_000.0 {
+        let _ = game.apply_decision(Decision::RepayDebt { amount });
+    }
 }
 
 fn project_cash_buffer(plan: OrganicPlan) -> f64 {

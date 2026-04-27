@@ -83,6 +83,32 @@ fn glonzo_uses_policy_seed_even_from_fixed_starts() {
     );
 }
 
+#[test]
+fn regional_strategy_can_meet_year_ten_mandate() {
+    let summary = run_strategy_batch(
+        REGRESSION_SEEDS,
+        InitialVariance::default(),
+        Strategy::Regional,
+    );
+    assert_eq!(summary.runs, REGRESSION_SEEDS);
+    assert_eq!(summary.victories + summary.defeats(), REGRESSION_SEEDS);
+    assert!(
+        summary.win_rate() >= 0.30,
+        "regional strategy should prove the Y10 mandate is reachable in at least 30% of seeds: {:.1}%",
+        summary.win_rate() * 100.0
+    );
+    assert!(
+        summary.win_rate() <= 0.65,
+        "regional mandate should remain contested, not automatic: {:.1}%",
+        summary.win_rate() * 100.0
+    );
+    assert!(
+        summary.average_finish_share() >= 0.55,
+        "regional strategy should usually finish near the regional share target: avg {:.1}%",
+        summary.average_finish_share() * 100.0
+    );
+}
+
 fn assert_win_rate(strategy: Strategy, summary: &StrategySummary, min_win: f64, max_win: f64) {
     let win_rate = summary.win_rate();
     assert!(
