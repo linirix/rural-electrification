@@ -101,7 +101,7 @@ pub(super) fn quarter_attributions(context: AttributionContext<'_>) -> Vec<Strin
     let reliability_change = context.ending.reliability - context.starting.reliability;
     if reliability_change <= -0.006 {
         lines.push(format!(
-            "Reliability slipped {} from operating wear and load; maintenance is the direct offset.",
+            "Reliability slipped {} from operating wear and load; maintenance spending is the main way to counter it.",
             percentage_points(reliability_change.abs())
         ));
     } else if reliability_change >= 0.006 {
