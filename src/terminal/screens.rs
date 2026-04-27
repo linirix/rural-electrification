@@ -522,7 +522,7 @@ pub(super) fn board_path_lines(game: &Game) -> Vec<String> {
 }
 
 pub(super) fn should_show_regional_status(game: &Game) -> bool {
-    game.regional_mandate_active()
+    !game.regional_mandate_completed && game.quarter < REGIONAL_MANDATE_QUARTER
 }
 
 pub(super) fn regional_status_lines(game: &Game) -> Vec<String> {
@@ -585,6 +585,20 @@ pub(super) fn regional_status_lines(game: &Game) -> Vec<String> {
             "{} {}",
             muted("Next step"),
             styled(CYAN, "expand and defend service quality before Year 10")
+        ));
+    } else if !game.review_completed {
+        lines.push(format!(
+            "{} {}",
+            muted("Plan ahead"),
+            styled(
+                DIM,
+                format!(
+                    "Y5 review unlocks adjacent expansion (need {:.0}% share, {:.0}% reliability, debt/assets <= {:.0}%)",
+                    REGIONAL_MANDATE_SHARE_TARGET * 100.0,
+                    REGIONAL_MANDATE_RELIABILITY_TARGET * 100.0,
+                    REGIONAL_MANDATE_LEVERAGE_LIMIT * 100.0
+                )
+            )
         ));
     }
 
@@ -1196,6 +1210,18 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
         );
     }
 
+    if game.acquisition_stress >= 0.62 {
+        push_line(
+            81,
+            signal_line("M&A", RED, "covenants strained after acquisition"),
+        );
+    } else if game.acquisition_stress >= 0.38 {
+        push_line(
+            57,
+            signal_line("M&A", YELLOW, "lenders watching integration"),
+        );
+    }
+
     if game.player.reliability < 0.74 {
         push_line(
             78,
@@ -1326,7 +1352,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
                 ),
             ));
         }
-    } else if let Some((index, cost)) = cheapest_diligence_target(game) {
+    } else if let Some((index, estimate)) = cheapest_public_acquisition_target(game) {
         if game.competitors.len() == 1 {
             lines.push(action_line(
                 "buy",
@@ -1341,14 +1367,33 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
                 ),
             ));
         } else {
+            let diligence_note = game
+                .diligence_cost(index)
+                .map(|cost| {
+                    format!(
+                        "; diligence {} freezes terms for {}",
+                        index + 1,
+                        styled(BOLD_YELLOW, money(cost))
+                    )
+                })
+                .unwrap_or_default();
             lines.push(action_line(
-                format!("diligence {}", index + 1),
+                format!("buy {} | diligence {}", index + 1, index + 1),
                 format!(
-                    "{} to reveal exact acquisition terms",
-                    styled(BOLD_YELLOW, money(cost))
+                    "public est {}; close risk{}",
+                    styled(BOLD_YELLOW, money(estimate)),
+                    diligence_note
                 ),
             ));
         }
+    } else if let Some((index, cost)) = cheapest_diligence_target(game) {
+        lines.push(action_line(
+            format!("diligence {}", index + 1),
+            format!(
+                "{} to reveal exact acquisition terms",
+                styled(BOLD_YELLOW, money(cost))
+            ),
+        ));
     }
 
     lines

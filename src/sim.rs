@@ -46,6 +46,10 @@ const DILIGENCE_DURATION_QUARTERS: u32 = 3;
 const DILIGENCE_ALERT_MAX_BACKING: f64 = 8_000.0;
 const MERGER_RISK_MIN: f64 = 0.06;
 const MERGER_RISK_MAX: f64 = 0.46;
+const ACQUISITION_STRESS_NOTICE: f64 = 0.38;
+const ACQUISITION_STRESS_STRAINED: f64 = 0.62;
+const ACQUISITION_STRESS_DISTRESSED: f64 = 0.88;
+const ACQUISITION_STRESS_RECEIVERSHIP: f64 = 0.96;
 const BOARD_CHECKPOINT_QUARTER: u32 = 8;
 const BOARD_CHECKPOINT_SHARE_TARGET: f64 = 0.32;
 const BOARD_CHECKPOINT_REPUTATION_PENALTY: f64 = 3.0;
@@ -100,6 +104,8 @@ pub struct Game {
     pub pending_projects: Vec<Project>,
     pub acquisition_cooldown: u32,
     pub integration_strain: f64,
+    #[serde(default)]
+    pub acquisition_stress: f64,
     #[serde(default)]
     pub regional_integration: f64,
     pub active_shocks: Vec<ActiveShock>,
@@ -453,6 +459,7 @@ impl Game {
             pending_projects: Vec::new(),
             acquisition_cooldown: 0,
             integration_strain: 0.0,
+            acquisition_stress: 0.0,
             regional_integration: 0.0,
             active_shocks: Vec::new(),
             startup_index: 0,
@@ -839,6 +846,15 @@ impl Game {
                 self.integration_strain = (self.integration_strain
                     + acquisition_integration_strain(starting_customers, terms.acquired_customers))
                 .clamp(0.0, 1.6);
+                let acquisition_stress_add = acquisition_covenant_stress_score(
+                    &acquired,
+                    &terms,
+                    starting_customers,
+                    pre_close_integration_strain,
+                    !had_diligence,
+                );
+                self.acquisition_stress =
+                    (self.acquisition_stress + acquisition_stress_add).clamp(0.0, 1.8);
                 self.diligence_reports
                     .retain(|report| report.competitor_name != acquired_name);
                 let execution_suffix = self.apply_merger_execution_outcome(
@@ -858,6 +874,7 @@ impl Game {
                     " Closed without diligence; hidden balance-sheet details resolved at close."
                         .to_string()
                 };
+                let underwriting_suffix = acquisition_underwriting_suffix(acquisition_stress_add);
                 Ok(format!(
                     "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt). Integration will take {} quarter(s).",
                     money(terms.price),
@@ -865,6 +882,7 @@ impl Game {
                     money(terms.assumed_debt),
                     self.acquisition_cooldown
                 ) + &diligence_suffix
+                    + &underwriting_suffix
                     + &execution_suffix)
             }
             Decision::AdjustRate { delta_cents } => {
@@ -1041,6 +1059,7 @@ impl Game {
         self.update_public_rate_tolerance(system_unmet_demand_ratio, &mut events);
 
         self.update_stock_price(&player_finances);
+        self.apply_acquisition_stress_pressure(&player_finances, &mut events);
         self.quarter += 1;
         if self.acquisition_cooldown > 0 {
             self.acquisition_cooldown -= 1;
@@ -1048,6 +1067,7 @@ impl Game {
         self.advance_diligence_reports();
         self.apply_board_checkpoint(&mut events);
         self.check_outcome(&player_finances);
+        self.decay_acquisition_stress(&player_finances);
 
         let ending_customers = self.player.customers;
         let ending_total_connected = self.total_connected_customers();
@@ -1342,6 +1362,35 @@ impl Game {
         self.acquisition_terms(competitor_index)
             .expect("competitor index out of range")
             .price
+    }
+
+    pub fn acquisition_stress_score(&self, competitor_index: usize) -> Option<f64> {
+        let competitor = self.competitors.get(competitor_index)?;
+        let had_diligence = self.has_diligence(competitor_index);
+        let terms = if had_diligence {
+            self.acquisition_terms(competitor_index)
+        } else {
+            self.public_acquisition_estimate(competitor_index)
+        }?;
+        Some(acquisition_covenant_stress_score(
+            competitor,
+            &terms,
+            self.player.customers,
+            self.integration_strain,
+            !had_diligence,
+        ))
+    }
+
+    pub fn acquisition_stress_label(score: f64) -> &'static str {
+        if score >= ACQUISITION_STRESS_DISTRESSED {
+            "distressed"
+        } else if score >= ACQUISITION_STRESS_STRAINED {
+            "strained"
+        } else if score >= ACQUISITION_STRESS_NOTICE {
+            "guarded"
+        } else {
+            "ordinary"
+        }
     }
 
     pub fn public_acquisition_estimate(&self, competitor_index: usize) -> Option<AcquisitionTerms> {
@@ -1977,6 +2026,58 @@ impl Game {
         }
     }
 
+    fn apply_acquisition_stress_pressure(
+        &mut self,
+        finances: &FirmFinances,
+        events: &mut Vec<String>,
+    ) {
+        if self.acquisition_stress < ACQUISITION_STRESS_NOTICE {
+            return;
+        }
+
+        let leverage = self.player.debt_to_assets();
+        let weak_financing = leverage > 0.86 || finances.profit < 0.0 || self.player.cash < 8_000.0;
+        let fatigue = (self.acquisition_stress * 0.055).min(0.11);
+        self.equity_market_fatigue = (self.equity_market_fatigue + fatigue).clamp(0.0, 3.0);
+        self.player.reputation =
+            (self.player.reputation - self.acquisition_stress * 0.42).clamp(0.0, 100.0);
+
+        if self.acquisition_stress >= ACQUISITION_STRESS_STRAINED && weak_financing {
+            let amendment_cost = (self.player.debt.max(1.0) * self.acquisition_stress * 0.0045)
+                .clamp(850.0, 14_000.0);
+            self.player.cash -= amendment_cost;
+            events.push(format!(
+                "Lenders tightened acquisition covenants after reviewing integration progress; {} of fees hit cash and financing flexibility narrowed.",
+                money(amendment_cost)
+            ));
+        } else if self.acquisition_stress >= ACQUISITION_STRESS_STRAINED {
+            events.push(
+                "Lenders are watching the acquisition integration closely; future financing is less forgiving."
+                    .to_string(),
+            );
+        }
+    }
+
+    fn decay_acquisition_stress(&mut self, finances: &FirmFinances) {
+        if self.acquisition_stress <= 0.01 {
+            self.acquisition_stress = 0.0;
+            return;
+        }
+
+        let leverage = self.player.debt_to_assets();
+        let decay = if finances.profit < 0.0 || leverage > 0.90 || self.player.cash < 0.0 {
+            0.90
+        } else if self.acquisition_stress >= ACQUISITION_STRESS_STRAINED {
+            0.78
+        } else {
+            0.64
+        };
+        self.acquisition_stress *= decay;
+        if self.acquisition_stress < 0.04 {
+            self.acquisition_stress = 0.0;
+        }
+    }
+
     fn apply_merger_execution_outcome(
         &mut self,
         acquired: &Utility,
@@ -2372,6 +2473,21 @@ impl Game {
             return;
         }
 
+        if self.quarter > 5
+            && self.acquisition_stress >= ACQUISITION_STRESS_RECEIVERSHIP
+            && finances.profit < 0.0
+            && (self.player.debt_to_assets() > 0.92 || self.player.cash < -2_500.0)
+        {
+            self.outcome = Some(Outcome {
+                kind: OutcomeKind::Defeat,
+                headline: "Bankers Forced Receivership".to_string(),
+                details: "A strained acquisition left lenders unwilling to fund losses, integration costs, and debt service at the same time."
+                    .to_string(),
+                can_continue: false,
+            });
+            return;
+        }
+
         if !self.review_completed && self.quarter >= self.campaign_quarters {
             let share = self.market_share();
             let healthy_balance_sheet = self.player.debt_to_assets() <= 0.95;
@@ -2501,6 +2617,48 @@ fn merger_execution_risk(
         + serial_rollup_risk
         + dominance_risk)
         .clamp(MERGER_RISK_MIN, MERGER_RISK_MAX)
+}
+
+fn acquisition_covenant_stress_score(
+    acquired: &Utility,
+    terms: &AcquisitionTerms,
+    starting_customers: f64,
+    pre_close_integration_strain: f64,
+    no_diligence: bool,
+) -> f64 {
+    let deal_share =
+        terms.acquired_customers / (starting_customers + terms.acquired_customers).max(1.0);
+    let service_risk = (0.82 - acquired.reliability).max(0.0) * 1.18;
+    let reputation_risk = (55.0 - acquired.reputation).max(0.0) / 150.0;
+    let leverage_risk = (terms.post_debt_to_assets - 0.78).max(0.0) * 1.55;
+    let cash_buffer_risk = ((10_000.0 - terms.post_cash) / 16_000.0).clamp(0.0, 1.0) * 0.18;
+    let strain_risk = pre_close_integration_strain.max(0.0) * 0.20;
+    let dominance_risk = (terms.post_market_share - 0.52).max(0.0) * 0.20;
+    let hidden_close_risk = if no_diligence { 0.05 } else { 0.0 };
+
+    (deal_share * 0.36
+        + service_risk
+        + reputation_risk
+        + leverage_risk
+        + cash_buffer_risk
+        + strain_risk
+        + dominance_risk
+        + hidden_close_risk)
+        .clamp(0.0, 1.20)
+}
+
+fn acquisition_underwriting_suffix(score: f64) -> String {
+    if score >= ACQUISITION_STRESS_DISTRESSED {
+        " Underwriters flagged the close as distressed; lenders may force a reckoning if losses follow."
+            .to_string()
+    } else if score >= ACQUISITION_STRESS_STRAINED {
+        " Underwriters called the close strained; lender patience is thinner until integration proves out."
+            .to_string()
+    } else if score >= ACQUISITION_STRESS_NOTICE {
+        " Underwriters sounded guarded about the integration plan.".to_string()
+    } else {
+        String::new()
+    }
 }
 
 fn adjacent_expansion_integration_burden(completed_expansions: u32) -> f64 {

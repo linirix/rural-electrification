@@ -232,6 +232,7 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
             muted("terms"),
             money(cost)
         ));
+        lines.push(acquisition_underwriting_line(game, competitor_index, false));
         return lines;
     }
 
@@ -271,6 +272,7 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
             terms.post_market_share * 100.0
         ));
     }
+    lines.push(acquisition_underwriting_line(game, competitor_index, true));
 
     if game.competitors.len() == 1 {
         lines.push(format!(
@@ -320,6 +322,36 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
     }
 
     lines
+}
+
+fn acquisition_underwriting_line(
+    game: &Game,
+    competitor_index: usize,
+    exact_terms: bool,
+) -> String {
+    let score = game
+        .acquisition_stress_score(competitor_index)
+        .unwrap_or(0.0);
+    let label = Game::acquisition_stress_label(score);
+    let note = if exact_terms {
+        "terms reviewed"
+    } else {
+        "public file"
+    };
+    format!(
+        "   {} {} ({note})",
+        muted("underwriting"),
+        styled(acquisition_underwriting_tone(score), label)
+    )
+}
+
+fn acquisition_underwriting_tone(score: f64) -> &'static str {
+    match Game::acquisition_stress_label(score) {
+        "distressed" => BOLD_RED,
+        "strained" => BOLD_YELLOW,
+        "guarded" => YELLOW,
+        _ => GREEN,
+    }
 }
 
 pub(super) fn dashboard_competitor_lines(game: &Game) -> Vec<String> {

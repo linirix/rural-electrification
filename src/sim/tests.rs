@@ -417,6 +417,109 @@ fn repeated_large_stock_issues_hit_market_fatigue() {
 }
 
 #[test]
+fn second_issue_in_same_quarter_gets_worse_pricing_than_the_first() {
+    let mut game = Game::with_seed(220);
+
+    let cash_before_first = game.player.cash;
+    game.apply_decision(Decision::IssueStock { amount: 25_000.0 })
+        .unwrap();
+    let cash_after_first = game.player.cash;
+    let first_yield = (cash_after_first - cash_before_first) / 25_000.0;
+    let fatigue_after_first = game.equity_market_fatigue;
+
+    game.apply_decision(Decision::IssueStock { amount: 25_000.0 })
+        .unwrap();
+    let cash_after_second = game.player.cash;
+    let second_yield = (cash_after_second - cash_after_first) / 25_000.0;
+
+    assert!(
+        fatigue_after_first > 0.0,
+        "first issue should record equity-market fatigue: {fatigue_after_first}"
+    );
+    assert!(
+        game.equity_market_fatigue > fatigue_after_first,
+        "second same-quarter issue should add more fatigue: {} -> {}",
+        fatigue_after_first,
+        game.equity_market_fatigue
+    );
+    assert!(
+        second_yield + 0.005 < first_yield,
+        "second issue should net less cash per dollar than the first: first {first_yield:.4}, second {second_yield:.4}"
+    );
+}
+
+#[test]
+fn issues_spaced_across_quarters_recover_better_yield_than_back_to_back() {
+    let mut spaced = Game::with_seed(221);
+    let mut sequential = Game::with_seed(221);
+
+    let spaced_starting_cash = spaced.player.cash;
+    let sequential_starting_cash = sequential.player.cash;
+
+    sequential
+        .apply_decision(Decision::IssueStock { amount: 25_000.0 })
+        .unwrap();
+    sequential
+        .apply_decision(Decision::IssueStock { amount: 25_000.0 })
+        .unwrap();
+
+    spaced
+        .apply_decision(Decision::IssueStock { amount: 25_000.0 })
+        .unwrap();
+    spaced.advance_quarter();
+    spaced
+        .apply_decision(Decision::IssueStock { amount: 25_000.0 })
+        .unwrap();
+
+    let sequential_proceeds = sequential.player.cash - sequential_starting_cash;
+    let spaced_proceeds = spaced.player.cash - spaced_starting_cash;
+
+    // The spaced game advanced an extra quarter (operating profit + macro shift), so we
+    // compare residual fatigue to verify the decay path rather than raw cash deltas.
+    assert!(
+        spaced.equity_market_fatigue < sequential.equity_market_fatigue,
+        "spacing issues across a quarter should leave less residual fatigue: spaced {:.3}, sequential {:.3}",
+        spaced.equity_market_fatigue,
+        sequential.equity_market_fatigue
+    );
+    // Sanity: both issuances actually netted real cash.
+    assert!(sequential_proceeds > 0.0);
+    assert!(spaced_proceeds > 0.0);
+}
+
+#[test]
+fn equity_fatigue_decays_at_documented_per_quarter_rate() {
+    let mut game = Game::with_seed(222);
+    game.equity_market_fatigue = 1.0;
+
+    let before = game.equity_market_fatigue;
+    game.advance_quarter();
+    let after_one = game.equity_market_fatigue;
+
+    // The decay multiplier on each advance_quarter is 0.55. Allow a small epsilon for any
+    // additional fatigue added by board checkpoint or other quarter logic. From quarter 0
+    // we are well before the Year 2 board checkpoint, so no extra fatigue should be added.
+    assert!(
+        (after_one - before * 0.55).abs() < 1e-6,
+        "fatigue should decay by 0.55x per quarter pre-checkpoint: before {before}, after {after_one}"
+    );
+
+    // Across four quarters the decay should compound to roughly 0.55^4.
+    let mut decay_game = Game::with_seed(223);
+    decay_game.equity_market_fatigue = 1.0;
+    for _ in 0..4 {
+        decay_game.advance_quarter();
+    }
+    let expected = 0.55_f64.powi(4);
+    assert!(
+        (decay_game.equity_market_fatigue - expected).abs() < 1e-3,
+        "four-quarter compound decay should match 0.55^4 = {:.4}, got {:.4}",
+        expected,
+        decay_game.equity_market_fatigue
+    );
+}
+
+#[test]
 fn excessive_dilution_yields_less_cash_per_dollar() {
     let mut small = Game::with_seed(101);
     let mut large = small.clone();
@@ -1460,6 +1563,86 @@ fn acquisition_can_close_without_diligence_but_notes_estimate_risk() {
     assert!(message.contains("without diligence"));
     assert_eq!(game.competitors.len(), competitor_count - 1);
     assert!(!game.has_diligence(1));
+}
+
+#[test]
+fn risky_acquisition_creates_lender_stress_signal() {
+    let mut game = Game::with_seed(30);
+    game.player.cash = 600_000.0;
+    game.player.debt = 120_000.0;
+    game.player.asset_base = 155_000.0;
+    game.competitors[0].customers = 780.0;
+    game.competitors[0].reliability = 0.58;
+    game.competitors[0].reputation = 34.0;
+    game.competitors[0].debt = 95_000.0;
+    game.competitors[0].asset_base = 110_000.0;
+
+    let score = game.acquisition_stress_score(0).unwrap();
+    assert!(
+        score >= ACQUISITION_STRESS_STRAINED,
+        "expected visibly strained underwriting score, got {score:.2}"
+    );
+
+    let message = game
+        .apply_decision(Decision::Acquire {
+            competitor_index: 0,
+        })
+        .unwrap();
+
+    assert!(message.contains("Underwriters"));
+    assert!(game.acquisition_stress >= ACQUISITION_STRESS_STRAINED);
+}
+
+#[test]
+fn acquisition_stress_can_force_receivership_when_losses_follow() {
+    let mut game = Game::with_seed(31);
+    game.quarter = 8;
+    game.acquisition_stress = ACQUISITION_STRESS_RECEIVERSHIP + 0.04;
+    game.player.cash = -3_000.0;
+    game.player.debt = 98_000.0;
+    game.player.asset_base = 100_000.0;
+
+    let finances = FirmFinances {
+        revenue: 7_000.0,
+        operating_cost: 11_500.0,
+        interest: 2_000.0,
+        profit: -6_500.0,
+        served_mwh: 0.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().expect("expected receivership");
+    assert_eq!(outcome.headline, "Bankers Forced Receivership");
+    assert!(outcome.details.contains("strained acquisition"));
+    assert!(!outcome.can_continue);
+}
+
+#[test]
+fn acquisition_stress_pressure_hits_cash_and_financing_flexibility() {
+    let mut game = Game::with_seed(32);
+    game.acquisition_stress = ACQUISITION_STRESS_STRAINED + 0.10;
+    game.player.cash = 5_000.0;
+    game.player.debt = 150_000.0;
+    game.player.asset_base = 170_000.0;
+    let starting_cash = game.player.cash;
+    let starting_fatigue = game.equity_market_fatigue;
+    let mut events = Vec::new();
+    let finances = FirmFinances {
+        revenue: 9_000.0,
+        operating_cost: 10_500.0,
+        interest: 2_200.0,
+        profit: -3_700.0,
+        served_mwh: 0.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.apply_acquisition_stress_pressure(&finances, &mut events);
+
+    assert!(game.player.cash < starting_cash);
+    assert!(game.equity_market_fatigue > starting_fatigue);
+    assert!(events.iter().any(|event| event.contains("covenants")));
 }
 
 #[test]

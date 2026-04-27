@@ -301,6 +301,7 @@ fn rival_detail_includes_acquisition_economics() {
             .iter()
             .any(|line| line.contains("integration haircuts included"))
     );
+    assert!(lines.iter().any(|line| line.contains("underwriting")));
 }
 
 #[test]
@@ -350,6 +351,7 @@ fn acquisition_preview_without_diligence_shows_public_range() {
             assert!(lines.iter().any(|line| line.contains("public estimate")));
             assert!(lines.iter().any(|line| line.contains("close risk")));
             assert!(lines.iter().any(|line| line.contains("diligence reveals")));
+            assert!(lines.iter().any(|line| line.contains("Underwriting")));
         }
         _ => panic!("preview buy should show preview output"),
     }
@@ -366,9 +368,26 @@ fn acquisition_preview_with_diligence_shows_integration_risk() {
     match handle_command(&mut game, "preview buy 1") {
         CommandResult::Preview(lines) => {
             assert!(lines.iter().any(|line| line.contains("integration risk")));
+            assert!(lines.iter().any(|line| line.contains("underwriting")));
             assert!(lines.iter().any(|line| line.contains("post debt/assets")));
         }
         _ => panic!("preview buy should show preview output"),
+    }
+}
+
+#[test]
+fn diligence_preview_shows_acquisition_terms_that_will_be_locked_in() {
+    let mut game = Game::with_seed(151);
+
+    match handle_command(&mut game, "preview diligence 1") {
+        CommandResult::Preview(lines) => {
+            assert!(lines.iter().any(|line| line.contains("inspect")));
+            assert!(lines.iter().any(|line| line.contains("Will lock")));
+            assert!(lines.iter().any(|line| line.contains("net cost")));
+            assert!(lines.iter().any(|line| line.contains("assumes debt")));
+            assert!(lines.iter().any(|line| line.contains("post debt/assets")));
+        }
+        _ => panic!("preview diligence should show preview output"),
     }
 }
 
@@ -621,6 +640,48 @@ fn regional_status_lines_show_post_review_targets_and_integration() {
 }
 
 #[test]
+fn regional_status_visible_pre_review_with_planning_hint() {
+    let game = Game::with_seed(149);
+    assert_eq!(game.quarter, 0);
+    assert!(!game.review_completed);
+
+    assert!(should_show_regional_status(&game));
+
+    let lines = regional_status_lines(&game);
+    let joined = lines.join(" ");
+
+    assert!(joined.contains("Year 10"));
+    assert!(joined.contains("Plan ahead"));
+    assert!(joined.contains("Y5 review"));
+}
+
+#[test]
+fn regional_status_hidden_after_mandate_completed() {
+    let mut game = Game::with_seed(150);
+    game.regional_mandate_completed = true;
+
+    assert!(!should_show_regional_status(&game));
+}
+
+#[test]
+fn post_review_dashboard_guides_regional_expansion_work() {
+    let mut game = Game::with_seed(148);
+    make_adjacent_expansion_ready(&mut game);
+    game.review_completed = true;
+    game.quarter = 20;
+    game.regional_integration = 0.22;
+
+    let status = regional_status_lines(&game).join(" ");
+    let commands = command_footer_lines(&game).join(" ");
+
+    assert!(status.contains("Regional share"));
+    assert!(status.contains("Territories"));
+    assert!(status.contains("Integration"));
+    assert!(commands.contains("expand"));
+    assert!(commands.contains("regional integration"));
+}
+
+#[test]
 fn regional_mandate_lines_include_expansion_and_financial_targets() {
     let mut game = Game::with_seed(147);
     game.review_completed = true;
@@ -711,6 +772,16 @@ fn dashboard_width_uses_wider_default_and_clamps_terminal_columns() {
     assert_eq!(dashboard_width_for_columns(None), DEFAULT_SCREEN_WIDTH);
     assert_eq!(dashboard_width_for_columns(Some(72)), MIN_SCREEN_WIDTH);
     assert_eq!(dashboard_width_for_columns(Some(160)), MAX_SCREEN_WIDTH);
+}
+
+#[test]
+fn command_footer_shows_undiligenced_buy_as_an_option() {
+    let game = Game::with_seed(118);
+    let joined = command_footer_lines(&game).join("\n");
+
+    assert!(joined.contains("buy "));
+    assert!(joined.contains("public est"));
+    assert!(joined.contains("close risk"));
 }
 
 #[test]

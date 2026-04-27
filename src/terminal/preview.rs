@@ -338,12 +338,24 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
         Decision::Diligence { competitor_index } => {
             if let Some(competitor) = game.competitors.get(*competitor_index) {
                 let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
-                vec![format!(
+                let mut lines = vec![format!(
                     "{} inspect {} for {}; exact deal terms for 3q, but the target reacts before the quote is frozen.",
                     muted("Quote:"),
                     styled(BOLD, shorten_plain(&competitor.name, 16)),
                     styled(BOLD_YELLOW, money(cost)),
-                )]
+                )];
+                if let Some(terms) = game.acquisition_terms(*competitor_index) {
+                    lines.push(format!(
+                        "{} buy at {}; net cost {}, assumes debt {}, post debt/assets {:.0}%; +{:.0} cust.",
+                        muted("Will lock:"),
+                        styled(BOLD_YELLOW, money(terms.price)),
+                        styled(cash_tone(terms.post_cash), money(terms.net_cash_cost)),
+                        styled(YELLOW, money(terms.assumed_debt)),
+                        terms.post_debt_to_assets * 100.0,
+                        terms.acquired_customers
+                    ));
+                }
+                lines
             } else {
                 vec![format!(
                     "{} No rival has that number.",
@@ -366,19 +378,29 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                         styled(YELLOW, money(terms.assumed_debt)),
                         terms.acquired_customers
                     )];
-                    lines.push(acquisition_risk_line(game, competitor, &terms));
+                    lines.push(acquisition_risk_line(
+                        game,
+                        *competitor_index,
+                        competitor,
+                        &terms,
+                    ));
                     lines
                 } else {
                     let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
                     let (low, high) = public_acquisition_range(game, *competitor_index);
-                    vec![format!(
+                    let mut lines = vec![format!(
                         "{} public estimate {}-{}; buy now accepts close risk, or {} diligence reveals exact terms for {}.",
                         muted("Quote:"),
                         styled(YELLOW, money(low)),
                         styled(YELLOW, money(high)),
                         styled(BOLD_YELLOW, money(cost)),
                         styled(BOLD, shorten_plain(&competitor.name, 16))
-                    )]
+                    )];
+                    lines.push(public_acquisition_underwriting_line(
+                        game,
+                        *competitor_index,
+                    ));
+                    lines
                 }
             } else {
                 vec![format!(
@@ -457,12 +479,21 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
     }
 }
 
-fn acquisition_risk_line(game: &Game, competitor: &Utility, terms: &AcquisitionTerms) -> String {
+fn acquisition_risk_line(
+    game: &Game,
+    competitor_index: usize,
+    competitor: &Utility,
+    terms: &AcquisitionTerms,
+) -> String {
     let deal_share =
         terms.acquired_customers / (game.player.customers + terms.acquired_customers).max(1.0);
     let service_drag = (0.82 - competitor.reliability).max(0.0);
     let leverage_drag = (terms.post_debt_to_assets - 0.72).max(0.0);
     let risk_score = deal_share * 1.10 + service_drag * 1.40 + leverage_drag * 0.80;
+    let stress_score = game
+        .acquisition_stress_score(competitor_index)
+        .unwrap_or(0.0);
+    let stress_label = Game::acquisition_stress_label(stress_score);
     let (tone, label) = if risk_score >= 0.42 {
         (BOLD_RED, "high")
     } else if risk_score >= 0.24 {
@@ -472,13 +503,35 @@ fn acquisition_risk_line(game: &Game, competitor: &Utility, terms: &AcquisitionT
     };
 
     format!(
-        "{} {} integration risk; deal size {:.0}% of post-close customers, post debt/assets {:.0}%, target reliability {:.0}%.",
+        "{} {} integration risk; underwriting {}, deal size {:.0}% of post-close customers, post debt/assets {:.0}%, target reliability {:.0}%.",
         styled(tone, "Risk:"),
         styled(tone, label),
+        styled(underwriting_tone(stress_score), stress_label),
         deal_share * 100.0,
         terms.post_debt_to_assets * 100.0,
         competitor.reliability * 100.0
     )
+}
+
+fn public_acquisition_underwriting_line(game: &Game, competitor_index: usize) -> String {
+    let stress_score = game
+        .acquisition_stress_score(competitor_index)
+        .unwrap_or(0.0);
+    let label = Game::acquisition_stress_label(stress_score);
+    format!(
+        "{} public file leaves lender posture {}; diligence will sharpen the read.",
+        styled(underwriting_tone(stress_score), "Underwriting:"),
+        styled(underwriting_tone(stress_score), label)
+    )
+}
+
+fn underwriting_tone(score: f64) -> &'static str {
+    match Game::acquisition_stress_label(score) {
+        "distressed" => BOLD_RED,
+        "strained" => BOLD_YELLOW,
+        "guarded" => YELLOW,
+        _ => GREEN,
+    }
 }
 
 pub(super) fn immediate_effect_lines(before: &Game, after: &Game) -> Vec<String> {
