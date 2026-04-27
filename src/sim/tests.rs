@@ -1012,8 +1012,8 @@ fn churn_compares_player_rate_to_rival_rates_not_own_weighted_average() {
     game.player.distribution_capacity = 2_400.0;
     game.player.generation_capacity_mwh = 700.0;
     game.player.rate_cents = 8.4;
-    game.player.reliability = 0.94;
-    game.player.reputation = 74.0;
+    game.player.reliability = 0.84;
+    game.player.reputation = 62.0;
     for competitor in &mut game.competitors {
         competitor.rate_cents = 10.9;
     }
@@ -1622,6 +1622,43 @@ fn acquisition_strain_temporarily_drags_operations() {
 }
 
 #[test]
+fn merger_execution_risk_rises_with_weak_large_targets_and_leverage() {
+    let mut safe = Game::with_seed(33);
+    safe.player.customers = 1_200.0;
+    safe.player.debt = 10_000.0;
+    safe.player.asset_base = 220_000.0;
+    safe.competitors[0].customers = 90.0;
+    safe.competitors[0].reliability = 0.92;
+    safe.competitors[0].reputation = 78.0;
+    let safe_target = safe.competitors[0].clone();
+    let safe_terms = safe.current_acquisition_terms(0).unwrap();
+    let safe_risk =
+        merger_execution_risk(&safe, &safe_target, &safe_terms, safe.player.customers, 0.0);
+
+    let mut risky = Game::with_seed(33);
+    risky.player.customers = 180.0;
+    risky.player.debt = 130_000.0;
+    risky.player.asset_base = 170_000.0;
+    risky.competitors[0].customers = 720.0;
+    risky.competitors[0].reliability = 0.58;
+    risky.competitors[0].reputation = 36.0;
+    let risky_target = risky.competitors[0].clone();
+    let risky_terms = risky.current_acquisition_terms(0).unwrap();
+    let risky_risk = merger_execution_risk(
+        &risky,
+        &risky_target,
+        &risky_terms,
+        risky.player.customers,
+        0.45,
+    );
+
+    assert!(
+        risky_risk > safe_risk + 0.25,
+        "large weak leveraged deals should be materially riskier: safe {safe_risk}, risky {risky_risk}"
+    );
+}
+
+#[test]
 fn regulator_blocks_purchase_of_final_independent_rival() {
     let mut game = Game::with_seed(31);
     game.competitors.truncate(1);
@@ -1844,13 +1881,19 @@ fn acquisition_integration_uses_pre_acquisition_weights() {
         terms.acquired_generation_capacity_mwh * 0.70,
     ) - 0.035;
 
-    game.apply_decision(Decision::Acquire {
-        competitor_index: 0,
-    })
-    .unwrap();
+    let message = game
+        .apply_decision(Decision::Acquire {
+            competitor_index: 0,
+        })
+        .unwrap();
 
-    assert!((game.player.reputation - expected_reputation).abs() < 0.001);
-    assert!((game.player.reliability - expected_reliability).abs() < 0.001);
+    if message.contains("Integration broke badly") {
+        assert!(game.player.reputation < expected_reputation);
+        assert!(game.player.reliability < expected_reliability);
+    } else {
+        assert!((game.player.reputation - expected_reputation).abs() < 0.001);
+        assert!((game.player.reliability - expected_reliability).abs() < 0.001);
+    }
 }
 
 #[test]

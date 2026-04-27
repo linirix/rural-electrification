@@ -236,10 +236,10 @@ fn base_churn_rate_for(
 ) -> f64 {
     let rate_gap = utility.rate_cents - average_rate;
     let rate_pressure = rate_gap.max(0.0) * 0.006;
-    let rate_retention = (-rate_gap).max(0.0) * 0.0025;
+    let rate_retention = (-rate_gap).max(0.0) * 0.0031;
     let public_rate_pressure = rate_excess * 0.012 + rate_excess * rate_excess * 0.004;
     let outage_pressure = (0.78 - utility.reliability).max(0.0) * 0.055;
-    let reliability_retention = (utility.reliability - 0.84).max(0.0) * 0.020;
+    let reliability_retention = (utility.reliability - 0.84).max(0.0) * 0.026;
     let reputation_pressure = (48.0 - utility.reputation).max(0.0) * 0.0008;
     let reputation_retention = (utility.reputation - 62.0).max(0.0) * 0.00012;
     let churn_rate =

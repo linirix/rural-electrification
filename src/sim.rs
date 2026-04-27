@@ -44,6 +44,8 @@ const MAX_RELIABILITY: f64 = 0.98;
 const MIN_MAINTENANCE_RELIABILITY_GAIN: f64 = 0.0005;
 const DILIGENCE_DURATION_QUARTERS: u32 = 3;
 const DILIGENCE_ALERT_MAX_BACKING: f64 = 8_000.0;
+const MERGER_RISK_MIN: f64 = 0.06;
+const MERGER_RISK_MAX: f64 = 0.46;
 const BOARD_CHECKPOINT_QUARTER: u32 = 8;
 const BOARD_CHECKPOINT_SHARE_TARGET: f64 = 0.32;
 const BOARD_CHECKPOINT_REPUTATION_PENALTY: f64 = 3.0;
@@ -805,6 +807,7 @@ impl Game {
                     terms.acquired_generation_capacity_mwh * 0.70,
                 )
                 .clamp(0.35, 0.98);
+                let pre_close_integration_strain = self.integration_strain;
                 self.player.cash -= terms.price;
                 self.player.cash += terms.absorbed_cash;
                 self.player.debt += terms.assumed_debt;
@@ -824,13 +827,19 @@ impl Game {
                 .clamp(0.0, 1.6);
                 self.diligence_reports
                     .retain(|report| report.competitor_name != acquired_name);
+                let execution_suffix = self.apply_merger_execution_outcome(
+                    &acquired,
+                    &terms,
+                    starting_customers,
+                    pre_close_integration_strain,
+                );
                 Ok(format!(
                     "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt). Integration will take {} quarter(s).",
                     money(terms.price),
                     money(terms.absorbed_cash),
                     money(terms.assumed_debt),
                     self.acquisition_cooldown
-                ))
+                ) + &execution_suffix)
             }
             Decision::AdjustRate { delta_cents } => {
                 if !delta_cents.is_finite() {
@@ -1411,10 +1420,10 @@ impl Game {
 
     fn current_acquisition_terms(&self, competitor_index: usize) -> Option<AcquisitionTerms> {
         let competitor = self.competitors.get(competitor_index)?;
-        let acquired_customers = competitor.customers * 0.92;
-        let acquired_generation_capacity_mwh = competitor.generation_capacity_mwh * 0.86;
-        let acquired_distribution_capacity = competitor.distribution_capacity * 0.90;
-        let acquired_asset_base = competitor.asset_base * 0.72;
+        let acquired_customers = competitor.customers * 0.96;
+        let acquired_generation_capacity_mwh = competitor.generation_capacity_mwh * 0.90;
+        let acquired_distribution_capacity = competitor.distribution_capacity * 0.94;
+        let acquired_asset_base = competitor.asset_base * 0.76;
         let customer_value = competitor.customers * 70.0;
         let generation_value = competitor.generation_capacity_mwh * 36.0;
         let line_value = competitor.distribution_capacity * 11.0;
@@ -1901,6 +1910,55 @@ impl Game {
         }
     }
 
+    fn apply_merger_execution_outcome(
+        &mut self,
+        acquired: &Utility,
+        terms: &AcquisitionTerms,
+        starting_customers: f64,
+        pre_close_integration_strain: f64,
+    ) -> String {
+        let risk = merger_execution_risk(
+            self,
+            acquired,
+            terms,
+            starting_customers,
+            pre_close_integration_strain,
+        );
+        if !self.rng.chance(risk) {
+            return String::new();
+        }
+
+        let deal_share =
+            terms.acquired_customers / (starting_customers + terms.acquired_customers).max(1.0);
+        let severity = self.rng.range(0.55, 1.15) * (0.78 + deal_share);
+        let customer_loss_rate = (self.rng.range(0.045, 0.13) * severity).clamp(0.025, 0.22);
+        let customer_loss = (terms.acquired_customers * customer_loss_rate)
+            .min((self.player.customers - 1.0).max(0.0));
+        let capacity_loss_rate = (self.rng.range(0.020, 0.060) * severity).clamp(0.010, 0.12);
+        let generation_loss = terms.acquired_generation_capacity_mwh * capacity_loss_rate;
+        let distribution_loss = terms.acquired_distribution_capacity * capacity_loss_rate * 1.15;
+        let overrun =
+            (terms.price * self.rng.range(0.018, 0.055) * severity).clamp(1_250.0, 22_000.0);
+
+        self.player.customers = (self.player.customers - customer_loss).max(1.0);
+        self.player.generation_capacity_mwh =
+            (self.player.generation_capacity_mwh - generation_loss).max(20.0);
+        self.player.distribution_capacity =
+            (self.player.distribution_capacity - distribution_loss).max(20.0);
+        self.player.cash -= overrun;
+        self.player.reliability =
+            (self.player.reliability - (0.014 + severity * 0.018).min(0.055)).clamp(0.35, 0.98);
+        self.player.reputation =
+            (self.player.reputation - (2.0 + severity * 4.6).min(9.0)).clamp(0.0, 100.0);
+        self.integration_strain = (self.integration_strain + severity * 0.18).clamp(0.0, 1.8);
+
+        format!(
+            " Integration broke badly: {:.0} accounts defected, {} of overruns hit cash, and service quality suffered.",
+            customer_loss,
+            money(overrun)
+        )
+    }
+
     fn grow_market(&mut self, events: &mut Vec<String>) {
         let demand_cycle = self.macro_state.demand_index;
         let address_growth = 1.006 + self.rng.range(0.0, 0.006) + demand_cycle * 0.003;
@@ -2276,6 +2334,31 @@ fn acquisition_integration_strain(starting_customers: f64, acquired_customers: f
     acquired_share * 1.35
 }
 
+fn merger_execution_risk(
+    game: &Game,
+    acquired: &Utility,
+    terms: &AcquisitionTerms,
+    starting_customers: f64,
+    pre_close_integration_strain: f64,
+) -> f64 {
+    let deal_share =
+        terms.acquired_customers / (starting_customers + terms.acquired_customers).max(1.0);
+    let target_service_risk = (0.84 - acquired.reliability).max(0.0) * 0.70;
+    let target_reputation_risk = (58.0 - acquired.reputation).max(0.0) / 320.0;
+    let leverage_risk = (game.player.debt_to_assets() - 0.68).max(0.0) * 0.34;
+    let serial_rollup_risk = pre_close_integration_strain.max(0.0) * 0.14;
+    let dominance_risk = (game.market_share() - 0.42).max(0.0) * 0.12;
+
+    (0.035
+        + deal_share * 0.29
+        + target_service_risk
+        + target_reputation_risk
+        + leverage_risk
+        + serial_rollup_risk
+        + dominance_risk)
+        .clamp(MERGER_RISK_MIN, MERGER_RISK_MAX)
+}
+
 fn adjacent_expansion_integration_burden(completed_expansions: u32) -> f64 {
     (0.20 + f64::from(completed_expansions.saturating_sub(1)) * 0.08).clamp(0.20, 0.42)
 }
@@ -2468,8 +2551,8 @@ impl Utility {
             utilization_bonus,
             utilization_penalty,
         ) = match allocation_kind {
-            CustomerAllocationKind::NewConnections => (0.20, 0.65, 1.85, 85.0, 0.85, 0.18, 0.35),
-            CustomerAllocationKind::SwitchedAccounts => (0.30, 0.85, 2.35, 110.0, 0.55, 0.24, 0.45),
+            CustomerAllocationKind::NewConnections => (0.22, 0.70, 2.05, 82.0, 0.88, 0.20, 0.39),
+            CustomerAllocationKind::SwitchedAccounts => (0.33, 0.92, 2.65, 102.0, 0.60, 0.26, 0.50),
         };
 
         let rate_component =

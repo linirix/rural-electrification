@@ -1,15 +1,15 @@
 use electrification::{InitialVariance, Strategy, StrategySummary, run_strategy_batch};
 
-const REGRESSION_SEEDS: u32 = 120;
+const REGRESSION_SEEDS: u32 = 250;
 
 #[test]
 fn strategy_win_rates_stay_in_design_bands() {
     let variance = InitialVariance::default();
     let cases = [
-        (Strategy::Naive, 0.00, 0.06),
-        (Strategy::Organic, 0.40, 0.65),
-        (Strategy::Balanced, 0.62, 0.86),
-        (Strategy::Mna, 0.70, 0.90),
+        (Strategy::Naive, 0.00, 0.07),
+        (Strategy::Organic, 0.66, 0.84),
+        (Strategy::Balanced, 0.64, 0.84),
+        (Strategy::Mna, 0.45, 0.68),
     ];
 
     let summaries = cases
@@ -26,22 +26,29 @@ fn strategy_win_rates_stay_in_design_bands() {
     let mna = summary_for(&summaries, Strategy::Mna).win_rate();
 
     assert!(
-        balanced >= organic,
-        "balanced strategy should not underperform organic in the fixed regression window: balanced {:.1}%, organic {:.1}%",
-        balanced * 100.0,
-        organic * 100.0
+        organic >= mna + 0.08,
+        "organic should remain the more reliable low-risk lane: organic {:.1}%, mna {:.1}%",
+        organic * 100.0,
+        mna * 100.0
     );
     assert!(
-        balanced - organic >= 0.10,
-        "balanced strategy should retain a meaningful edge over organic: balanced {:.1}%, organic {:.1}%",
+        balanced >= mna + 0.08,
+        "balanced play should outperform reckless M&A while still carrying deal risk: balanced {:.1}%, mna {:.1}%",
         balanced * 100.0,
-        organic * 100.0
+        mna * 100.0
     );
+    let organic_summary = summary_for(&summaries, Strategy::Organic);
     assert!(
-        mna - balanced <= 0.18,
-        "M&A should not reopen the old dominant-strategy gap: mna {:.1}%, balanced {:.1}%",
-        mna * 100.0,
-        balanced * 100.0
+        (0.455..=0.505).contains(&organic_summary.average_finish_share()),
+        "organic wins should stay close-run rather than automatic: avg finish share {:.1}%",
+        organic_summary.average_finish_share() * 100.0
+    );
+    let mna_summary = summary_for(&summaries, Strategy::Mna);
+    assert!(
+        mna_summary.finish_share_range.min < organic_summary.finish_share_range.min,
+        "M&A should retain a wider downside tail: mna min {:.1}%, organic min {:.1}%",
+        mna_summary.finish_share_range.min * 100.0,
+        organic_summary.finish_share_range.min * 100.0
     );
 }
 

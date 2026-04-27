@@ -293,16 +293,16 @@ fn organic_policy(game: &mut Game) {
     run_organic_program(
         game,
         OrganicPlan {
-            target_rate_cents: 8.2,
-            marketing_spend: 10_000.0,
+            target_rate_cents: 7.95,
+            marketing_spend: 11_250.0,
             marketing_interval: 1,
-            reliability_floor: 0.80,
-            headroom_target: 320.0,
-            firm_reserve_target_mwh: 110.0,
-            distribution_project_customers: 700.0,
-            generation_project_mwh: 500.0,
-            cash_reserve: 8_000.0,
-            max_debt_to_assets: 0.80,
+            reliability_floor: 0.84,
+            headroom_target: 400.0,
+            firm_reserve_target_mwh: 135.0,
+            distribution_project_customers: 760.0,
+            generation_project_mwh: 530.0,
+            cash_reserve: 10_000.0,
+            max_debt_to_assets: 0.78,
         },
     );
 }
@@ -316,16 +316,16 @@ fn balanced_policy(game: &mut Game) {
     run_organic_program(
         game,
         OrganicPlan {
-            target_rate_cents: 9.0,
-            marketing_spend: 6_000.0,
-            marketing_interval: 2,
-            reliability_floor: 0.81,
-            headroom_target: 180.0,
-            firm_reserve_target_mwh: 75.0,
-            distribution_project_customers: 500.0,
-            generation_project_mwh: 350.0,
+            target_rate_cents: 8.70,
+            marketing_spend: 7_200.0,
+            marketing_interval: 1,
+            reliability_floor: 0.83,
+            headroom_target: 230.0,
+            firm_reserve_target_mwh: 95.0,
+            distribution_project_customers: 600.0,
+            generation_project_mwh: 420.0,
             cash_reserve: 10_000.0,
-            max_debt_to_assets: 0.72,
+            max_debt_to_assets: 0.73,
         },
     );
 
