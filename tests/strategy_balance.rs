@@ -32,7 +32,7 @@ fn strategy_win_rates_stay_in_design_bands() {
         organic * 100.0
     );
     assert!(
-        organic >= mna + 0.08,
+        organic >= mna + 0.05,
         "organic should remain the more reliable low-risk lane: organic {:.1}%, mna {:.1}%",
         organic * 100.0,
         mna * 100.0

@@ -40,6 +40,8 @@ const MAX_OPENING_RATE_CENTS: f64 = 14.5;
 /// Maximum rate premium above public tolerance that the command layer allows for new increases.
 pub const MAX_PUBLIC_RATE_PREMIUM_CENTS: f64 = 5.0;
 const RECEIVERSHIP_DEBT_TO_ASSETS: f64 = 1.05;
+const DISTRESSED_COVERAGE_RECEIVERSHIP_DEBT_TO_ASSETS: f64 = 0.92;
+const DISTRESSED_COVERAGE_RECEIVERSHIP: f64 = 0.65;
 const MAX_RELIABILITY: f64 = 0.98;
 const MIN_MAINTENANCE_RELIABILITY_GAIN: f64 = 0.0005;
 const DILIGENCE_DURATION_QUARTERS: u32 = 3;
@@ -705,8 +707,10 @@ impl Game {
                 self.player.debt += amount;
                 let leverage = self.player.debt_to_assets();
                 let annual_rate = self.macro_state.annual_interest_rate_for(&self.player);
-                if leverage > 0.72 {
-                    self.player.reputation = (self.player.reputation - 1.8).clamp(0.0, 100.0);
+                if leverage > 0.82 {
+                    self.player.reputation = (self.player.reputation - 3.2).clamp(0.0, 100.0);
+                } else if leverage > 0.68 {
+                    self.player.reputation = (self.player.reputation - 1.4).clamp(0.0, 100.0);
                 }
                 Ok(format!(
                     "Borrowed {} at a current floating rate of {:.1}% annual. Debt/assets now {:.0}%.",
@@ -1173,8 +1177,30 @@ impl Game {
     }
 
     pub fn borrowing_room(&self) -> f64 {
-        (self.player.asset_base * self.macro_state.borrowing_limit_ratio() - self.player.debt)
-            .max(0.0)
+        (self.player.asset_base * self.borrowing_limit_ratio() - self.player.debt).max(0.0)
+    }
+
+    pub fn borrowing_limit_ratio(&self) -> f64 {
+        let macro_limit = self.macro_state.borrowing_limit_ratio();
+        let service_drag = (0.78 - self.player.reliability).clamp(0.0, 0.20) * 0.42;
+        let reputation_drag = ((50.0 - self.player.reputation) / 100.0).clamp(0.0, 0.18) * 0.48;
+        let stress_drag =
+            (self.acquisition_stress - ACQUISITION_STRESS_NOTICE).clamp(0.0, 0.80) * 0.10;
+        let mut coverage_drag: f64 = 0.0;
+        if let Some(report) = &self.last_report {
+            if report.profit < 0.0 {
+                coverage_drag += ((-report.profit) / report.revenue.max(1.0)).clamp(0.0, 0.12);
+            }
+            let coverage = interest_coverage(report.profit, report.interest);
+            if coverage < 1.0 {
+                coverage_drag += ((1.0 - coverage) * 0.18).clamp(0.0, 0.18);
+            } else if coverage < 1.35 {
+                coverage_drag += ((1.35 - coverage) * 0.06).clamp(0.0, 0.04);
+            }
+        }
+
+        (macro_limit - service_drag - reputation_drag - stress_drag - coverage_drag)
+            .clamp(0.40, macro_limit)
     }
 
     pub fn adjacent_expansion_cost(&self) -> f64 {
@@ -2489,6 +2515,22 @@ impl Game {
             return;
         }
 
+        let coverage = interest_coverage(finances.profit, finances.interest);
+        if self.quarter > 5
+            && self.player.debt_to_assets() > DISTRESSED_COVERAGE_RECEIVERSHIP_DEBT_TO_ASSETS
+            && coverage < DISTRESSED_COVERAGE_RECEIVERSHIP
+            && (self.player.cash < 8_000.0 || finances.profit < -2_500.0)
+        {
+            self.outcome = Some(Outcome {
+                kind: OutcomeKind::Defeat,
+                headline: "Bankers Forced Receivership".to_string(),
+                details: "Lenders lost confidence after leverage stayed high while earnings no longer covered debt service."
+                    .to_string(),
+                can_continue: false,
+            });
+            return;
+        }
+
         if !self.review_completed && self.quarter >= self.campaign_quarters {
             let share = self.market_share();
             let healthy_balance_sheet = self.player.debt_to_assets() <= 0.95;
@@ -2763,15 +2805,15 @@ impl MacroEnvironment {
 
     pub fn annual_interest_rate_for(&self, utility: &Utility) -> f64 {
         let leverage = utility.debt_to_assets();
-        let leverage_premium = (leverage - 0.45).max(0.0).powf(1.35) * 0.18;
-        let distress_premium = (leverage - 0.85).max(0.0) * 0.34;
-        (self.benchmark_credit_rate() + leverage_premium + distress_premium).clamp(0.035, 0.28)
+        let leverage_premium = (leverage - 0.35).max(0.0).powf(1.25) * 0.24;
+        let distress_premium = (leverage - 0.75).max(0.0) * 0.60;
+        (self.benchmark_credit_rate() + leverage_premium + distress_premium).clamp(0.04, 0.36)
     }
 
     pub fn borrowing_limit_ratio(&self) -> f64 {
         let rate_stress = (self.annual_base_rate - BASE_ANNUAL_RATE).max(0.0) * 2.0;
         let spread_stress = (self.credit_spread - BASE_CREDIT_SPREAD).max(0.0) * 3.0;
-        (0.97 - rate_stress - spread_stress).clamp(0.66, 0.98)
+        (0.88 - rate_stress - spread_stress).clamp(0.54, 0.90)
     }
 
     pub fn financing_pressure(&self) -> f64 {

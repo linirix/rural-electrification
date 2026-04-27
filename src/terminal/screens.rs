@@ -855,7 +855,7 @@ pub(super) fn financial_lines(game: &Game) -> Vec<String> {
 
     if game.macro_state.credit_label() != "normal"
         || borrowing_room < 12_000.0
-        || game.macro_state.borrowing_limit_ratio() < 0.90
+        || game.borrowing_limit_ratio() < 0.82
     {
         lines.push(format!(
             "{} {}   {} {}",
@@ -863,8 +863,8 @@ pub(super) fn financial_lines(game: &Game) -> Vec<String> {
             styled(macro_credit_tone(game), game.macro_state.credit_label()),
             muted("Debt cap"),
             styled(
-                debt_cap_tone(game.macro_state.borrowing_limit_ratio()),
-                format!("{:.0}%", game.macro_state.borrowing_limit_ratio() * 100.0)
+                debt_cap_tone(game.borrowing_limit_ratio()),
+                format!("{:.0}%", game.borrowing_limit_ratio() * 100.0)
             )
         ));
     }

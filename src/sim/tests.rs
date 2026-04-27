@@ -807,6 +807,35 @@ fn tight_credit_reduces_borrowing_room() {
 }
 
 #[test]
+fn weak_finances_reduce_effective_borrowing_room() {
+    let mut healthy = Game::with_seed(431);
+    let mut weak = Game::with_seed(431);
+    healthy.player.asset_base = 200_000.0;
+    weak.player.asset_base = 200_000.0;
+    healthy.player.debt = 60_000.0;
+    weak.player.debt = 60_000.0;
+    weak.player.reliability = 0.70;
+    weak.player.reputation = 42.0;
+    weak.last_report = Some(QuarterReport {
+        label: "Year 2 Q1".to_string(),
+        revenue: 5_000.0,
+        operating_cost: 6_000.0,
+        interest: 4_000.0,
+        profit: -5_000.0,
+        new_customers: 0.0,
+        lost_customers: 0.0,
+        lost_customer_rate: 0.0,
+        market_share: weak.market_share(),
+        prior_market_share: weak.market_share(),
+        attributions: Vec::new(),
+        events: Vec::new(),
+    });
+
+    assert!(weak.borrowing_limit_ratio() < healthy.borrowing_limit_ratio() - 0.12);
+    assert!(weak.borrowing_room() < healthy.borrowing_room() - 25_000.0);
+}
+
+#[test]
 fn macro_environment_changes_each_quarter() {
     let mut game = Game::with_seed(44);
     let starting_rate = game.macro_state.benchmark_credit_rate();
@@ -1169,6 +1198,30 @@ fn high_leverage_and_losses_trigger_receivership() {
     assert_eq!(outcome.headline, "Bankers Forced Receivership");
     assert!(!outcome.can_continue);
     assert!(report.profit < 0.0);
+}
+
+#[test]
+fn poor_coverage_can_trigger_receivership_below_full_insolvency() {
+    let mut game = Game::with_seed(561);
+    game.quarter = 6;
+    game.player.cash = 6_000.0;
+    game.player.asset_base = 100_000.0;
+    game.player.debt = 94_000.0;
+    let finances = FirmFinances {
+        revenue: 8_000.0,
+        operating_cost: 9_000.0,
+        interest: 3_000.0,
+        profit: -4_000.0,
+        served_mwh: 800.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().expect("expected receivership");
+    assert_eq!(outcome.headline, "Bankers Forced Receivership");
+    assert!(outcome.details.contains("covered debt service"));
+    assert!(!outcome.can_continue);
 }
 
 #[test]
