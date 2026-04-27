@@ -335,7 +335,7 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
             if let Some(competitor) = game.competitors.get(*competitor_index) {
                 let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
                 vec![format!(
-                    "{} inspect {} for {}; exact deal terms for 3q.",
+                    "{} inspect {} for {}; exact deal terms for 3q, but the target reacts before the quote is frozen.",
                     muted("Quote:"),
                     styled(BOLD, shorten_plain(&competitor.name, 16)),
                     styled(BOLD_YELLOW, money(cost)),

@@ -74,7 +74,7 @@ load campaign1
 - `buyback [amount]` has no fixed command cap, but it cannot spend cash you do not have or retire the last public float. Material buybacks retire shares at a premium and reprice the remaining float.
 - `borrow [amount|max]` is floating-rate and limited by borrowing room, which depends on asset base, current debt, and credit conditions.
 - `repay [amount|max]` is limited by cash on hand and outstanding debt.
-- `diligence <number>` reveals exact acquisition terms for a rival for three quarters and freezes that target's acquisition quote during the diligence window.
+- `diligence <number>` reveals exact acquisition terms for a rival for three quarters and freezes that target's acquisition quote during the diligence window, but it alerts the target and can trigger defensive financing, retention, rate, and capacity moves.
 - `buy <number>` requires current diligence, available cash for the closing price, and no active integration cooldown.
 - `maintenance [amount]` has diminishing reliability and reputation impact as the asset base grows.
 - `expand` starts adjacent-territory entry once the core platform is mature enough. Up to three adjacent entries are allowed, with each follow-on expansion costing more.

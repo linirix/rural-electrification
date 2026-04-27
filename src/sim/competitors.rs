@@ -362,6 +362,12 @@ impl Game {
         for index in 0..competitor_count {
             let rolls = self.competitor_plan_rolls();
 
+            if self.competitor_under_active_diligence(index)
+                && let Some(event) =
+                    self.competitor_diligence_window_response(index, &context, &rolls)
+            {
+                events.push(event);
+            }
             if let Some(event) = self.competitor_rate_decision(index, &context) {
                 events.push(event);
             }
@@ -376,6 +382,56 @@ impl Game {
             }
             self.competitor_maintenance_decision(index);
         }
+    }
+
+    fn competitor_diligence_window_response(
+        &mut self,
+        index: usize,
+        context: &CompetitorPlanContext,
+        rolls: &CompetitorPlanRolls,
+    ) -> Option<String> {
+        let competitor = &mut self.competitors[index];
+        let mut acted = false;
+
+        if competitor.cash > 3_500.0 {
+            let spend = (competitor.cash * 0.04).clamp(600.0, 1_800.0);
+            competitor.cash -= spend;
+            competitor.marketing_momentum =
+                (competitor.marketing_momentum + spend / 30_000.0).clamp(0.0, 1.75);
+            competitor.reputation = (competitor.reputation + spend / 20_000.0).clamp(0.0, 100.0);
+            acted = true;
+        }
+
+        if !context.rate_frozen && competitor.rate_cents > context.player_rate + 0.25 {
+            let defensive_floor = defensive_rate_floor(
+                competitor,
+                &context.market,
+                &context.macro_state,
+                context.cost_multiplier,
+            );
+            let target = (context.player_rate + 0.25).max(defensive_floor);
+            let cut = 0.10_f64.min((competitor.rate_cents - target).max(0.0));
+            if cut > 0.0 {
+                competitor.rate_cents -= cut;
+                acted = true;
+            }
+        }
+
+        if rolls.proactive_expansion_chance && competitor.cash > 14_000.0 {
+            let capex = (1_400.0 + rolls.expansion_cost_jitter * 0.35).min(competitor.cash * 0.07);
+            competitor.cash -= capex;
+            competitor.asset_base += capex;
+            competitor.distribution_capacity += capex / 95.0;
+            competitor.generation_capacity_mwh += capex / 460.0;
+            acted = true;
+        }
+
+        acted.then(|| {
+            format!(
+                "{} accelerated retention and defenses while under diligence.",
+                competitor.name
+            )
+        })
     }
 
     fn competitor_plan_context(&self) -> CompetitorPlanContext {

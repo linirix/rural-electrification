@@ -38,6 +38,7 @@ const RECEIVERSHIP_DEBT_TO_ASSETS: f64 = 1.05;
 const MAX_RELIABILITY: f64 = 0.98;
 const MIN_MAINTENANCE_RELIABILITY_GAIN: f64 = 0.0005;
 const DILIGENCE_DURATION_QUARTERS: u32 = 3;
+const DILIGENCE_ALERT_MAX_BACKING: f64 = 8_000.0;
 const BOARD_CHECKPOINT_QUARTER: u32 = 8;
 const BOARD_CHECKPOINT_SHARE_TARGET: f64 = 0.32;
 const BOARD_CHECKPOINT_REPUTATION_PENALTY: f64 = 3.0;
@@ -707,6 +708,7 @@ impl Game {
                 self.require_cash(cost)?;
                 self.player.cash -= cost;
                 let name = self.competitors[competitor_index].name.clone();
+                let mut alert_message = None;
                 if let Some(report) = self
                     .diligence_reports
                     .iter_mut()
@@ -714,6 +716,7 @@ impl Game {
                 {
                     report.quarters_remaining = DILIGENCE_DURATION_QUARTERS;
                 } else {
+                    alert_message = Some(self.apply_diligence_alert_response(competitor_index));
                     let quoted_terms = self
                         .current_acquisition_terms(competitor_index)
                         .expect("competitor index checked before diligence terms quote");
@@ -725,10 +728,16 @@ impl Game {
                         quoted_terms,
                     });
                 }
+                let alert_suffix = alert_message
+                    .map(|message| format!(" {message}"))
+                    .unwrap_or_else(|| {
+                        " Existing diligence was extended without a new market signal.".to_string()
+                    });
                 Ok(format!(
-                    "Completed diligence on {name} for {}. Exact acquisition terms are available for {} quarter(s).",
+                    "Completed diligence on {name} for {}. Exact acquisition terms are available for {} quarter(s).{}",
                     money(cost),
-                    DILIGENCE_DURATION_QUARTERS
+                    DILIGENCE_DURATION_QUARTERS,
+                    alert_suffix
                 ))
             }
             Decision::Acquire { competitor_index } => {
@@ -1250,6 +1259,98 @@ impl Game {
         let complexity_cost = competitor.debt_to_assets().max(0.0) * 1_800.0;
         let concentration_cost = (self.market_share() - 0.45).max(0.0) * 8_000.0;
         Some((2_800.0 + scale_cost + complexity_cost + concentration_cost).clamp(3_000.0, 14_000.0))
+    }
+
+    fn competitor_under_active_diligence(&self, competitor_index: usize) -> bool {
+        let Some(competitor) = self.competitors.get(competitor_index) else {
+            return false;
+        };
+
+        self.diligence_reports.iter().any(|report| {
+            report.quarters_remaining > 0 && report.competitor_name == competitor.name
+        })
+    }
+
+    fn apply_diligence_alert_response(&mut self, competitor_index: usize) -> String {
+        let total_connected = self.total_connected_customers().max(1.0);
+        let player_rate = self.player.rate_cents;
+        let market = self.market.clone();
+        let macro_state = self.macro_state.clone();
+        let cost_multiplier = self.cost_shock_multiplier();
+        let rate_frozen = self.rate_frozen();
+
+        let competitor = &mut self.competitors[competitor_index];
+        let share = (competitor.customers / total_connected).clamp(0.0, 1.0);
+        let response_scale =
+            (0.35 + share * 0.65 + competitor.reputation / 850.0).clamp(0.35, 0.90);
+
+        let starting_rate = competitor.rate_cents;
+        let starting_asset_base = competitor.asset_base;
+        let starting_debt = competitor.debt;
+        let starting_reliability = competitor.reliability;
+
+        if competitor.debt_to_assets() < 0.78 {
+            let backing = ((1_600.0 + competitor.asset_base * 0.009 + competitor.customers * 1.2)
+                * response_scale)
+                .clamp(1_800.0, DILIGENCE_ALERT_MAX_BACKING);
+            competitor.cash += backing;
+            competitor.debt += backing;
+        }
+
+        let marketing_budget = ((750.0 + competitor.customers * 1.25) * response_scale)
+            .clamp(550.0, 2_200.0)
+            .min(competitor.cash * 0.08);
+        if marketing_budget > 450.0 {
+            competitor.cash -= marketing_budget;
+            competitor.marketing_momentum =
+                (competitor.marketing_momentum + marketing_budget / 10_500.0).clamp(0.0, 1.75);
+            competitor.reputation =
+                (competitor.reputation + marketing_budget / 6_500.0).clamp(0.0, 100.0);
+        }
+
+        let capex_budget = ((900.0 + competitor.asset_base * 0.004) * response_scale)
+            .clamp(850.0, 3_200.0)
+            .min(competitor.cash * 0.09);
+        if capex_budget > 650.0 {
+            competitor.cash -= capex_budget;
+            competitor.asset_base += capex_budget;
+            competitor.distribution_capacity += capex_budget / 85.0;
+            competitor.generation_capacity_mwh += capex_budget / 420.0;
+        }
+
+        let maintenance_budget = ((550.0 + competitor.asset_base * 0.003) * response_scale)
+            .clamp(450.0, 1_500.0)
+            .min(competitor.cash * 0.06);
+        if competitor.reliability < 0.88 && maintenance_budget > 400.0 {
+            competitor.cash -= maintenance_budget;
+            let gain = maintenance_reliability_gain(competitor, maintenance_budget);
+            competitor.reliability = (competitor.reliability + gain).clamp(0.35, 0.98);
+            competitor.reputation = (competitor.reputation
+                + maintenance_reputation_gain(competitor, maintenance_budget) * 0.35)
+                .clamp(0.0, 100.0);
+        }
+
+        if !rate_frozen && competitor.rate_cents > player_rate + 0.15 {
+            let defensive_floor =
+                defensive_rate_floor(competitor, &market, &macro_state, cost_multiplier);
+            let target = (player_rate + 0.20).max(defensive_floor);
+            let cut = 0.15_f64.min((competitor.rate_cents - target).max(0.0));
+            competitor.rate_cents -= cut;
+        }
+
+        let raised_backing = competitor.debt - starting_debt;
+        let capex = competitor.asset_base - starting_asset_base;
+        let rate_cut = starting_rate - competitor.rate_cents;
+        let reliability_gain = competitor.reliability - starting_reliability;
+
+        format!(
+            "{} noticed the review and mounted a defense: backing {}, capex {}, rate {:+.1}c, reliability {:+.1} pts.",
+            competitor.name,
+            money(raised_backing.max(0.0)),
+            money(capex.max(0.0)),
+            -rate_cut,
+            reliability_gain * 100.0
+        )
     }
 
     pub fn acquisition_terms(&self, competitor_index: usize) -> Option<AcquisitionTerms> {

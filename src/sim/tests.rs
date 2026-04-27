@@ -1310,6 +1310,83 @@ fn acquisition_requires_current_diligence() {
 }
 
 #[test]
+fn diligence_alerts_target_before_quote_is_frozen() {
+    let mut game = Game::with_seed(31);
+    game.player.cash = 500_000.0;
+    game.competitors[0].debt = 0.0;
+    game.competitors[0].rate_cents = game.player.rate_cents + 1.0;
+    let before = game.competitors[0].clone();
+    let live_before = game.current_acquisition_terms(0).unwrap();
+
+    let message = game
+        .apply_decision(Decision::Diligence {
+            competitor_index: 0,
+        })
+        .unwrap();
+
+    let after = &game.competitors[0];
+    let quoted = game.acquisition_terms(0).unwrap();
+    assert!(message.contains("mounted a defense"));
+    assert!(after.debt > before.debt);
+    assert!(after.marketing_momentum > before.marketing_momentum);
+    assert!(after.asset_base > before.asset_base);
+    assert!(after.rate_cents < before.rate_cents);
+    assert!(
+        (quoted.price - live_before.price).abs() > 100.0,
+        "quote should reflect the target response before freezing: before {}, quoted {}",
+        live_before.price,
+        quoted.price
+    );
+}
+
+#[test]
+fn renewing_active_diligence_does_not_stack_target_alerts() {
+    let mut game = Game::with_seed(31);
+    game.player.cash = 500_000.0;
+    game.apply_decision(Decision::Diligence {
+        competitor_index: 0,
+    })
+    .unwrap();
+    let after_first_alert = game.competitors[0].clone();
+
+    let message = game
+        .apply_decision(Decision::Diligence {
+            competitor_index: 0,
+        })
+        .unwrap();
+
+    let after_extension = &game.competitors[0];
+    assert!(message.contains("extended without a new market signal"));
+    assert!((after_extension.debt - after_first_alert.debt).abs() < 0.01);
+    assert!((after_extension.asset_base - after_first_alert.asset_base).abs() < 0.01);
+    assert!(
+        (after_extension.marketing_momentum - after_first_alert.marketing_momentum).abs() < 0.0001
+    );
+    assert!((after_extension.rate_cents - after_first_alert.rate_cents).abs() < 0.0001);
+}
+
+#[test]
+fn active_diligence_target_accelerates_defense_over_quarter() {
+    let mut game = Game::with_seed(31);
+    game.player.cash = 500_000.0;
+    game.apply_decision(Decision::Diligence {
+        competitor_index: 0,
+    })
+    .unwrap();
+    let starting_momentum = game.competitors[0].marketing_momentum;
+    let mut events = Vec::new();
+
+    game.competitor_plans(&mut events);
+
+    assert!(game.competitors[0].marketing_momentum > starting_momentum);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("while under diligence"))
+    );
+}
+
+#[test]
 fn diligence_expires_after_three_quarters() {
     let mut game = Game::with_seed(30);
     game.player.cash = 250_000.0;
@@ -1611,10 +1688,10 @@ fn acquisition_terms_match_actual_close_effects() {
     let starting_customers = game.player.customers;
     let starting_generation = game.player.generation_capacity_mwh;
     let starting_distribution = game.player.distribution_capacity;
+    complete_diligence(&mut game, 1);
     let terms = game.acquisition_terms(1).unwrap();
 
     assert!((game.acquisition_price(1) - terms.price).abs() < 0.01);
-    complete_diligence(&mut game, 1);
 
     game.apply_decision(Decision::Acquire {
         competitor_index: 1,
@@ -1651,15 +1728,22 @@ fn acquisition_integration_uses_pre_acquisition_weights() {
     game.competitors[0].generation_capacity_mwh = 1_000.0;
     game.competitors[0].reputation = 40.0;
     game.competitors[0].reliability = 0.60;
-    let target = game.competitors[0].clone();
-
-    let acquired_customers = target.customers * 0.92;
-    let expected_reputation =
-        weighted_average(80.0, 100.0, target.reputation, acquired_customers * 0.65) - 1.5;
-    let acquired_generation = target.generation_capacity_mwh * 0.86;
-    let expected_reliability =
-        weighted_average(0.92, 100.0, target.reliability, acquired_generation * 0.70) - 0.035;
     complete_diligence(&mut game, 0);
+    let target = game.competitors[0].clone();
+    let terms = game.acquisition_terms(0).unwrap();
+
+    let expected_reputation = weighted_average(
+        80.0,
+        100.0,
+        target.reputation,
+        terms.acquired_customers * 0.65,
+    ) - 1.5;
+    let expected_reliability = weighted_average(
+        0.92,
+        100.0,
+        target.reliability,
+        terms.acquired_generation_capacity_mwh * 0.70,
+    ) - 0.035;
 
     game.apply_decision(Decision::Acquire {
         competitor_index: 0,
