@@ -196,7 +196,9 @@ where
     };
 
     for seed in 1..=seeds {
-        let mut game = Game::with_seed_and_initial_variance(seed as u64 * 1_003, variance);
+        let game_seed = seed as u64 * 1_003;
+        let mut game = Game::with_seed_and_initial_variance(game_seed, variance);
+        let mut state = StrategyState::new(strategy, game_seed, variance);
         let start_share = game.market_share();
         let start_cash = game.player.cash;
         let start_debt = game.player.debt;
@@ -220,7 +222,7 @@ where
         summary.start_headroom_range.observe(start_headroom);
 
         while game.outcome.is_none() {
-            run_policy(strategy, &mut game);
+            run_policy(strategy, &mut game, &mut state);
             let report = game.advance_quarter();
             after_quarter(seed, &game, &report);
         }
@@ -247,13 +249,31 @@ where
     summary
 }
 
-fn run_policy(strategy: Strategy, game: &mut Game) {
+fn run_policy(strategy: Strategy, game: &mut Game, state: &mut StrategyState) {
     match strategy {
         Strategy::Naive => naive_policy(game),
         Strategy::Organic => organic_policy(game),
         Strategy::Balanced => balanced_policy(game),
         Strategy::Mna => mna_policy(game),
-        Strategy::Glonzo => glonzo_policy(game),
+        Strategy::Glonzo => {
+            if let StrategyState::Glonzo(rng) = state {
+                glonzo_policy(game, rng);
+            }
+        }
+    }
+}
+
+enum StrategyState {
+    None,
+    Glonzo(GlonzoRng),
+}
+
+impl StrategyState {
+    fn new(strategy: Strategy, game_seed: u64, variance: InitialVariance) -> Self {
+        match strategy {
+            Strategy::Glonzo => Self::Glonzo(GlonzoRng::from_seed(game_seed, variance)),
+            _ => Self::None,
+        }
     }
 }
 
@@ -319,8 +339,8 @@ fn balanced_policy(game: &mut Game) {
     run_organic_program(
         game,
         OrganicPlan {
-            target_rate_cents: 7.85,
-            marketing_spend: 12_000.0,
+            target_rate_cents: 7.90,
+            marketing_spend: 12_500.0,
             marketing_interval: 1,
             reliability_floor: 0.84,
             headroom_target: 420.0,
@@ -331,16 +351,17 @@ fn balanced_policy(game: &mut Game) {
             max_debt_to_assets: 0.80,
         },
     );
+    monetize_established_share(game, 0.42);
 
-    let acquisition_share_cap = if game.quarter < 8 { 0.34 } else { 0.41 };
+    let acquisition_share_cap = if game.quarter < 8 { 0.36 } else { 0.48 };
     if game.quarter >= 3 && game.market_share() < acquisition_share_cap {
-        let max_deal_share = if game.quarter < 8 { 0.18 } else { 0.24 };
-        let max_execution_risk = if game.quarter < 8 { 0.20 } else { 0.25 };
+        let max_deal_share = if game.quarter < 8 { 0.20 } else { 0.28 };
+        let max_execution_risk = if game.quarter < 8 { 0.22 } else { 0.28 };
         let _ = try_acquire_opportunistically(
             game,
             14_000.0,
-            0.78,
-            0.82,
+            0.80,
+            0.90,
             max_deal_share,
             max_execution_risk,
         );
@@ -439,22 +460,21 @@ fn mna_policy(game: &mut Game) {
     }
 }
 
-fn glonzo_policy(game: &mut Game) {
-    let mut rng = GlonzoRng::from_game(game);
+fn glonzo_policy(game: &mut Game, rng: &mut GlonzoRng) {
     let actions = rng.u32_inclusive(2, 7);
     for _ in 0..actions {
         match rng.u32_inclusive(0, 99) {
-            0..=10 => glonzo_borrow(game, &mut rng),
-            11..=20 => glonzo_repay(game, &mut rng),
-            21..=30 => glonzo_issue(game, &mut rng),
-            31..=39 => glonzo_buyback(game, &mut rng),
-            40..=51 => glonzo_rate(game, &mut rng),
-            52..=63 => glonzo_marketing(game, &mut rng),
-            64..=74 => glonzo_maintenance(game, &mut rng),
-            75..=83 => glonzo_build_distribution(game, &mut rng),
-            84..=91 => glonzo_build_generation(game, &mut rng),
-            92..=97 => glonzo_deal(game, &mut rng),
-            _ => glonzo_expand(game, &mut rng),
+            0..=10 => glonzo_borrow(game, rng),
+            11..=20 => glonzo_repay(game, rng),
+            21..=30 => glonzo_issue(game, rng),
+            31..=39 => glonzo_buyback(game, rng),
+            40..=51 => glonzo_rate(game, rng),
+            52..=63 => glonzo_marketing(game, rng),
+            64..=74 => glonzo_maintenance(game, rng),
+            75..=83 => glonzo_build_distribution(game, rng),
+            84..=91 => glonzo_build_generation(game, rng),
+            92..=97 => glonzo_deal(game, rng),
+            _ => glonzo_expand(game, rng),
         }
     }
 }
@@ -720,6 +740,25 @@ fn cut_rate_toward(game: &mut Game, target_rate_cents: f64) {
     }
 }
 
+fn monetize_established_share(game: &mut Game, share_floor: f64) {
+    if game.quarter < game.campaign_quarters.saturating_sub(5) || game.market_share() < share_floor
+    {
+        return;
+    }
+
+    let break_even_target = game.player_break_even_rate_cents() * 1.04;
+    let public_ceiling = public_rate_tolerance(&game.market) + MAX_PUBLIC_RATE_PREMIUM_CENTS - 0.10;
+    let target = break_even_target
+        .min(public_ceiling)
+        .max(game.player.rate_cents);
+    if target <= game.player.rate_cents + 0.05 {
+        return;
+    }
+
+    let delta = (target - game.player.rate_cents).min(0.50);
+    let _ = game.apply_decision(Decision::AdjustRate { delta_cents: delta });
+}
+
 fn project_cash_buffer(plan: OrganicPlan) -> f64 {
     (plan.cash_reserve * 0.625).max(3_000.0)
 }
@@ -795,7 +834,7 @@ fn best_opportunistic_competitor(
             }
             let deal_share = terms.acquired_customers
                 / (game.player.customers + terms.acquired_customers).max(1.0);
-            if deal_share > max_deal_share || terms.post_debt_to_assets > 0.88 {
+            if deal_share > max_deal_share || terms.post_debt_to_assets > 0.82 {
                 return None;
             }
             if competitor.reliability < 0.76 || competitor.reputation < 46.0 {
@@ -873,24 +912,10 @@ struct GlonzoRng {
 }
 
 impl GlonzoRng {
-    fn from_game(game: &Game) -> Self {
+    fn from_seed(game_seed: u64, variance: InitialVariance) -> Self {
         let mut state = 0xB10B_1234_CAFE_D00D_u64;
-        state = glonzo_mix(state, u64::from(game.quarter));
-        state = glonzo_mix(state, game.player.cash.to_bits());
-        state = glonzo_mix(state, game.player.debt.to_bits());
-        state = glonzo_mix(state, game.player.customers.to_bits());
-        state = glonzo_mix(state, game.player.rate_cents.to_bits());
-        state = glonzo_mix(state, game.player.reliability.to_bits());
-        state = glonzo_mix(state, game.player.reputation.to_bits());
-        state = glonzo_mix(state, game.market.addressable_customers.to_bits());
-        state = glonzo_mix(state, game.macro_state.demand_index.to_bits());
-        state = glonzo_mix(state, game.macro_state.cost_pressure.to_bits());
-        for competitor in &game.competitors {
-            state = glonzo_mix(state, competitor.customers.to_bits());
-            state = glonzo_mix(state, competitor.cash.to_bits());
-            state = glonzo_mix(state, competitor.debt.to_bits());
-            state = glonzo_mix(state, competitor.rate_cents.to_bits());
-        }
+        state = glonzo_mix(state, game_seed);
+        state = glonzo_mix(state, variance.amplitude.to_bits());
         Self { state }
     }
 

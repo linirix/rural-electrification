@@ -116,6 +116,19 @@ fn rate_preview_warns_when_above_public_ceiling() {
 }
 
 #[test]
+fn rate_preview_warns_when_below_sustainable_cost() {
+    let mut game = Game::with_seed(100);
+
+    match handle_command(&mut game, "preview rate 0.5") {
+        CommandResult::Preview(lines) => {
+            assert!(lines.iter().any(|line| line.contains("Sustainability")));
+            assert!(lines.iter().any(|line| line.contains("break-even")));
+        }
+        _ => panic!("preview rate should warn about unsustainable pricing"),
+    }
+}
+
+#[test]
 fn rate_command_rejects_above_public_ceiling_without_mutating() {
     let mut game = Game::with_seed(100);
     game.player.rate_cents =
@@ -318,6 +331,23 @@ fn acquisition_preview_without_diligence_shows_public_range() {
         CommandResult::Preview(lines) => {
             assert!(lines.iter().any(|line| line.contains("public estimate")));
             assert!(lines.iter().any(|line| line.contains("diligence reveals")));
+        }
+        _ => panic!("preview buy should show preview output"),
+    }
+}
+
+#[test]
+fn acquisition_preview_with_diligence_shows_integration_risk() {
+    let mut game = Game::with_seed(116);
+    game.apply_decision(Decision::Diligence {
+        competitor_index: 0,
+    })
+    .unwrap();
+
+    match handle_command(&mut game, "preview buy 1") {
+        CommandResult::Preview(lines) => {
+            assert!(lines.iter().any(|line| line.contains("integration risk")));
+            assert!(lines.iter().any(|line| line.contains("post debt/assets")));
         }
         _ => panic!("preview buy should show preview output"),
     }
@@ -662,6 +692,30 @@ fn dashboard_width_uses_wider_default_and_clamps_terminal_columns() {
     assert_eq!(dashboard_width_for_columns(None), DEFAULT_SCREEN_WIDTH);
     assert_eq!(dashboard_width_for_columns(Some(72)), MIN_SCREEN_WIDTH);
     assert_eq!(dashboard_width_for_columns(Some(160)), MAX_SCREEN_WIDTH);
+}
+
+#[test]
+fn financial_lines_show_break_even_and_interest_coverage() {
+    let mut game = Game::with_seed(117);
+    game.last_report = Some(QuarterReport {
+        label: "Year 2 Q1".to_string(),
+        revenue: 12_000.0,
+        operating_cost: 8_000.0,
+        interest: 1_000.0,
+        profit: 3_000.0,
+        new_customers: 40.0,
+        lost_customers: 4.0,
+        lost_customer_rate: 0.01,
+        market_share: game.market_share(),
+        prior_market_share: game.market_share(),
+        attributions: Vec::new(),
+        events: Vec::new(),
+    });
+
+    let joined = financial_lines(&game).join("\n");
+
+    assert!(joined.contains("Break-even"));
+    assert!(joined.contains("Coverage"));
 }
 
 #[test]

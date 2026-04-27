@@ -52,6 +52,10 @@ const BOARD_CHECKPOINT_REPUTATION_PENALTY: f64 = 3.0;
 const BOARD_CHECKPOINT_EQUITY_FATIGUE: f64 = 0.30;
 const MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = -1.25;
 const MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = 1.35;
+pub const REVIEW_MIN_RATE_SUPPORT_RATIO: f64 = 0.72;
+pub const REVIEW_MIN_INTEREST_COVERAGE: f64 = 1.0;
+const REVIEW_MIN_PROFIT: f64 = -500.0;
+const BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO: f64 = 0.55;
 
 mod attribution;
 mod competitors;
@@ -64,9 +68,9 @@ use competitors::draw_competitor_name;
 #[cfg(test)]
 use competitors::{COMPETITOR_NAME_POOL, StartupEntryReason};
 use economics::{
-    bounded_rate_target, churn_for_market_with_floor, defensive_rate_floor, high_rate_excess,
-    maintenance_reliability_gain, maintenance_reputation_gain, positive_amount, settle_utility,
-    weighted_average, weighted_rate,
+    bounded_rate_target, break_even_rate_cents, churn_for_market_with_floor, defensive_rate_floor,
+    high_rate_excess, maintenance_reliability_gain, maintenance_reputation_gain, positive_amount,
+    settle_utility, weighted_average, weighted_rate,
 };
 #[cfg(test)]
 use economics::{churn_rate_for, churn_rate_for_market};
@@ -990,6 +994,7 @@ impl Game {
             true,
             &mut events,
         );
+        self.apply_below_cost_pricing_pressure(&player_finances, &mut events);
         let mut system_demanded_mwh = demanded_mwh_from_finances(&player_finances);
         let mut system_unmet_mwh = unmet_mwh_from_finances(&player_finances);
         let competitor_count = self.competitors.len();
@@ -1285,6 +1290,30 @@ impl Game {
 
     pub fn player_annual_interest_rate(&self) -> f64 {
         self.macro_state.annual_interest_rate_for(&self.player)
+    }
+
+    pub fn player_break_even_rate_cents(&self) -> f64 {
+        break_even_rate_cents(
+            &self.player,
+            &self.market,
+            &self.macro_state,
+            self.cost_shock_multiplier(),
+        )
+    }
+
+    pub fn player_rate_support_ratio(&self) -> f64 {
+        let break_even = self.player_break_even_rate_cents();
+        if break_even <= 0.0 {
+            f64::INFINITY
+        } else {
+            self.player.rate_cents / break_even
+        }
+    }
+
+    pub fn player_last_interest_coverage(&self) -> Option<f64> {
+        self.last_report
+            .as_ref()
+            .map(|report| interest_coverage(report.profit, report.interest))
     }
 
     pub fn acquisition_price(&self, competitor_index: usize) -> f64 {
@@ -2223,6 +2252,58 @@ impl Game {
         signal.clamp(-0.065, 0.025)
     }
 
+    fn apply_below_cost_pricing_pressure(
+        &mut self,
+        finances: &FirmFinances,
+        events: &mut Vec<String>,
+    ) {
+        let break_even = self.player_break_even_rate_cents();
+        if break_even <= 0.0 {
+            return;
+        }
+
+        let support_ratio = self.player.rate_cents / break_even;
+        if support_ratio >= BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO {
+            return;
+        }
+
+        let severity = (BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO - support_ratio).clamp(0.0, 0.75);
+        self.equity_market_fatigue = (self.equity_market_fatigue + severity * 0.36).clamp(0.0, 3.0);
+        self.player.reputation = (self.player.reputation - severity * 3.8).clamp(0.0, 100.0);
+
+        if finances.profit < 0.0 && support_ratio < 0.72 {
+            let stress_debt = (-finances.profit * severity * 0.18).clamp(0.0, 18_000.0);
+            self.player.debt += stress_debt;
+        }
+
+        if support_ratio < 0.82 || finances.profit < -1_000.0 {
+            events.push(format!(
+                "Below-cost pricing strained financing: rate {:.1}c versus {:.1}c break-even.",
+                self.player.rate_cents, break_even
+            ));
+        }
+    }
+
+    fn review_sustainability(&self, finances: &FirmFinances) -> ReviewSustainability {
+        let break_even_rate = self.player_break_even_rate_cents();
+        let rate_support_ratio = if break_even_rate <= 0.0 {
+            f64::INFINITY
+        } else {
+            self.player.rate_cents / break_even_rate
+        };
+        let interest_coverage = interest_coverage(finances.profit, finances.interest);
+        let passes = finances.profit >= REVIEW_MIN_PROFIT
+            && rate_support_ratio >= REVIEW_MIN_RATE_SUPPORT_RATIO
+            && interest_coverage >= REVIEW_MIN_INTEREST_COVERAGE;
+
+        ReviewSustainability {
+            passes,
+            break_even_rate,
+            rate_support_ratio,
+            interest_coverage,
+        }
+    }
+
     fn check_outcome(&mut self, finances: &FirmFinances) {
         if self.outcome.is_some() {
             return;
@@ -2256,14 +2337,20 @@ impl Game {
         if !self.review_completed && self.quarter >= self.campaign_quarters {
             let share = self.market_share();
             let healthy_balance_sheet = self.player.debt_to_assets() <= 0.95;
+            let sustainability = self.review_sustainability(finances);
             self.review_completed = true;
-            if share >= 0.45 && self.player.reliability >= 0.72 && healthy_balance_sheet {
+            if share >= 0.45
+                && self.player.reliability >= 0.72
+                && healthy_balance_sheet
+                && sustainability.passes
+            {
                 self.outcome = Some(Outcome {
                     kind: OutcomeKind::Victory,
                     headline: "Market Lead Secured".to_string(),
                     details: format!(
-                        "You finished with {:.0}% of connected accounts, solid reliability, and a balance sheet lenders can still underwrite.",
-                        share * 100.0
+                        "You finished with {:.0}% of connected accounts, solid reliability, sustainable rates, and {:.1}x interest coverage.",
+                        share * 100.0,
+                        sustainability.interest_coverage.min(9.9)
                     ),
                     can_continue: true,
                 });
@@ -2272,8 +2359,11 @@ impl Game {
                     kind: OutcomeKind::Defeat,
                     headline: "Board Lost Confidence".to_string(),
                     details: format!(
-                        "After Year 5 you held {:.0}% of connected accounts. The board wanted a clearer path to durable market leadership.",
-                        share * 100.0
+                        "After Year 5 you held {:.0}% of connected accounts. The board wanted durable leadership: share, service, leverage, and rates that can support the cost base. Current rate support was {:.0}% of break-even ({:.1}c) with {:.1}x interest coverage.",
+                        share * 100.0,
+                        sustainability.rate_support_ratio.min(9.99) * 100.0,
+                        sustainability.break_even_rate,
+                        sustainability.interest_coverage.min(9.9)
                     ),
                     can_continue: true,
                 });
@@ -2332,6 +2422,22 @@ fn acquisition_integration_strain(starting_customers: f64, acquired_customers: f
     let post_customers = (starting_customers + acquired_customers).max(1.0);
     let acquired_share = (acquired_customers / post_customers).clamp(0.0, 1.0);
     acquired_share * 1.35
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ReviewSustainability {
+    passes: bool,
+    break_even_rate: f64,
+    rate_support_ratio: f64,
+    interest_coverage: f64,
+}
+
+fn interest_coverage(profit: f64, interest: f64) -> f64 {
+    if interest <= 1.0 {
+        f64::INFINITY
+    } else {
+        (profit + interest) / interest
+    }
 }
 
 fn merger_execution_risk(

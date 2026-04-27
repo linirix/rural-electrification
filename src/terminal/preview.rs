@@ -357,7 +357,7 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                     let terms = game
                         .acquisition_terms(*competitor_index)
                         .expect("competitor exists for acquisition quote");
-                    vec![format!(
+                    let mut lines = vec![format!(
                         "{} buy {} for {}; net cost {}, assumes debt {}, adds {:.0} customers.",
                         muted("Quote:"),
                         styled(BOLD, shorten_plain(&competitor.name, 16)),
@@ -365,7 +365,9 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                         styled(cash_tone(terms.post_cash), money(terms.net_cash_cost)),
                         styled(YELLOW, money(terms.assumed_debt)),
                         terms.acquired_customers
-                    )]
+                    )];
+                    lines.push(acquisition_risk_line(game, competitor, &terms));
+                    lines
                 } else {
                     let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
                     let (low, high) = public_acquisition_range(game, *competitor_index);
@@ -416,6 +418,26 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                     tolerance
                 ));
             }
+            let break_even = game.player_break_even_rate_cents();
+            let support_ratio = if break_even <= 0.0 {
+                f64::INFINITY
+            } else {
+                target / break_even
+            };
+            if support_ratio < REVIEW_MIN_RATE_SUPPORT_RATIO {
+                lines.push(format!(
+                    "{} target is only {:.0}% of {:.1}c break-even; review sustainability and financing pressure will suffer.",
+                    styled(BOLD_RED, "Sustainability:"),
+                    support_ratio * 100.0,
+                    break_even
+                ));
+            } else if support_ratio < 1.0 {
+                lines.push(format!(
+                    "{} target is below {:.1}c break-even; margins will be thin.",
+                    styled(BOLD_YELLOW, "Sustainability:"),
+                    break_even
+                ));
+            }
             lines
         }
         Decision::Maintenance { spend } => {
@@ -433,6 +455,30 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
             }
         }
     }
+}
+
+fn acquisition_risk_line(game: &Game, competitor: &Utility, terms: &AcquisitionTerms) -> String {
+    let deal_share =
+        terms.acquired_customers / (game.player.customers + terms.acquired_customers).max(1.0);
+    let service_drag = (0.82 - competitor.reliability).max(0.0);
+    let leverage_drag = (terms.post_debt_to_assets - 0.72).max(0.0);
+    let risk_score = deal_share * 1.10 + service_drag * 1.40 + leverage_drag * 0.80;
+    let (tone, label) = if risk_score >= 0.42 {
+        (BOLD_RED, "high")
+    } else if risk_score >= 0.24 {
+        (BOLD_YELLOW, "medium")
+    } else {
+        (BOLD_GREEN, "low")
+    };
+
+    format!(
+        "{} {} integration risk; deal size {:.0}% of post-close customers, post debt/assets {:.0}%, target reliability {:.0}%.",
+        styled(tone, "Risk:"),
+        styled(tone, label),
+        deal_share * 100.0,
+        terms.post_debt_to_assets * 100.0,
+        competitor.reliability * 100.0
+    )
 }
 
 pub(super) fn immediate_effect_lines(before: &Game, after: &Game) -> Vec<String> {

@@ -201,6 +201,7 @@ pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {
     let share = game.market_share();
     let reliability = game.player.reliability;
     let leverage = game.player.debt_to_assets();
+    let rate_support = game.player_rate_support_ratio();
 
     vec![
         format!(
@@ -259,6 +260,18 @@ pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {
                 format!("{:.0} pts over", (leverage - LEVERAGE_LIMIT) * 100.0)
             },
         ),
+        score_line(
+            "Rate support",
+            rate_support.min(1.35),
+            REVIEW_MIN_RATE_SUPPORT_RATIO,
+            rate_support_tone(rate_support),
+            format!("{:.0}% min", REVIEW_MIN_RATE_SUPPORT_RATIO * 100.0),
+            if rate_support >= 1.0 {
+                "above break-even".to_string()
+            } else {
+                format!("{:.0}% of break-even", rate_support * 100.0)
+            },
+        ),
     ]
 }
 
@@ -287,6 +300,34 @@ pub(super) fn progress_meter(current: f64, reference: f64, tone: &str) -> String
         tone,
         format!("[{}{}]", "=".repeat(filled), ".".repeat(width - filled)),
     )
+}
+
+fn rate_support_tone(ratio: f64) -> &'static str {
+    if ratio < REVIEW_MIN_RATE_SUPPORT_RATIO {
+        RED
+    } else if ratio < 1.0 {
+        YELLOW
+    } else {
+        GREEN
+    }
+}
+
+fn coverage_tone(coverage: f64) -> &'static str {
+    if coverage < REVIEW_MIN_INTEREST_COVERAGE {
+        RED
+    } else if coverage < 1.30 {
+        YELLOW
+    } else {
+        GREEN
+    }
+}
+
+fn format_coverage(coverage: f64) -> String {
+    if coverage.is_infinite() {
+        "no debt".to_string()
+    } else {
+        format!("{coverage:.1}x")
+    }
 }
 
 pub(super) fn quarters_remaining_label(game: &Game) -> String {
@@ -406,6 +447,44 @@ pub(super) fn board_risk_lines(game: &Game) -> Vec<String> {
         lines.push(signal_line("Capital", GREEN, "borrowing room available"));
     } else {
         lines.push(signal_line("Capital", YELLOW, "funding room is limited"));
+    }
+
+    let rate_support = game.player_rate_support_ratio();
+    if rate_support < REVIEW_MIN_RATE_SUPPORT_RATIO {
+        lines.push(signal_line(
+            "Earnings",
+            RED,
+            format!(
+                "{:.0}% of break-even; rate path is not durable",
+                rate_support * 100.0
+            ),
+        ));
+    } else if let Some(coverage) = game.player_last_interest_coverage() {
+        if coverage < REVIEW_MIN_INTEREST_COVERAGE {
+            lines.push(signal_line(
+                "Earnings",
+                RED,
+                format!("interest coverage only {}", format_coverage(coverage)),
+            ));
+        } else if coverage < 1.30 {
+            lines.push(signal_line(
+                "Earnings",
+                YELLOW,
+                format!("thin interest coverage at {}", format_coverage(coverage)),
+            ));
+        } else {
+            lines.push(signal_line(
+                "Earnings",
+                GREEN,
+                "rate and debt service look durable",
+            ));
+        }
+    } else {
+        lines.push(signal_line(
+            "Earnings",
+            CYAN,
+            "first operating report pending",
+        ));
     }
 
     lines
@@ -704,6 +783,8 @@ pub(super) fn financial_lines(game: &Game) -> Vec<String> {
     let borrowing_room = game.borrowing_room();
     let leverage = game.player.debt_to_assets();
     let debt_rate = game.player_annual_interest_rate();
+    let break_even = game.player_break_even_rate_cents();
+    let rate_support = game.player_rate_support_ratio();
     let mut lines = vec![
         format!(
             "{} {}   {} {}",
@@ -753,6 +834,9 @@ pub(super) fn financial_lines(game: &Game) -> Vec<String> {
         } else {
             0.0
         };
+        let coverage = game
+            .player_last_interest_coverage()
+            .unwrap_or(f64::INFINITY);
         lines.push(format!(
             "{} {}   {} {}",
             muted("Last profit"),
@@ -760,8 +844,31 @@ pub(super) fn financial_lines(game: &Game) -> Vec<String> {
             muted("margin"),
             styled(profit_tone(margin), format!("{:.1}%", margin))
         ));
+        lines.push(format!(
+            "{} {}   {} {}",
+            muted("Break-even"),
+            styled(
+                rate_support_tone(rate_support),
+                format!("{:.1}c", break_even)
+            ),
+            muted("Coverage"),
+            styled(coverage_tone(coverage), format_coverage(coverage))
+        ));
     } else {
         lines.push(format!("{} no operating report yet", muted("Last q")));
+        lines.push(format!(
+            "{} {}   {} {}",
+            muted("Break-even"),
+            styled(
+                rate_support_tone(rate_support),
+                format!("{:.1}c", break_even)
+            ),
+            muted("Rate support"),
+            styled(
+                rate_support_tone(rate_support),
+                format!("{:.0}%", rate_support * 100.0)
+            )
+        ));
     }
 
     lines
@@ -959,6 +1066,8 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
     let average_rate = market_average_rate(game);
     let rate_gap = game.player.rate_cents - average_rate;
     let tolerance = public_rate_tolerance(&game.market);
+    let break_even = game.player_break_even_rate_cents();
+    let rate_support = game.player_rate_support_ratio();
     if game.player.rate_cents > tolerance {
         push_line(
             86,
@@ -1000,6 +1109,45 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
         );
     } else {
         push_line(35, signal_line("Rate", CYAN, "near market average"));
+    }
+    if rate_support < REVIEW_MIN_RATE_SUPPORT_RATIO {
+        push_line(
+            88,
+            signal_line(
+                "Earnings",
+                RED,
+                format!(
+                    "rate {:.1}c below sustainable {:.1}c break-even",
+                    game.player.rate_cents, break_even
+                ),
+            ),
+        );
+    } else if rate_support < 1.0 {
+        push_line(
+            58,
+            signal_line("Earnings", YELLOW, "rate is below full break-even"),
+        );
+    }
+    if let Some(coverage) = game.player_last_interest_coverage() {
+        if coverage < REVIEW_MIN_INTEREST_COVERAGE {
+            push_line(
+                83,
+                signal_line(
+                    "Coverage",
+                    RED,
+                    format!("debt service not covered ({})", format_coverage(coverage)),
+                ),
+            );
+        } else if coverage < 1.30 {
+            push_line(
+                56,
+                signal_line(
+                    "Coverage",
+                    YELLOW,
+                    format!("thin interest coverage ({})", format_coverage(coverage)),
+                ),
+            );
+        }
     }
 
     let capacity = game.player.customer_capacity(&game.market);

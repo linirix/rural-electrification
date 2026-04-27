@@ -7,8 +7,8 @@ fn strategy_win_rates_stay_in_design_bands() {
     let variance = InitialVariance::default();
     let cases = [
         (Strategy::Naive, 0.00, 0.07),
-        (Strategy::Organic, 0.66, 0.82),
-        (Strategy::Balanced, 0.72, 0.88),
+        (Strategy::Organic, 0.62, 0.80),
+        (Strategy::Balanced, 0.66, 0.84),
         (Strategy::Mna, 0.45, 0.68),
     ];
 
@@ -26,7 +26,7 @@ fn strategy_win_rates_stay_in_design_bands() {
     let mna = summary_for(&summaries, Strategy::Mna).win_rate();
 
     assert!(
-        balanced >= organic + 0.03,
+        balanced >= organic + 0.015,
         "balanced play should modestly outperform pure organic growth: balanced {:.1}%, organic {:.1}%",
         balanced * 100.0,
         organic * 100.0
@@ -67,6 +67,17 @@ fn glonzo_random_strategy_runs_to_completion_with_varied_outcomes() {
     assert!(
         summary.finish_share_range.max - summary.finish_share_range.min > 0.08,
         "glonzo should create a broad random testing spread, got {:.1}-{:.1}%",
+        summary.finish_share_range.min * 100.0,
+        summary.finish_share_range.max * 100.0
+    );
+}
+
+#[test]
+fn glonzo_uses_policy_seed_even_from_fixed_starts() {
+    let summary = run_strategy_batch(120, InitialVariance::fixed(), Strategy::Glonzo);
+    assert!(
+        summary.finish_share_range.max - summary.finish_share_range.min > 0.08,
+        "glonzo should vary policy choices even when all starts are identical, got {:.1}-{:.1}%",
         summary.finish_share_range.min * 100.0,
         summary.finish_share_range.max * 100.0
     );

@@ -930,6 +930,65 @@ fn formal_review_can_be_continued_past_campaign_end() {
 }
 
 #[test]
+fn formal_review_rejects_below_cost_market_lead() {
+    let mut game = Game::with_seed(520);
+    game.quarter = game.campaign_quarters;
+    game.player.customers = 1_800.0;
+    game.player.generation_capacity_mwh = 900.0;
+    game.player.distribution_capacity = 2_400.0;
+    game.player.reliability = 0.92;
+    game.player.rate_cents = 0.4;
+    game.player.debt = 0.0;
+    for competitor in &mut game.competitors {
+        competitor.customers = 80.0;
+    }
+    let finances = FirmFinances {
+        revenue: 900.0,
+        operating_cost: 9_000.0,
+        interest: 0.0,
+        profit: -8_100.0,
+        served_mwh: 900.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().expect("expected formal review");
+    assert_eq!(outcome.kind, OutcomeKind::Defeat);
+    assert!(outcome.can_continue);
+    assert!(outcome.details.contains("rate support"));
+}
+
+#[test]
+fn below_cost_pricing_creates_financing_pressure() {
+    let mut game = Game::with_seed(521);
+    game.player.rate_cents = 0.5;
+    game.player.reputation = 70.0;
+    game.equity_market_fatigue = 0.0;
+    let finances = FirmFinances {
+        revenue: 500.0,
+        operating_cost: 8_000.0,
+        interest: 600.0,
+        profit: -8_100.0,
+        served_mwh: 500.0,
+        unmet_demand_ratio: 0.0,
+    };
+    let starting_debt = game.player.debt;
+    let mut events = Vec::new();
+
+    game.apply_below_cost_pricing_pressure(&finances, &mut events);
+
+    assert!(game.equity_market_fatigue > 0.0);
+    assert!(game.player.reputation < 70.0);
+    assert!(game.player.debt > starting_debt);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("Below-cost pricing"))
+    );
+}
+
+#[test]
 fn year_two_board_checkpoint_penalizes_low_share() {
     let mut game = Game::with_seed(54);
     game.quarter = BOARD_CHECKPOINT_QUARTER;
