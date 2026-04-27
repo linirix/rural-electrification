@@ -1,6 +1,6 @@
 use crate::{
-    DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
-    InitialVariance, OutcomeKind, QuarterReport, distribution_project_cost,
+    AcquisitionTerms, DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH,
+    Game, InitialVariance, OutcomeKind, QuarterReport, distribution_project_cost,
     generation_project_cost,
 };
 
@@ -308,29 +308,34 @@ fn organic_policy(game: &mut Game) {
 }
 
 fn balanced_policy(game: &mut Game) {
-    let acquisition_share_cap = if game.quarter < 8 { 0.32 } else { 0.38 };
-    if game.market_share() < acquisition_share_cap {
-        let _ = try_acquire_cheapest(game, 12_000.0, 0.72, 0.68);
-    }
-
     run_organic_program(
         game,
         OrganicPlan {
-            target_rate_cents: 8.70,
-            marketing_spend: 7_200.0,
+            target_rate_cents: 7.85,
+            marketing_spend: 12_000.0,
             marketing_interval: 1,
-            reliability_floor: 0.83,
-            headroom_target: 230.0,
-            firm_reserve_target_mwh: 95.0,
-            distribution_project_customers: 600.0,
-            generation_project_mwh: 420.0,
+            reliability_floor: 0.84,
+            headroom_target: 420.0,
+            firm_reserve_target_mwh: 145.0,
+            distribution_project_customers: 790.0,
+            generation_project_mwh: 550.0,
             cash_reserve: 10_000.0,
-            max_debt_to_assets: 0.73,
+            max_debt_to_assets: 0.80,
         },
     );
 
-    if game.market_share() < 0.38 {
-        let _ = try_acquire_cheapest(game, 14_000.0, 0.74, 0.72);
+    let acquisition_share_cap = if game.quarter < 8 { 0.34 } else { 0.41 };
+    if game.quarter >= 3 && game.market_share() < acquisition_share_cap {
+        let max_deal_share = if game.quarter < 8 { 0.18 } else { 0.24 };
+        let max_execution_risk = if game.quarter < 8 { 0.20 } else { 0.25 };
+        let _ = try_acquire_opportunistically(
+            game,
+            14_000.0,
+            0.78,
+            0.82,
+            max_deal_share,
+            max_execution_risk,
+        );
     }
 }
 
@@ -528,30 +533,37 @@ fn project_cash_buffer(plan: OrganicPlan) -> f64 {
     (plan.cash_reserve * 0.625).max(3_000.0)
 }
 
-fn try_acquire_cheapest(
+fn try_acquire_opportunistically(
     game: &mut Game,
     reserve: f64,
     max_debt_to_assets: f64,
     max_price_to_assets: f64,
+    max_deal_share: f64,
+    max_execution_risk: f64,
 ) -> bool {
     if game.acquisition_cooldown > 0 || game.competitors.len() <= 1 {
         return false;
     }
 
-    let Some((index, price)) = cheapest_competitor(game) else {
+    let Some((index, terms)) = best_opportunistic_competitor(
+        game,
+        max_price_to_assets,
+        max_deal_share,
+        max_execution_risk,
+    ) else {
         return false;
     };
-
-    if price > game.player.asset_base * max_price_to_assets {
-        return false;
-    }
 
     let diligence_cost = if game.has_diligence(index) {
         0.0
     } else {
         game.diligence_cost(index).unwrap_or(0.0)
     };
-    finance_to_cash(game, price + reserve + diligence_cost, max_debt_to_assets);
+    finance_to_cash(
+        game,
+        terms.price + reserve + diligence_cost,
+        max_debt_to_assets,
+    );
     if !game.has_diligence(index) {
         if game.player.cash <= diligence_cost + reserve * 0.25 {
             return false;
@@ -565,8 +577,8 @@ fn try_acquire_cheapest(
             return false;
         }
     }
-    if game.player.cash <= price + reserve
-        || game.player.debt_to_assets() > max_debt_to_assets + 0.10
+    if game.player.cash <= terms.price + reserve
+        || game.player.debt_to_assets() > max_debt_to_assets + 0.08
     {
         return false;
     }
@@ -575,6 +587,64 @@ fn try_acquire_cheapest(
         competitor_index: index,
     })
     .is_ok()
+}
+
+fn best_opportunistic_competitor(
+    game: &Game,
+    max_price_to_assets: f64,
+    max_deal_share: f64,
+    max_execution_risk: f64,
+) -> Option<(usize, AcquisitionTerms)> {
+    (0..game.competitors.len())
+        .filter_map(|index| {
+            let competitor = &game.competitors[index];
+            let terms = game.acquisition_terms(index)?;
+            if terms.price > game.player.asset_base * max_price_to_assets {
+                return None;
+            }
+            let deal_share = terms.acquired_customers
+                / (game.player.customers + terms.acquired_customers).max(1.0);
+            if deal_share > max_deal_share || terms.post_debt_to_assets > 0.88 {
+                return None;
+            }
+            if competitor.reliability < 0.76 || competitor.reputation < 46.0 {
+                return None;
+            }
+            let execution_risk = balanced_execution_risk(game, competitor, &terms);
+            if execution_risk > max_execution_risk {
+                return None;
+            }
+            let strategic_fit = terms.acquired_customers / terms.price.max(1.0);
+            let service_fit = (competitor.reliability - 0.78).max(0.0) * 0.20
+                + (competitor.reputation - 52.0).max(0.0) / 600.0;
+            let score = strategic_fit + service_fit - execution_risk * 0.004;
+            Some((index, terms, score))
+        })
+        .max_by(|left, right| left.2.total_cmp(&right.2))
+        .map(|(index, terms, _)| (index, terms))
+}
+
+fn balanced_execution_risk(
+    game: &Game,
+    competitor: &crate::Utility,
+    terms: &AcquisitionTerms,
+) -> f64 {
+    let deal_share =
+        terms.acquired_customers / (game.player.customers + terms.acquired_customers).max(1.0);
+    let target_service_risk = (0.84 - competitor.reliability).max(0.0) * 0.70;
+    let target_reputation_risk = (58.0 - competitor.reputation).max(0.0) / 320.0;
+    let leverage_risk = (terms.post_debt_to_assets - 0.68).max(0.0) * 0.34;
+    let serial_rollup_risk = game.integration_strain.max(0.0) * 0.14;
+    let dominance_risk = (terms.post_market_share - 0.42).max(0.0) * 0.12;
+
+    (0.035
+        + deal_share * 0.29
+        + target_service_risk
+        + target_reputation_risk
+        + leverage_risk
+        + serial_rollup_risk
+        + dominance_risk)
+        .clamp(0.06, 0.46)
 }
 
 fn finance_to_cash(game: &mut Game, target_cash: f64, max_debt_to_assets: f64) {

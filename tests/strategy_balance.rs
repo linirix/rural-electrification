@@ -7,8 +7,8 @@ fn strategy_win_rates_stay_in_design_bands() {
     let variance = InitialVariance::default();
     let cases = [
         (Strategy::Naive, 0.00, 0.07),
-        (Strategy::Organic, 0.66, 0.84),
-        (Strategy::Balanced, 0.64, 0.84),
+        (Strategy::Organic, 0.66, 0.82),
+        (Strategy::Balanced, 0.72, 0.88),
         (Strategy::Mna, 0.45, 0.68),
     ];
 
@@ -25,6 +25,12 @@ fn strategy_win_rates_stay_in_design_bands() {
     let balanced = summary_for(&summaries, Strategy::Balanced).win_rate();
     let mna = summary_for(&summaries, Strategy::Mna).win_rate();
 
+    assert!(
+        balanced >= organic + 0.03,
+        "balanced play should modestly outperform pure organic growth: balanced {:.1}%, organic {:.1}%",
+        balanced * 100.0,
+        organic * 100.0
+    );
     assert!(
         organic >= mna + 0.08,
         "organic should remain the more reliable low-risk lane: organic {:.1}%, mna {:.1}%",
