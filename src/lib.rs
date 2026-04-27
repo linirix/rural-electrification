@@ -9,9 +9,10 @@ pub use sim::{
     DISTRIBUTION_PROJECT_CAPACITY, DISTRIBUTION_PROJECT_COST, Decision, DiligenceReport,
     FirmFinances, GENERATION_PROJECT_CAPACITY_MWH, GENERATION_PROJECT_COST, Game, InitialVariance,
     MAX_ADJACENT_EXPANSIONS, Market, Outcome, OutcomeKind, Project, ProjectKind, QuarterReport,
-    ShockKind, Utility, distribution_project_cost, distribution_project_duration,
-    generation_project_cost, generation_project_duration,
-    generation_reliability_after_new_capacity, public_rate_tolerance,
+    REGIONAL_MANDATE_EXPANSION_TARGET, REGIONAL_MANDATE_LEVERAGE_LIMIT, REGIONAL_MANDATE_QUARTER,
+    REGIONAL_MANDATE_RELIABILITY_TARGET, REGIONAL_MANDATE_SHARE_TARGET, ShockKind, Utility,
+    distribution_project_cost, distribution_project_duration, generation_project_cost,
+    generation_project_duration, generation_reliability_after_new_capacity, public_rate_tolerance,
 };
 pub use strategy::{
     Strategy, StrategySummary, run_strategy_batch, run_strategy_batch_with_observer,

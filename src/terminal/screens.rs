@@ -42,6 +42,7 @@ pub(super) fn print_help() {
             "status / s     show dashboard".to_string(),
             "rivals         competitor detail".to_string(),
             "board          objectives".to_string(),
+            "region         regional mandate".to_string(),
             "preview/quote  inspect command".to_string(),
             "next / n / end finish quarter".to_string(),
             "continue       post-review play".to_string(),
@@ -56,6 +57,7 @@ pub(super) fn print_help() {
             "Invalid amounts are rejected.".to_string(),
             "Build sizes are clamped to sane bounds.".to_string(),
             "Large rate increases above public tolerance are rejected.".to_string(),
+            "Adjacent expansion creates integration work.".to_string(),
             "Saves live in ~/.electrification.".to_string(),
             "Use the dashboard guide for live costs.".to_string(),
         ],
@@ -78,6 +80,9 @@ pub(super) fn print_status(game: &Game) {
     if has_active_pipeline(game) {
         print_box("Pipeline", &project_lines(game));
     }
+    if should_show_regional_status(game) {
+        print_box("Regional Platform", &regional_status_lines(game));
+    }
     print_box("Commands", &command_footer_lines(game));
 }
 
@@ -95,6 +100,9 @@ pub(super) fn print_board(game: &Game) {
         &board_risk_lines(game),
     );
     print_box("Milestone Path", &board_path_lines(game));
+    if should_show_regional_status(game) {
+        print_box("Regional Mandate", &regional_mandate_lines(game));
+    }
 }
 
 pub(super) fn print_notice(message: &str) {
@@ -431,6 +439,173 @@ pub(super) fn board_path_lines(game: &Game) -> Vec<String> {
             )
         })
         .collect()
+}
+
+pub(super) fn should_show_regional_status(game: &Game) -> bool {
+    game.regional_mandate_active()
+}
+
+pub(super) fn regional_status_lines(game: &Game) -> Vec<String> {
+    let pending = adjacent_pending_quarters(game);
+    let mut lines = vec![
+        format!(
+            "{} {} / {}   {} {}",
+            muted("Territories"),
+            styled(
+                expansion_tone(game.adjacent_expansions),
+                game.adjacent_expansions
+            ),
+            muted(REGIONAL_MANDATE_EXPANSION_TARGET),
+            muted("mandate"),
+            styled(
+                if game.regional_mandate_met() {
+                    BOLD_GREEN
+                } else {
+                    BOLD_CYAN
+                },
+                regional_due_label(game)
+            )
+        ),
+        format!(
+            "{} {}   {} {}",
+            muted("Regional share"),
+            styled(
+                share_tone(game.market_share()),
+                format!(
+                    "{:.0}% / {:.0}%",
+                    game.market_share() * 100.0,
+                    REGIONAL_MANDATE_SHARE_TARGET * 100.0
+                )
+            ),
+            muted("Integration"),
+            styled(
+                regional_integration_tone(game.regional_integration),
+                format!("{:.0} pts", game.regional_integration * 100.0)
+            )
+        ),
+    ];
+
+    if let Some(quarters) = pending {
+        lines.push(format!(
+            "{} {}",
+            muted("Pending"),
+            styled(YELLOW, format!("adjacent territory opens in {quarters}q"))
+        ));
+    } else if game.regional_integration > 0.12 {
+        lines.push(format!(
+            "{} {}",
+            muted("Follow-up"),
+            styled(
+                YELLOW,
+                "marketing and maintenance reduce regional integration burden"
+            )
+        ));
+    } else if game.review_completed && !game.regional_mandate_completed {
+        lines.push(format!(
+            "{} {}",
+            muted("Next step"),
+            styled(CYAN, "expand and defend service quality before Year 10")
+        ));
+    }
+
+    lines
+}
+
+pub(super) fn regional_mandate_lines(game: &Game) -> Vec<String> {
+    vec![
+        format!(
+            "{} {}   {} {}",
+            muted("Due"),
+            styled(BOLD_CYAN, regional_due_label(game)),
+            muted("Status"),
+            styled(
+                if game.regional_mandate_met() {
+                    BOLD_GREEN
+                } else {
+                    YELLOW
+                },
+                if game.regional_mandate_met() {
+                    "on mandate"
+                } else {
+                    "not yet secure"
+                }
+            )
+        ),
+        board_metric_line(
+            "Share",
+            game.market_share(),
+            REGIONAL_MANDATE_SHARE_TARGET,
+            true,
+        ),
+        board_metric_line(
+            "Reliability",
+            game.player.reliability,
+            REGIONAL_MANDATE_RELIABILITY_TARGET,
+            true,
+        ),
+        board_metric_line(
+            "Debt/assets",
+            game.player.debt_to_assets(),
+            REGIONAL_MANDATE_LEVERAGE_LIMIT,
+            false,
+        ),
+        format!(
+            "{} {} / {}   {} {}",
+            styled(BOLD, "Territories"),
+            styled(
+                expansion_tone(game.adjacent_expansions),
+                game.adjacent_expansions
+            ),
+            muted(REGIONAL_MANDATE_EXPANSION_TARGET),
+            styled(BOLD, "Integration"),
+            styled(
+                regional_integration_tone(game.regional_integration),
+                format!("{:.0} pts", game.regional_integration * 100.0)
+            )
+        ),
+    ]
+}
+
+fn regional_due_label(game: &Game) -> String {
+    if game.regional_mandate_completed {
+        return "mandate reviewed".to_string();
+    }
+    if game.quarter >= REGIONAL_MANDATE_QUARTER {
+        return "review due now".to_string();
+    }
+    let remaining = game.regional_mandate_due_in();
+    if remaining == 1 {
+        "Year 10, 1 quarter left".to_string()
+    } else {
+        format!("Year 10, {remaining} quarters left")
+    }
+}
+
+fn adjacent_pending_quarters(game: &Game) -> Option<u32> {
+    game.pending_projects.iter().find_map(|project| {
+        matches!(project.kind, ProjectKind::AdjacentTerritory { .. })
+            .then_some(project.quarters_remaining)
+    })
+}
+
+fn expansion_tone(expansions: u32) -> &'static str {
+    if expansions >= REGIONAL_MANDATE_EXPANSION_TARGET {
+        BOLD_GREEN
+    } else if expansions > 0 {
+        YELLOW
+    } else {
+        RED
+    }
+}
+
+fn regional_integration_tone(value: f64) -> &'static str {
+    if value <= 0.12 {
+        BOLD_GREEN
+    } else if value <= 0.28 {
+        YELLOW
+    } else {
+        RED
+    }
 }
 
 pub(super) fn board_metric_line(
@@ -935,7 +1110,11 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
 
     lines.push(action_line(
         "marketing/maint",
-        "marketing 4000 for demand; maint 6000 for reliability",
+        if game.regional_integration > 0.12 {
+            "marketing 4000 and maint 6000 also work down regional integration"
+        } else {
+            "marketing 4000 for demand; maint 6000 for reliability"
+        },
     ));
     if should_show_adjacent_expansion(game) {
         lines.push(action_line("expand", adjacent_expansion_footer(game)));

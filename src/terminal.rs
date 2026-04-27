@@ -10,7 +10,9 @@ use crate::sim::{
     DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
     MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH, MAX_PUBLIC_RATE_PREMIUM_CENTS,
     MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, Outcome, OutcomeKind,
-    QuarterReport, ShockKind, Utility, distribution_project_cost, distribution_project_duration,
+    ProjectKind, QuarterReport, REGIONAL_MANDATE_EXPANSION_TARGET, REGIONAL_MANDATE_LEVERAGE_LIMIT,
+    REGIONAL_MANDATE_QUARTER, REGIONAL_MANDATE_RELIABILITY_TARGET, REGIONAL_MANDATE_SHARE_TARGET,
+    ShockKind, Utility, distribution_project_cost, distribution_project_duration,
     generation_project_cost, generation_project_duration,
     generation_reliability_after_new_capacity, money, public_rate_tolerance,
 };

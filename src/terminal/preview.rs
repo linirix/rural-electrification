@@ -295,6 +295,10 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                     money(cost - game.player.cash)
                 ));
             }
+            lines.push(format!(
+                "{} opening the territory creates a temporary regional integration burden; marketing and maintenance work it down.",
+                muted("Follow-up:")
+            ));
             lines
         }
         Decision::Marketing { spend } => vec![format!(

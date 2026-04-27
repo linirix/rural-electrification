@@ -1183,6 +1183,7 @@ fn adjacent_expansion_completion_opens_market_and_adds_incumbent() {
     assert!(game.player.customers > starting_player_customers);
     assert_eq!(game.competitors.len(), starting_competitors + 1);
     assert!(events.iter().any(|event| event.contains("local incumbent")));
+    assert!(game.regional_integration > 0.0);
 }
 
 #[test]
@@ -1242,6 +1243,104 @@ fn adjacent_expansion_blocks_parallel_projects_but_allows_limited_follow_ons() {
         .unwrap_err();
 
     assert!(completed_error.contains("already entered 3 adjacent territories"));
+}
+
+#[test]
+fn marketing_and_maintenance_reduce_regional_integration_burden() {
+    let mut game = Game::with_seed(65);
+    game.player.cash = 80_000.0;
+    game.player.reliability = 0.86;
+    game.regional_integration = 0.35;
+
+    game.apply_decision(Decision::Marketing { spend: 8_000.0 })
+        .unwrap();
+    let after_marketing = game.regional_integration;
+    assert!(after_marketing < 0.35);
+
+    game.apply_decision(Decision::Maintenance { spend: 8_000.0 })
+        .unwrap();
+    assert!(game.regional_integration < after_marketing);
+}
+
+#[test]
+fn regional_integration_burden_drags_service_until_resolved() {
+    let mut game = Game::with_seed(66);
+    game.player.reliability = 0.90;
+    game.player.reputation = 75.0;
+    game.regional_integration = 0.40;
+    let starting_reliability = game.player.reliability;
+    let starting_reputation = game.player.reputation;
+    let mut events = Vec::new();
+
+    game.apply_regional_integration_strain(&mut events);
+
+    assert!(game.player.reliability < starting_reliability);
+    assert!(game.player.reputation < starting_reputation);
+    assert!(game.regional_integration < 0.40);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("Regional expansion"))
+    );
+}
+
+#[test]
+fn regional_mandate_can_be_won_after_formal_review() {
+    let mut game = Game::with_seed(67);
+    game.review_completed = true;
+    game.quarter = REGIONAL_MANDATE_QUARTER;
+    game.adjacent_expansions = REGIONAL_MANDATE_EXPANSION_TARGET;
+    game.regional_integration = 0.05;
+    game.player.customers = 2_000.0;
+    game.player.reliability = REGIONAL_MANDATE_RELIABILITY_TARGET + 0.03;
+    game.player.asset_base = 400_000.0;
+    game.player.debt = 120_000.0;
+    for competitor in &mut game.competitors {
+        competitor.customers = 120.0;
+    }
+    let finances = FirmFinances {
+        revenue: 10_000.0,
+        operating_cost: 7_000.0,
+        interest: 500.0,
+        profit: 2_500.0,
+        served_mwh: 1_000.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().unwrap();
+    assert_eq!(outcome.kind, OutcomeKind::Victory);
+    assert!(outcome.headline.contains("Regional Platform"));
+    assert!(outcome.can_continue);
+}
+
+#[test]
+fn regional_mandate_can_be_missed_after_formal_review() {
+    let mut game = Game::with_seed(68);
+    game.review_completed = true;
+    game.quarter = REGIONAL_MANDATE_QUARTER;
+    game.adjacent_expansions = 1;
+    game.regional_integration = 0.30;
+    game.player.customers = 1_000.0;
+    game.player.reliability = 0.78;
+    game.player.asset_base = 200_000.0;
+    game.player.debt = 150_000.0;
+    let finances = FirmFinances {
+        revenue: 10_000.0,
+        operating_cost: 7_000.0,
+        interest: 500.0,
+        profit: 2_500.0,
+        served_mwh: 1_000.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().unwrap();
+    assert_eq!(outcome.kind, OutcomeKind::Defeat);
+    assert!(outcome.headline.contains("Regional Mandate"));
+    assert!(outcome.can_continue);
 }
 
 #[test]

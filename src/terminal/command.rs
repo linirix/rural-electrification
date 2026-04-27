@@ -59,7 +59,9 @@ pub(super) fn handle_command(game: &mut Game, command: &str) -> CommandResult {
             }
         }
         "competitors" | "rivals" => CommandResult::ShowRivals,
-        "board" | "goals" | "objectives" | "milestones" => CommandResult::ShowBoard,
+        "board" | "goals" | "objectives" | "milestones" | "region" | "regional" => {
+            CommandResult::ShowBoard
+        }
         _ => CommandResult::Continue(format!("Unknown command '{first}'. Type 'help'.")),
     }
 }

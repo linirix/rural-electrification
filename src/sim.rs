@@ -13,6 +13,11 @@ pub const ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS: f64 = 2_200.0;
 pub const ADJACENT_EXPANSION_INITIAL_CUSTOMERS: f64 = 260.0;
 pub const ADJACENT_EXPANSION_INCUMBENT_CUSTOMERS: f64 = 380.0;
 pub const MAX_ADJACENT_EXPANSIONS: u32 = 3;
+pub const REGIONAL_MANDATE_QUARTER: u32 = 40;
+pub const REGIONAL_MANDATE_SHARE_TARGET: f64 = 0.58;
+pub const REGIONAL_MANDATE_RELIABILITY_TARGET: f64 = 0.82;
+pub const REGIONAL_MANDATE_LEVERAGE_LIMIT: f64 = 0.90;
+pub const REGIONAL_MANDATE_EXPANSION_TARGET: u32 = 2;
 const BASE_ANNUAL_RATE: f64 = 0.052;
 const BASE_CREDIT_SPREAD: f64 = 0.018;
 const MAINTENANCE_REFERENCE_ASSET_BASE: f64 = 78_000.0;
@@ -83,9 +88,13 @@ pub struct Game {
     pub pending_projects: Vec<Project>,
     pub acquisition_cooldown: u32,
     pub integration_strain: f64,
+    #[serde(default)]
+    pub regional_integration: f64,
     pub active_shocks: Vec<ActiveShock>,
     pub startup_index: u32,
     pub adjacent_expansions: u32,
+    #[serde(default)]
+    pub regional_mandate_completed: bool,
     pub review_completed: bool,
     pub equity_market_fatigue: f64,
     pub diligence_reports: Vec<DiligenceReport>,
@@ -428,9 +437,11 @@ impl Game {
             pending_projects: Vec::new(),
             acquisition_cooldown: 0,
             integration_strain: 0.0,
+            regional_integration: 0.0,
             active_shocks: Vec::new(),
             startup_index: 0,
             adjacent_expansions: 0,
+            regional_mandate_completed: false,
             review_completed: false,
             equity_market_fatigue: 0.0,
             diligence_reports: Vec::new(),
@@ -530,10 +541,12 @@ impl Game {
                 self.player.marketing_momentum += (spend / 5_000.0) * 0.13;
                 self.player.reputation =
                     (self.player.reputation + spend / 4_000.0).clamp(0.0, 100.0);
+                let regional_relief =
+                    self.reduce_regional_integration(spend / 160_000.0, "marketing");
                 Ok(format!(
                     "Spent {} on customer acquisition, financing offers, and sales coverage.",
                     money(spend)
-                ))
+                ) + &regional_relief)
             }
             Decision::IssueStock { amount } => {
                 let amount = positive_amount(amount, "stock issuance")?;
@@ -888,11 +901,13 @@ impl Game {
                 self.player.reputation = (self.player.reputation
                     + maintenance_reputation_gain(&self.player, spend))
                 .clamp(0.0, 100.0);
+                let regional_relief =
+                    self.reduce_regional_integration(spend / 140_000.0, "service work");
                 Ok(format!(
                     "Spent {} on reliability work; gained {:.1} reliability points.",
                     money(spend),
                     actual_gain * 100.0
-                ))
+                ) + &regional_relief)
             }
         }
     }
@@ -941,6 +956,7 @@ impl Game {
         self.grow_market(&mut events);
         self.competitor_plans(&mut events);
         self.apply_integration_strain(&mut events);
+        self.apply_regional_integration_strain(&mut events);
 
         self.player.marketing_momentum *= 0.55;
         self.equity_market_fatigue *= 0.55;
@@ -1059,9 +1075,18 @@ impl Game {
 
         let headline = outcome.headline.clone();
         self.outcome = None;
-        Ok(format!(
-            "Continuing after {headline}. The formal review is complete; operations now continue without a fixed end date."
-        ))
+        let next = if self.review_completed && !self.regional_mandate_completed {
+            format!(
+                " The next board mandate is Year 10 regional leadership: {:.0}% share, {} adjacent territories, {:.0}% reliability, and debt/assets below {:.0}%.",
+                REGIONAL_MANDATE_SHARE_TARGET * 100.0,
+                REGIONAL_MANDATE_EXPANSION_TARGET,
+                REGIONAL_MANDATE_RELIABILITY_TARGET * 100.0,
+                REGIONAL_MANDATE_LEVERAGE_LIMIT * 100.0
+            )
+        } else {
+            " Operations now continue without a fixed end date.".to_string()
+        };
+        Ok(format!("Continuing after {headline}.{next}"))
     }
 
     pub fn market_share(&self) -> f64 {
@@ -1107,6 +1132,22 @@ impl Game {
         self.pending_projects
             .iter()
             .any(|project| matches!(project.kind, ProjectKind::AdjacentTerritory { .. }))
+    }
+
+    pub fn regional_mandate_due_in(&self) -> u32 {
+        REGIONAL_MANDATE_QUARTER.saturating_sub(self.quarter)
+    }
+
+    pub fn regional_mandate_active(&self) -> bool {
+        self.review_completed || self.adjacent_expansion_pending() || self.adjacent_expansions > 0
+    }
+
+    pub fn regional_mandate_met(&self) -> bool {
+        self.adjacent_expansions >= REGIONAL_MANDATE_EXPANSION_TARGET
+            && self.market_share() >= REGIONAL_MANDATE_SHARE_TARGET
+            && self.player.reliability >= REGIONAL_MANDATE_RELIABILITY_TARGET
+            && self.player.debt_to_assets() <= REGIONAL_MANDATE_LEVERAGE_LIMIT
+            && self.regional_integration <= 0.12
     }
 
     pub fn adjacent_expansion_blocker(&self) -> Option<String> {
@@ -1774,6 +1815,9 @@ impl Game {
                         );
                         self.competitors.push(incumbent);
                         self.adjacent_expansions += 1;
+                        self.regional_integration = (self.regional_integration
+                            + adjacent_expansion_integration_burden(self.adjacent_expansions))
+                        .clamp(0.0, 1.20);
                         events.push(format!(
                             "The {} opened: Metro connected {:.0} launch customers, the addressable market grew by {:.0}, and {incumbent_name} emerged as the local incumbent.",
                             project.name, initial_customers, addressable_customers
@@ -1810,6 +1854,50 @@ impl Game {
         self.integration_strain *= 0.62;
         if self.integration_strain < 0.05 {
             self.integration_strain = 0.0;
+        }
+    }
+
+    fn reduce_regional_integration(&mut self, relief: f64, source: &str) -> String {
+        if self.regional_integration <= 0.01 || relief <= 0.0 {
+            return String::new();
+        }
+
+        let before = self.regional_integration;
+        self.regional_integration = (self.regional_integration - relief).max(0.0);
+        let actual = before - self.regional_integration;
+        if actual < 0.01 {
+            String::new()
+        } else {
+            format!(
+                " Regional integration burden eased by {:.0} points through {source}.",
+                actual * 100.0
+            )
+        }
+    }
+
+    fn apply_regional_integration_strain(&mut self, events: &mut Vec<String>) {
+        if self.regional_integration <= 0.01 {
+            self.regional_integration = 0.0;
+            return;
+        }
+
+        let reliability_drag = (0.002 + self.regional_integration * 0.006).min(0.014);
+        let reputation_drag = (0.25 + self.regional_integration * 1.10).min(2.0);
+        let marketing_drag = (1.0 - self.regional_integration * 0.035).clamp(0.88, 1.0);
+        self.player.reliability = (self.player.reliability - reliability_drag).clamp(0.35, 0.98);
+        self.player.reputation = (self.player.reputation - reputation_drag).clamp(0.0, 100.0);
+        self.player.marketing_momentum *= marketing_drag;
+
+        if self.regional_integration >= 0.18 {
+            events.push(format!(
+                "Regional expansion is absorbing management attention; service and reputation slipped by {:.1} points.",
+                reputation_drag
+            ));
+        }
+
+        self.regional_integration *= 0.82;
+        if self.regional_integration < 0.04 {
+            self.regional_integration = 0.0;
         }
     }
 
@@ -2133,6 +2221,40 @@ impl Game {
                 });
             }
         }
+
+        if self.review_completed
+            && !self.regional_mandate_completed
+            && self.quarter >= REGIONAL_MANDATE_QUARTER
+        {
+            self.regional_mandate_completed = true;
+            if self.regional_mandate_met() {
+                self.outcome = Some(Outcome {
+                    kind: OutcomeKind::Victory,
+                    headline: "Regional Platform Secured".to_string(),
+                    details: format!(
+                        "By Year 10 Metro held {:.0}% share across {} adjacent territories while keeping reliability and leverage inside the regional mandate.",
+                        self.market_share() * 100.0,
+                        self.adjacent_expansions
+                    ),
+                    can_continue: true,
+                });
+            } else {
+                self.outcome = Some(Outcome {
+                    kind: OutcomeKind::Defeat,
+                    headline: "Regional Mandate Missed".to_string(),
+                    details: format!(
+                        "By Year 10 Metro held {:.0}% share with {} adjacent territories. The board wanted {:.0}% share, {} territories, {:.0}% reliability, and debt/assets below {:.0}%.",
+                        self.market_share() * 100.0,
+                        self.adjacent_expansions,
+                        REGIONAL_MANDATE_SHARE_TARGET * 100.0,
+                        REGIONAL_MANDATE_EXPANSION_TARGET,
+                        REGIONAL_MANDATE_RELIABILITY_TARGET * 100.0,
+                        REGIONAL_MANDATE_LEVERAGE_LIMIT * 100.0
+                    ),
+                    can_continue: true,
+                });
+            }
+        }
     }
 }
 
@@ -2152,6 +2274,10 @@ fn acquisition_integration_strain(starting_customers: f64, acquired_customers: f
     let post_customers = (starting_customers + acquired_customers).max(1.0);
     let acquired_share = (acquired_customers / post_customers).clamp(0.0, 1.0);
     acquired_share * 1.35
+}
+
+fn adjacent_expansion_integration_burden(completed_expansions: u32) -> f64 {
+    (0.20 + f64::from(completed_expansions.saturating_sub(1)) * 0.08).clamp(0.20, 0.42)
 }
 
 fn acquisition_consolidation_premium(share: f64) -> f64 {

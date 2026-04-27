@@ -76,8 +76,9 @@ load campaign1
 - `repay [amount|max]` is limited by cash on hand and outstanding debt.
 - `diligence <number>` reveals exact acquisition terms for a rival for three quarters and freezes that target's acquisition quote during the diligence window, but it alerts the target and can trigger defensive financing, retention, rate, and capacity moves.
 - `buy <number>` requires current diligence, available cash for the closing price, and no active integration cooldown.
-- `maintenance [amount]` has diminishing reliability and reputation impact as the asset base grows.
-- `expand` starts adjacent-territory entry once the core platform is mature enough. Up to three adjacent entries are allowed, with each follow-on expansion costing more.
+- `maintenance [amount]` has diminishing reliability and reputation impact as the asset base grows. After adjacent expansion, maintenance also helps work down regional integration burden.
+- `expand` starts adjacent-territory entry once the core platform is mature enough. Up to three adjacent entries are allowed, with each follow-on expansion costing more and creating temporary regional integration work.
+- After the formal Year 5 review, continued games receive a Year 10 regional mandate: hold broad regional share, enter multiple adjacent territories, keep reliability high, and stay inside board leverage limits.
 
 Macroeconomic inputs change each quarter. Base rates, credit spreads, demand conditions, cost pressure, public rate tolerance, and active shocks affect debt service, borrowing room, growth, operating costs, customer churn, startup formation, and equity financing appetite.
 

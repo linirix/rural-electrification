@@ -557,6 +557,36 @@ fn preview_expand_shows_cost_and_does_not_mutate_game() {
 }
 
 #[test]
+fn regional_status_lines_show_post_review_targets_and_integration() {
+    let mut game = Game::with_seed(146);
+    game.review_completed = true;
+    game.adjacent_expansions = 1;
+    game.regional_integration = 0.26;
+
+    let lines = regional_status_lines(&game);
+    let joined = lines.join(" ");
+
+    assert!(joined.contains("Territories"));
+    assert!(joined.contains("Integration"));
+    assert!(joined.contains("Year 10"));
+}
+
+#[test]
+fn regional_mandate_lines_include_expansion_and_financial_targets() {
+    let mut game = Game::with_seed(147);
+    game.review_completed = true;
+    game.adjacent_expansions = 2;
+    game.regional_integration = 0.05;
+
+    let lines = regional_mandate_lines(&game);
+    let joined = lines.join(" ");
+
+    assert!(joined.contains("Territories"));
+    assert!(joined.contains("Debt/assets"));
+    assert!(joined.contains("Integration"));
+}
+
+#[test]
 fn preview_maint_alias_does_not_mutate_game() {
     let mut game = Game::with_seed(106);
     let starting_cash = game.player.cash;
