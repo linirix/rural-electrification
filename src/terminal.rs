@@ -13,8 +13,8 @@ use crate::sim::{
     Outcome, OutcomeKind, ProjectKind, QuarterReport, REGIONAL_MANDATE_EXPANSION_TARGET,
     REGIONAL_MANDATE_LEVERAGE_LIMIT, REGIONAL_MANDATE_QUARTER, REGIONAL_MANDATE_RELIABILITY_TARGET,
     REGIONAL_MANDATE_SHARE_TARGET, REVIEW_MIN_INTEREST_COVERAGE, REVIEW_MIN_RATE_SUPPORT_RATIO,
-    ShockKind, Utility, distribution_project_cost, distribution_project_duration,
-    generation_project_cost, generation_project_duration,
+    REVIEW_MIN_RELIABILITY, ShockKind, Utility, distribution_project_cost,
+    distribution_project_duration, generation_project_cost, generation_project_duration,
     generation_reliability_after_new_capacity, money, public_rate_tolerance,
 };
 
@@ -38,7 +38,7 @@ const DEFAULT_SCREEN_WIDTH: usize = 118;
 const MAX_SCREEN_WIDTH: usize = 124;
 const COLUMN_GAP: usize = 2;
 const SHARE_TARGET: f64 = 0.45;
-const RELIABILITY_TARGET: f64 = 0.72;
+const RELIABILITY_TARGET: f64 = REVIEW_MIN_RELIABILITY;
 const LEVERAGE_LIMIT: f64 = 0.95;
 const RESET: &str = "\x1B[0m";
 const BOLD: &str = "\x1B[1m";
@@ -51,6 +51,72 @@ const BOLD_RED: &str = "\x1B[1;31m";
 const BOLD_GREEN: &str = "\x1B[1;32m";
 const BOLD_YELLOW: &str = "\x1B[1;33m";
 const BOLD_CYAN: &str = "\x1B[1;36m";
+
+fn acquisition_projected_reliability(
+    game: &Game,
+    competitor: &Utility,
+    terms: &AcquisitionTerms,
+) -> f64 {
+    let player_weight = game.player.generation_capacity_mwh.max(0.0);
+    let acquired_weight = (terms.acquired_generation_capacity_mwh * 0.70).max(0.0);
+    let combined_weight = player_weight + acquired_weight;
+    let weighted = if combined_weight <= 0.0 {
+        game.player.reliability
+    } else {
+        (game.player.reliability * player_weight + competitor.reliability * acquired_weight)
+            / combined_weight
+    };
+    (weighted - 0.035).clamp(0.35, 0.98)
+}
+
+fn acquisition_projected_integration_burden(game: &Game, terms: &AcquisitionTerms) -> f64 {
+    let post_customers = (game.player.customers + terms.acquired_customers).max(1.0);
+    let deal_share = (terms.acquired_customers / post_customers).clamp(0.0, 1.0);
+    (game.integration_strain + deal_share * 1.35).clamp(0.0, 1.6)
+}
+
+fn acquisition_service_tone(projected_reliability: f64) -> &'static str {
+    if projected_reliability < REVIEW_MIN_RELIABILITY {
+        BOLD_RED
+    } else if projected_reliability < REVIEW_MIN_RELIABILITY + 0.04 {
+        BOLD_YELLOW
+    } else {
+        GREEN
+    }
+}
+
+fn acquisition_service_cushion_text(projected_reliability: f64) -> String {
+    let cushion = projected_reliability - REVIEW_MIN_RELIABILITY;
+    if cushion >= 0.0 {
+        format!("{:.1} pts cushion", cushion * 100.0)
+    } else {
+        format!("{:.1} pts short", cushion.abs() * 100.0)
+    }
+}
+
+fn acquisition_integration_burden_label(value: f64) -> &'static str {
+    if value >= 0.70 {
+        "severe"
+    } else if value >= 0.42 {
+        "heavy"
+    } else if value >= 0.20 {
+        "moderate"
+    } else {
+        "light"
+    }
+}
+
+fn acquisition_integration_burden_tone(value: f64) -> &'static str {
+    if value >= 0.70 {
+        BOLD_RED
+    } else if value >= 0.42 {
+        BOLD_YELLOW
+    } else if value >= 0.20 {
+        YELLOW
+    } else {
+        GREEN
+    }
+}
 
 pub fn run() -> io::Result<()> {
     let mut game = Game::new();

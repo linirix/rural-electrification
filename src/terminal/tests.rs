@@ -301,6 +301,12 @@ fn rival_detail_includes_acquisition_economics() {
             .iter()
             .any(|line| line.contains("integration haircuts included"))
     );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("post-close reliability"))
+    );
+    assert!(lines.iter().any(|line| line.contains("integration burden")));
     assert!(lines.iter().any(|line| line.contains("underwriting")));
 }
 
@@ -315,6 +321,8 @@ fn rival_detail_hides_exact_deal_terms_before_diligence() {
             .iter()
             .any(|line| line.contains("public estimates only"))
     );
+    assert!(lines.iter().any(|line| line.contains("risk clues")));
+    assert!(lines.iter().any(|line| line.contains("service quality")));
     assert!(!lines.iter().any(|line| line.contains("post debt/assets")));
     assert!(!lines.iter().any(|line| line.contains("reliability")));
     assert!(!lines.iter().any(|line| line.contains("headroom")));
@@ -352,6 +360,8 @@ fn acquisition_preview_without_diligence_shows_public_range() {
             assert!(lines.iter().any(|line| line.contains("close risk")));
             assert!(lines.iter().any(|line| line.contains("diligence reveals")));
             assert!(lines.iter().any(|line| line.contains("Underwriting")));
+            assert!(lines.iter().any(|line| line.contains("service quality")));
+            assert!(lines.iter().any(|line| line.contains("liquidity buffer")));
         }
         _ => panic!("preview buy should show preview output"),
     }
@@ -370,6 +380,12 @@ fn acquisition_preview_with_diligence_shows_integration_risk() {
             assert!(lines.iter().any(|line| line.contains("integration risk")));
             assert!(lines.iter().any(|line| line.contains("underwriting")));
             assert!(lines.iter().any(|line| line.contains("post debt/assets")));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("post-close reliability"))
+            );
+            assert!(lines.iter().any(|line| line.contains("review standard")));
         }
         _ => panic!("preview buy should show preview output"),
     }
@@ -386,6 +402,11 @@ fn diligence_preview_shows_acquisition_terms_that_will_be_locked_in() {
             assert!(lines.iter().any(|line| line.contains("net cost")));
             assert!(lines.iter().any(|line| line.contains("assumes debt")));
             assert!(lines.iter().any(|line| line.contains("post debt/assets")));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("post-close reliability"))
+            );
         }
         _ => panic!("preview diligence should show preview output"),
     }

@@ -354,6 +354,7 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                         terms.post_debt_to_assets * 100.0,
                         terms.acquired_customers
                     ));
+                    lines.push(acquisition_service_line(game, competitor, &terms));
                 }
                 lines
             } else {
@@ -384,6 +385,7 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                         competitor,
                         &terms,
                     ));
+                    lines.push(acquisition_service_line(game, competitor, &terms));
                     lines
                 } else {
                     let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
@@ -513,13 +515,33 @@ fn acquisition_risk_line(
     )
 }
 
+fn acquisition_service_line(game: &Game, competitor: &Utility, terms: &AcquisitionTerms) -> String {
+    let projected_reliability = acquisition_projected_reliability(game, competitor, terms);
+    let burden = acquisition_projected_integration_burden(game, terms);
+    let tone = acquisition_service_tone(projected_reliability);
+
+    format!(
+        "{} post-close reliability about {}; service {} versus review standard; integration burden {}.",
+        styled(tone, "Service:"),
+        styled(tone, format!("{:.0}%", projected_reliability * 100.0)),
+        styled(
+            tone,
+            acquisition_service_cushion_text(projected_reliability)
+        ),
+        styled(
+            acquisition_integration_burden_tone(burden),
+            acquisition_integration_burden_label(burden)
+        )
+    )
+}
+
 fn public_acquisition_underwriting_line(game: &Game, competitor_index: usize) -> String {
     let stress_score = game
         .acquisition_stress_score(competitor_index)
         .unwrap_or(0.0);
     let label = Game::acquisition_stress_label(stress_score);
     format!(
-        "{} public file leaves lender posture {}; diligence will sharpen the read.",
+        "{} public file leaves lender posture {}; watch service quality, liquidity buffer, and leverage before closing without diligence.",
         styled(underwriting_tone(stress_score), "Underwriting:"),
         styled(underwriting_tone(stress_score), label)
     )

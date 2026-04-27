@@ -232,6 +232,10 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
             muted("terms"),
             money(cost)
         ));
+        lines.push(format!(
+            "   {} watch service quality, liquidity buffer, and leverage before closing without diligence",
+            muted("risk clues")
+        ));
         lines.push(acquisition_underwriting_line(game, competitor_index, false));
         return lines;
     }
@@ -264,6 +268,9 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
         terms.acquired_generation_capacity_mwh,
         terms.acquired_distribution_capacity
     ));
+    if let Some(competitor) = game.competitors.get(competitor_index) {
+        lines.push(acquisition_service_line(game, competitor, &terms));
+    }
     if terms.public_interest_concession > 0.0 {
         lines.push(format!(
             "   {} {} public-interest concession; post-deal share about {:.0}%",
@@ -322,6 +329,26 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
     }
 
     lines
+}
+
+fn acquisition_service_line(game: &Game, competitor: &Utility, terms: &AcquisitionTerms) -> String {
+    let projected_reliability = acquisition_projected_reliability(game, competitor, terms);
+    let burden = acquisition_projected_integration_burden(game, terms);
+    let tone = acquisition_service_tone(projected_reliability);
+
+    format!(
+        "   {} post-close reliability about {}; service {}; integration burden {}",
+        styled(tone, "service"),
+        styled(tone, format!("{:.0}%", projected_reliability * 100.0)),
+        styled(
+            tone,
+            acquisition_service_cushion_text(projected_reliability)
+        ),
+        styled(
+            acquisition_integration_burden_tone(burden),
+            acquisition_integration_burden_label(burden)
+        )
+    )
 }
 
 fn acquisition_underwriting_line(

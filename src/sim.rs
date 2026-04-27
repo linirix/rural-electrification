@@ -58,6 +58,7 @@ const MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = -1.25;
 const MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = 1.35;
 pub const REVIEW_MIN_RATE_SUPPORT_RATIO: f64 = 0.72;
 pub const REVIEW_MIN_INTEREST_COVERAGE: f64 = 1.0;
+pub const REVIEW_MIN_RELIABILITY: f64 = 0.72;
 const REVIEW_MIN_PROFIT: f64 = -500.0;
 const BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO: f64 = 0.55;
 const PUBLIC_BALANCE_SHEET_DIVERGENCE_PROBABILITY: f64 = 0.25;
@@ -2494,7 +2495,7 @@ impl Game {
             let sustainability = self.review_sustainability(finances);
             self.review_completed = true;
             if share >= 0.45
-                && self.player.reliability >= 0.72
+                && self.player.reliability >= REVIEW_MIN_RELIABILITY
                 && healthy_balance_sheet
                 && sustainability.passes
             {
