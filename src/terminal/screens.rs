@@ -702,6 +702,32 @@ fn regional_integration_tone(value: f64) -> &'static str {
     }
 }
 
+fn integration_strain_label(value: f64) -> &'static str {
+    if value >= 0.50 {
+        "severe"
+    } else if value >= 0.30 {
+        "high"
+    } else if value >= 0.12 {
+        "moderate"
+    } else if value > 0.01 {
+        "light"
+    } else {
+        "clear"
+    }
+}
+
+fn integration_strain_tone(value: f64) -> &'static str {
+    if value >= 0.50 {
+        RED
+    } else if value >= 0.30 {
+        BOLD_YELLOW
+    } else if value >= 0.08 {
+        YELLOW
+    } else {
+        GREEN
+    }
+}
+
 pub(super) fn board_metric_line(
     label: &str,
     current: f64,
@@ -996,7 +1022,14 @@ pub(super) fn project_lines(game: &Game) -> Vec<String> {
         lines.push(format!(
             "{} {}",
             muted("Integration"),
-            styled(YELLOW, format!("{}q left", game.acquisition_cooldown))
+            styled(
+                integration_strain_tone(game.integration_strain),
+                format!(
+                    "{}q left | {} burden",
+                    game.acquisition_cooldown,
+                    integration_strain_label(game.integration_strain)
+                )
+            )
         ));
     }
 
@@ -1219,6 +1252,25 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
         push_line(
             57,
             signal_line("M&A", YELLOW, "lenders watching integration"),
+        );
+    }
+    if game.integration_strain >= 0.30 {
+        push_line(
+            79,
+            signal_line(
+                "Integration",
+                integration_strain_tone(game.integration_strain),
+                "heavy operating burden from recent deal",
+            ),
+        );
+    } else if game.integration_strain >= 0.08 {
+        push_line(
+            54,
+            signal_line(
+                "Integration",
+                integration_strain_tone(game.integration_strain),
+                "recent deal still absorbing management attention",
+            ),
         );
     }
 

@@ -62,7 +62,7 @@ fn run_batch(
     run_strategy_batch_with_observer(seeds, variance, strategy, |seed, game, report| {
         if verbose {
             println!(
-                "{} {} seed {}: share {:.1}%, customers {:.0}, cash {}, debt {}, reliability {:.0}%, profit {}",
+                "{} {} seed {}: share {:.1}%, customers {:.0}, cash {}, debt {}, reliability {:.0}%, profit {}, M&A stress {:.0} pts",
                 report.label,
                 strategy.name(),
                 seed,
@@ -71,7 +71,8 @@ fn run_batch(
                 money(game.player.cash),
                 money(game.player.debt),
                 game.player.reliability * 100.0,
-                money(report.profit)
+                money(report.profit),
+                game.acquisition_stress * 100.0
             );
         }
     })
@@ -172,6 +173,14 @@ fn print_summary(
         "finish share distribution: {}",
         summary.finish_share_histogram.render()
     );
+    println!(
+        "acquisition stress: avg peak {:.0} pts (range {:.0}-{:.0}) | stressed defeats {} | stressed receiverships {}",
+        summary.average_peak_acquisition_stress() * 100.0,
+        summary.peak_acquisition_stress_range.min * 100.0,
+        summary.peak_acquisition_stress_range.max * 100.0,
+        summary.acquisition_stress_defeats,
+        summary.acquisition_stress_receiverships
+    );
 }
 
 fn avg_quarter_suffix(count: u32, quarter_sum: f64) -> String {
@@ -256,6 +265,7 @@ fn parse_strategy(raw: &str) -> Option<StrategySelection> {
         "mna" | "ma" | "m&a" | "acquire" | "acquisition" | "expert" => {
             Some(StrategySelection::One(Strategy::Mna))
         }
+        "raider" | "rollup" | "reckless" => Some(StrategySelection::One(Strategy::Raider)),
         "glonzo" | "random" | "chaos" => Some(StrategySelection::One(Strategy::Glonzo)),
         _ => None,
     }

@@ -115,6 +115,7 @@ The strategy harness is the main balance tool:
 cargo run --bin playtest -- --seeds 50
 cargo run --bin playtest -- --strategy organic --seeds 500
 cargo run --bin playtest -- --strategy regional --seeds 500
+cargo run --bin playtest -- --strategy raider --seeds 500
 cargo run --bin playtest -- --strategy glonzo --seeds 500
 cargo run --bin playtest -- --all-strategies --seeds 500
 cargo run --bin playtest -- --sweep-starts --all-strategies --seeds 1000
@@ -122,14 +123,14 @@ cargo run --bin playtest -- --sweep-starts --all-strategies --seeds 1000
 
 Useful playtest flags:
 
-- `--strategy naive|organic|balanced|regional|mna|glonzo|all`
+- `--strategy naive|organic|balanced|regional|mna|raider|glonzo|all`
 - `--all-strategies`
 - `--seeds <count>`
 - `--variance <amplitude>`
 - `--sweep-starts`
 - `--verbose`
 
-There is also a strategy regression test in `tests/strategy_balance.rs` that keeps the major automated strategies inside expected win-rate bands.
+Playtest summaries include peak acquisition stress so reckless roll-up strategies can be evaluated separately from disciplined M&A. There is also a strategy regression test in `tests/strategy_balance.rs` that keeps the major automated strategies inside expected win-rate bands.
 
 ## Project Layout
 

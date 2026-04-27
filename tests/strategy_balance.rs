@@ -84,6 +84,27 @@ fn glonzo_uses_policy_seed_even_from_fixed_starts() {
 }
 
 #[test]
+fn raider_strategy_exercises_acquisition_stress() {
+    let summary = run_strategy_batch(120, InitialVariance::default(), Strategy::Raider);
+    assert_eq!(summary.runs, 120);
+    assert!(
+        summary.average_peak_acquisition_stress() >= 0.35,
+        "raider should exercise stressed roll-up mechanics: avg peak {:.0} pts",
+        summary.average_peak_acquisition_stress() * 100.0
+    );
+    assert!(
+        summary.peak_acquisition_stress_range.max >= 0.80,
+        "raider should reach distressed underwriting in at least some seeds: max {:.0} pts",
+        summary.peak_acquisition_stress_range.max * 100.0
+    );
+    assert!(
+        summary.acquisition_stress_defeats >= 3,
+        "raider should produce defeats involving acquisition stress, got {}",
+        summary.acquisition_stress_defeats
+    );
+}
+
+#[test]
 fn regional_strategy_can_meet_year_ten_mandate() {
     let summary = run_strategy_batch(
         REGRESSION_SEEDS,

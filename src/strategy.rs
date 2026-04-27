@@ -17,17 +17,19 @@ pub enum Strategy {
     Balanced,
     Regional,
     Mna,
+    Raider,
     Glonzo,
 }
 
 impl Strategy {
-    pub fn all() -> [Strategy; 6] {
+    pub fn all() -> [Strategy; 7] {
         [
             Strategy::Naive,
             Strategy::Organic,
             Strategy::Balanced,
             Strategy::Regional,
             Strategy::Mna,
+            Strategy::Raider,
             Strategy::Glonzo,
         ]
     }
@@ -39,6 +41,7 @@ impl Strategy {
             Strategy::Balanced => "balanced",
             Strategy::Regional => "regional",
             Strategy::Mna => "mna",
+            Strategy::Raider => "raider",
             Strategy::Glonzo => "glonzo",
         }
     }
@@ -81,6 +84,10 @@ pub struct StrategySummary {
     pub finish_debt: f64,
     pub finish_customers: f64,
     pub finish_reliability: f64,
+    pub peak_acquisition_stress: f64,
+    pub peak_acquisition_stress_range: Range,
+    pub acquisition_stress_defeats: u32,
+    pub acquisition_stress_receiverships: u32,
 }
 
 impl StrategySummary {
@@ -101,6 +108,14 @@ impl StrategySummary {
             0.0
         } else {
             self.finish_share / self.runs as f64
+        }
+    }
+
+    pub fn average_peak_acquisition_stress(&self) -> f64 {
+        if self.runs == 0 {
+            0.0
+        } else {
+            self.peak_acquisition_stress / self.runs as f64
         }
     }
 
@@ -199,6 +214,7 @@ where
     F: FnMut(u32, &Game, &QuarterReport),
 {
     let seeds = seeds.max(1);
+    const MATERIAL_ACQUISITION_STRESS: f64 = 0.62;
     let mut summary = StrategySummary {
         runs: seeds,
         ..StrategySummary::default()
@@ -230,6 +246,7 @@ where
         summary.start_rate_range.observe(start_rate);
         summary.start_headroom_range.observe(start_headroom);
 
+        let mut run_peak_acquisition_stress = game.acquisition_stress;
         loop {
             if let Some(outcome) = &game.outcome {
                 if strategy.continues_to_regional_mandate()
@@ -242,7 +259,9 @@ where
                 }
             }
             run_policy(strategy, &mut game, &mut state);
+            run_peak_acquisition_stress = run_peak_acquisition_stress.max(game.acquisition_stress);
             let report = game.advance_quarter();
+            run_peak_acquisition_stress = run_peak_acquisition_stress.max(game.acquisition_stress);
             after_quarter(seed, &game, &report);
         }
 
@@ -253,9 +272,19 @@ where
             summary.victories += 1;
         } else if let Some(outcome) = &game.outcome {
             summary.record_defeat(&outcome.headline, game.quarter);
+            if run_peak_acquisition_stress >= MATERIAL_ACQUISITION_STRESS {
+                summary.acquisition_stress_defeats += 1;
+                if outcome.headline.contains("Receivership") {
+                    summary.acquisition_stress_receiverships += 1;
+                }
+            }
         }
 
         let finish_share = game.market_share();
+        summary.peak_acquisition_stress += run_peak_acquisition_stress;
+        summary
+            .peak_acquisition_stress_range
+            .observe(run_peak_acquisition_stress);
         summary.finish_share += finish_share;
         summary.finish_cash += game.player.cash;
         summary.finish_debt += game.player.debt;
@@ -275,6 +304,7 @@ fn run_policy(strategy: Strategy, game: &mut Game, state: &mut StrategyState) {
         Strategy::Balanced => balanced_policy(game),
         Strategy::Regional => regional_policy(game),
         Strategy::Mna => mna_policy(game),
+        Strategy::Raider => raider_policy(game),
         Strategy::Glonzo => {
             if let StrategyState::Glonzo(rng) = state {
                 glonzo_policy(game, rng);
@@ -527,6 +557,58 @@ fn mna_policy(game: &mut Game) {
                 competitor_index: index,
             });
         }
+    }
+}
+
+fn raider_policy(game: &mut Game) {
+    if game.player.cash < 18_000.0 && game.borrowing_room() > 1_000.0 {
+        let _ = game.apply_decision(Decision::Borrow {
+            amount: game.borrowing_room().min(60_000.0),
+        });
+    }
+
+    if game.player.cash < 14_000.0 {
+        let _ = game.apply_decision(Decision::IssueStock { amount: 36_000.0 });
+    }
+
+    if game.competitors.len() > 1
+        && game.acquisition_cooldown == 0
+        && let Some((index, terms)) = riskiest_raider_target(game)
+    {
+        let reserve = if game.quarter < 8 { 2_500.0 } else { 5_000.0 };
+        raider_finance_to_cash(game, terms.price + reserve);
+
+        if game.player.cash > terms.price + reserve {
+            let _ = game.apply_decision(Decision::Acquire {
+                competitor_index: index,
+            });
+        }
+    }
+
+    let generation_headroom = game.player.generation_capacity_mwh
+        - game.player.customers * game.market.avg_mwh_per_customer;
+    if generation_headroom < 35.0 && game.player.cash > 20_000.0 {
+        let _ = game.apply_decision(Decision::BuildGeneration {
+            capacity_mwh: GENERATION_PROJECT_CAPACITY_MWH,
+        });
+    }
+
+    if game.player.capacity_headroom(&game.market) < 70.0 && game.player.cash > 12_000.0 {
+        let _ = game.apply_decision(Decision::BuildDistribution {
+            customer_capacity: DISTRIBUTION_PROJECT_CAPACITY,
+        });
+    }
+
+    if game.quarter.is_multiple_of(2) && game.player.cash > 6_000.0 {
+        let _ = game.apply_decision(Decision::Marketing { spend: 4_500.0 });
+    }
+
+    if game.player.reliability < 0.72 && game.player.cash > 5_000.0 {
+        let _ = game.apply_decision(Decision::Maintenance { spend: 4_500.0 });
+    }
+
+    if game.market_share() < 0.44 && game.player.rate_cents > 8.6 {
+        let _ = game.apply_decision(Decision::AdjustRate { delta_cents: -0.45 });
     }
 }
 
@@ -999,6 +1081,47 @@ fn borrow_up_to(game: &mut Game, target_amount: f64, max_debt_to_assets: f64) {
     if amount >= 1_000.0 {
         let _ = game.apply_decision(Decision::Borrow { amount });
     }
+}
+
+fn raider_finance_to_cash(game: &mut Game, target_cash: f64) {
+    if game.player.cash >= target_cash {
+        return;
+    }
+
+    let need = target_cash - game.player.cash;
+    let room = game.borrowing_room();
+    if room >= 1_000.0 {
+        let amount = need.min(room).max(1_000.0);
+        let _ = game.apply_decision(Decision::Borrow { amount });
+    }
+    if game.player.cash < target_cash {
+        let amount = ((target_cash - game.player.cash) * 1.20).max(5_000.0);
+        let _ = game.apply_decision(Decision::IssueStock { amount });
+    }
+}
+
+fn riskiest_raider_target(game: &Game) -> Option<(usize, AcquisitionTerms)> {
+    (0..game.competitors.len())
+        .filter_map(|index| {
+            let competitor = &game.competitors[index];
+            let terms = estimated_acquisition_terms(game, index)?;
+            if terms.price > game.player.asset_base.max(40_000.0) * 2.35 {
+                return None;
+            }
+            if terms.post_debt_to_assets > 1.14 {
+                return None;
+            }
+            let deal_share = terms.acquired_customers
+                / (game.player.customers + terms.acquired_customers).max(1.0);
+            let service_gap = (0.82 - competitor.reliability).max(0.0);
+            let reputation_gap = (56.0 - competitor.reputation).max(0.0) / 100.0;
+            let stress = game.acquisition_stress_score(index).unwrap_or(0.0);
+            let price_pull = terms.acquired_customers / terms.price.max(1.0);
+            let score = deal_share * 2.2 + service_gap + reputation_gap + stress + price_pull;
+            Some((index, terms, score))
+        })
+        .max_by(|left, right| left.2.total_cmp(&right.2))
+        .map(|(index, terms, _)| (index, terms))
 }
 
 fn cheapest_competitor(game: &Game) -> Option<(usize, f64)> {

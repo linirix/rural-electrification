@@ -851,6 +851,21 @@ fn signal_panel_keeps_critical_items_when_crowded() {
 }
 
 #[test]
+fn dashboard_surfaces_integration_burden() {
+    let mut game = Game::with_seed(151);
+    game.integration_strain = 0.34;
+    game.acquisition_cooldown = 3;
+
+    let signals = signal_lines(&game).join("\n");
+    let pipeline = project_lines(&game).join("\n");
+
+    assert!(signals.contains("Integration"));
+    assert!(signals.contains("heavy operating burden"));
+    assert!(pipeline.contains("3q left"));
+    assert!(pipeline.contains("high burden"));
+}
+
+#[test]
 fn outcome_details_wrap_within_box_width() {
     let details = "Repeated outages pushed regulators and lenders to move the company into managed restructuring.";
 
