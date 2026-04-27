@@ -239,6 +239,24 @@ fn rivals_command_shows_rival_screen() {
 }
 
 #[test]
+fn space_input_returns_from_subscreens_to_dashboard() {
+    assert!(should_return_to_dashboard(" \n", TerminalScreen::Subscreen));
+    assert!(should_return_to_dashboard(
+        "   \r\n",
+        TerminalScreen::Subscreen
+    ));
+    assert!(!should_return_to_dashboard("\n", TerminalScreen::Subscreen));
+    assert!(!should_return_to_dashboard(
+        " status\n",
+        TerminalScreen::Subscreen
+    ));
+    assert!(!should_return_to_dashboard(
+        " \n",
+        TerminalScreen::Dashboard
+    ));
+}
+
+#[test]
 fn rival_overview_shows_acquisition_financing_context() {
     let game = Game::with_seed(113);
     let lines = rival_overview_lines(&game);

@@ -54,6 +54,7 @@ const BOLD_CYAN: &str = "\x1B[1;36m";
 
 pub fn run() -> io::Result<()> {
     let mut game = Game::new();
+    let mut current_screen = TerminalScreen::Dashboard;
 
     clear_screen();
     println!("{}", styled(BOLD_CYAN, "Electrification"));
@@ -75,6 +76,13 @@ pub fn run() -> io::Result<()> {
             break;
         }
 
+        if should_return_to_dashboard(&line, current_screen) {
+            clear_screen();
+            print_status(&game);
+            current_screen = TerminalScreen::Dashboard;
+            continue;
+        }
+
         let command = line.trim();
         if command.is_empty() {
             continue;
@@ -84,6 +92,7 @@ pub fn run() -> io::Result<()> {
             CommandResult::Continue(message) => {
                 clear_screen();
                 print_status(&game);
+                current_screen = TerminalScreen::Dashboard;
                 if !message.is_empty() {
                     print_notice(&message);
                 }
@@ -92,6 +101,7 @@ pub fn run() -> io::Result<()> {
                 clear_screen();
                 print_status(&game);
                 print_report(&report);
+                current_screen = TerminalScreen::Dashboard;
                 if let Some(outcome) = &game.outcome {
                     print_outcome(outcome);
                     if !outcome.can_continue {
@@ -102,30 +112,50 @@ pub fn run() -> io::Result<()> {
             CommandResult::ShowStatus => {
                 clear_screen();
                 print_status(&game);
+                current_screen = TerminalScreen::Dashboard;
             }
             CommandResult::ShowHelp => {
                 clear_screen();
                 print_help();
+                current_screen = TerminalScreen::Subscreen;
             }
             CommandResult::ShowRivals => {
                 clear_screen();
                 print_competitors(&game);
+                current_screen = TerminalScreen::Subscreen;
             }
             CommandResult::ShowBoard => {
                 clear_screen();
                 print_board(&game);
+                current_screen = TerminalScreen::Subscreen;
             }
             CommandResult::Preview(lines) => {
                 clear_screen();
                 print_status(&game);
                 println!();
                 print_box("Command Preview", &lines);
+                current_screen = TerminalScreen::Subscreen;
             }
             CommandResult::Quit => break,
         }
     }
 
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalScreen {
+    Dashboard,
+    Subscreen,
+}
+
+fn should_return_to_dashboard(raw_line: &str, current_screen: TerminalScreen) -> bool {
+    if current_screen == TerminalScreen::Dashboard {
+        return false;
+    }
+
+    let input = raw_line.trim_end_matches(|c| c == '\n' || c == '\r');
+    !input.is_empty() && input.chars().all(char::is_whitespace)
 }
 
 enum CommandResult {
