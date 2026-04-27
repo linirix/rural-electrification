@@ -44,7 +44,7 @@ pub(super) fn print_help() {
             "board          objectives".to_string(),
             "region         regional mandate".to_string(),
             "preview/quote  inspect command".to_string(),
-            "space          return to dashboard".to_string(),
+            "Return         return to dashboard".to_string(),
             "next / n / end finish quarter".to_string(),
             "continue       post-review play".to_string(),
             "save [name]    write save file".to_string(),

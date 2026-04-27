@@ -2503,9 +2503,12 @@ impl Game {
                     kind: OutcomeKind::Victory,
                     headline: "Market Lead Secured".to_string(),
                     details: format!(
-                        "You finished with {:.0}% of connected accounts, solid reliability, sustainable rates, and {:.1}x interest coverage.",
+                        "You finished with {:.0}% of connected accounts, solid reliability, sustainable rates, and {}.",
                         share * 100.0,
-                        sustainability.interest_coverage.min(9.9)
+                        review_interest_coverage_summary(
+                            self.player.debt,
+                            sustainability.interest_coverage
+                        )
                     ),
                     can_continue: true,
                 });
@@ -2514,11 +2517,14 @@ impl Game {
                     kind: OutcomeKind::Defeat,
                     headline: "Board Lost Confidence".to_string(),
                     details: format!(
-                        "After Year 5 you held {:.0}% of connected accounts. The board wanted durable leadership: share, service, leverage, and rates that can support the cost base. Current rate support was {:.0}% of break-even ({:.1}c) with {:.1}x interest coverage.",
+                        "After Year 5 you held {:.0}% of connected accounts. The board wanted durable leadership: share, service, leverage, and rates that can support the cost base. Current rate support was {:.0}% of break-even ({:.1}c) with {}.",
                         share * 100.0,
                         sustainability.rate_support_ratio.min(9.99) * 100.0,
                         sustainability.break_even_rate,
-                        sustainability.interest_coverage.min(9.9)
+                        review_interest_coverage_summary(
+                            self.player.debt,
+                            sustainability.interest_coverage
+                        )
                     ),
                     can_continue: true,
                 });
@@ -2592,6 +2598,16 @@ fn interest_coverage(profit: f64, interest: f64) -> f64 {
         f64::INFINITY
     } else {
         (profit + interest) / interest
+    }
+}
+
+fn review_interest_coverage_summary(debt: f64, coverage: f64) -> String {
+    if debt <= 1.0 {
+        "no outstanding debt, so interest coverage was not a constraint".to_string()
+    } else if coverage.is_infinite() {
+        "no material debt service, so interest coverage was not a constraint".to_string()
+    } else {
+        format!("{coverage:.1}x interest coverage")
     }
 }
 

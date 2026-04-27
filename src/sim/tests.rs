@@ -1019,6 +1019,8 @@ fn formal_review_can_be_continued_past_campaign_end() {
     let outcome = game.outcome.as_ref().expect("expected formal review");
     assert_eq!(outcome.kind, OutcomeKind::Victory);
     assert!(outcome.can_continue);
+    assert!(outcome.details.contains("no outstanding debt"));
+    assert!(!outcome.details.contains("9.9x"));
     assert!(game.review_completed);
 
     let message = game.continue_after_review().unwrap();
@@ -1060,6 +1062,8 @@ fn formal_review_rejects_below_cost_market_lead() {
     assert_eq!(outcome.kind, OutcomeKind::Defeat);
     assert!(outcome.can_continue);
     assert!(outcome.details.contains("rate support"));
+    assert!(outcome.details.contains("no outstanding debt"));
+    assert!(!outcome.details.contains("9.9x"));
 }
 
 #[test]

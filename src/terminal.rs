@@ -221,7 +221,7 @@ fn should_return_to_dashboard(raw_line: &str, current_screen: TerminalScreen) ->
     }
 
     let input = raw_line.trim_end_matches(['\n', '\r']);
-    !input.is_empty() && input.chars().all(char::is_whitespace)
+    input.chars().all(char::is_whitespace)
 }
 
 enum CommandResult {

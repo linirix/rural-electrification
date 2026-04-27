@@ -239,13 +239,17 @@ fn rivals_command_shows_rival_screen() {
 }
 
 #[test]
-fn space_input_returns_from_subscreens_to_dashboard() {
+fn empty_input_returns_from_subscreens_to_dashboard() {
+    assert!(should_return_to_dashboard("\n", TerminalScreen::Subscreen));
+    assert!(should_return_to_dashboard(
+        "\r\n",
+        TerminalScreen::Subscreen
+    ));
     assert!(should_return_to_dashboard(" \n", TerminalScreen::Subscreen));
     assert!(should_return_to_dashboard(
         "   \r\n",
         TerminalScreen::Subscreen
     ));
-    assert!(!should_return_to_dashboard("\n", TerminalScreen::Subscreen));
     assert!(!should_return_to_dashboard(
         " status\n",
         TerminalScreen::Subscreen
