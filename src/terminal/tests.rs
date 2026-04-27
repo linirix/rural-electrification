@@ -330,6 +330,7 @@ fn acquisition_preview_without_diligence_shows_public_range() {
     match handle_command(&mut game, "preview buy 1") {
         CommandResult::Preview(lines) => {
             assert!(lines.iter().any(|line| line.contains("public estimate")));
+            assert!(lines.iter().any(|line| line.contains("close risk")));
             assert!(lines.iter().any(|line| line.contains("diligence reveals")));
         }
         _ => panic!("preview buy should show preview output"),

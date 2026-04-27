@@ -372,7 +372,7 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                     let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
                     let (low, high) = public_acquisition_range(game, *competitor_index);
                     vec![format!(
-                        "{} public estimate {}-{}; {} diligence reveals exact terms for {}.",
+                        "{} public estimate {}-{}; buy now accepts close risk, or {} diligence reveals exact terms for {}.",
                         muted("Quote:"),
                         styled(YELLOW, money(low)),
                         styled(YELLOW, money(high)),

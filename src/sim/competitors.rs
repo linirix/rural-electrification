@@ -1,7 +1,7 @@
 use super::economics::{bounded_rate_target, defensive_rate_floor};
 use super::{
     Game, MacroEnvironment, Market, Rng, Utility, high_rate_excess, maintenance_reliability_gain,
-    public_rate_tolerance,
+    public_balance_sheet_multipliers, public_rate_tolerance,
 };
 
 pub(super) const COMPETITOR_NAME_POOL: &[&str] = &[
@@ -82,6 +82,8 @@ impl Game {
             }
         };
         let starting_customers = (30.0 + self.rng.range(0.0, 25.0)) * scale;
+        let (public_cash_multiplier, public_debt_multiplier) =
+            public_balance_sheet_multipliers(&mut self.rng);
         let mut startup = Utility {
             name: name.clone(),
             cash: 6_000.0 + self.rng.range(0.0, 2_500.0) * scale,
@@ -102,6 +104,8 @@ impl Game {
                 },
             asset_base: (22_000.0 + self.rng.range(0.0, 5_000.0)) * scale,
             last_quarter_customers: starting_customers,
+            public_cash_multiplier,
+            public_debt_multiplier,
         };
         let defensive_floor = defensive_rate_floor(
             &startup,
@@ -255,6 +259,8 @@ impl Game {
             (a.reliability * a.generation_capacity_mwh + b.reliability * b.generation_capacity_mwh)
                 / total_generation
         };
+        let (public_cash_multiplier, public_debt_multiplier) =
+            public_balance_sheet_multipliers(&mut self.rng);
 
         self.startup_index += 1;
         let mut used_names = vec![self.player.name.clone()];
@@ -279,6 +285,8 @@ impl Game {
             marketing_momentum: a.marketing_momentum + b.marketing_momentum + 0.20,
             asset_base: (a.asset_base + b.asset_base) * 0.94,
             last_quarter_customers: combined_customers,
+            public_cash_multiplier,
+            public_debt_multiplier,
         };
         let defensive_floor = defensive_rate_floor(
             &merged,

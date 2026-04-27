@@ -77,7 +77,7 @@ pub(super) fn rival_overview_lines(game: &Game) -> Vec<String> {
             muted("Market cap"),
             styled(BOLD, money(game.player.market_cap()))
         ),
-        "Diligence reveals and freezes terms, but alerts the target; final independent rival is protected.".to_string(),
+        "Undiligenced buys use public estimates and close risk; diligence freezes exact terms but alerts the target.".to_string(),
     ]
 }
 
@@ -207,7 +207,11 @@ pub(super) fn rival_detail_lines(game: &Game) -> Vec<String> {
 }
 
 pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> Vec<String> {
-    let Some(terms) = game.acquisition_terms(competitor_index) else {
+    let Some(terms) = (if game.has_diligence(competitor_index) {
+        game.acquisition_terms(competitor_index)
+    } else {
+        game.public_acquisition_estimate(competitor_index)
+    }) else {
         return Vec::new();
     };
 
@@ -224,7 +228,7 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
             styled(BOLD_CYAN, format!("diligence {}", competitor_index + 1))
         ));
         lines.push(format!(
-            "   {} hidden until diligence: balance sheet, closing cost, leverage, concessions ({})",
+            "   {} public estimate only; buy now accepts close risk, or diligence freezes exact terms ({})",
             muted("terms"),
             money(cost)
         ));
@@ -338,14 +342,14 @@ pub(super) fn acquisition_status(game: &Game, competitor_index: usize) -> (Strin
     } else if game.acquisition_cooldown > 0 {
         (format!("{}q wait", game.acquisition_cooldown), YELLOW)
     } else if !game.has_diligence(competitor_index) {
-        ("diligence".to_string(), YELLOW)
+        ("estimate".to_string(), YELLOW)
     } else {
         (money(game.acquisition_price(competitor_index)), CYAN)
     }
 }
 
 pub(super) fn public_acquisition_range(game: &Game, competitor_index: usize) -> (f64, f64) {
-    let Some(terms) = game.acquisition_terms(competitor_index) else {
+    let Some(terms) = game.public_acquisition_estimate(competitor_index) else {
         return (0.0, 0.0);
     };
     let uncertainty = (0.22 + (game.market_share() - 0.45).max(0.0) * 0.35).clamp(0.20, 0.42);

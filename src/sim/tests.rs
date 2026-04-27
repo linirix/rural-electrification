@@ -1446,25 +1446,42 @@ fn acquisition_removes_competitor_and_adds_scale() {
 }
 
 #[test]
-fn acquisition_requires_current_diligence() {
+fn acquisition_can_close_without_diligence_but_notes_estimate_risk() {
     let mut game = Game::with_seed(30);
     game.player.cash = 250_000.0;
+    let competitor_count = game.competitors.len();
 
-    let error = game
+    let message = game
         .apply_decision(Decision::Acquire {
             competitor_index: 1,
         })
-        .unwrap_err();
+        .unwrap();
 
-    assert!(error.contains("diligence 2"));
+    assert!(message.contains("without diligence"));
+    assert_eq!(game.competitors.len(), competitor_count - 1);
     assert!(!game.has_diligence(1));
+}
+
+#[test]
+fn public_acquisition_estimate_can_diverge_from_exact_balance_sheet() {
+    let mut game = Game::with_seed(30);
+    game.competitors[0].public_cash_multiplier = 1.20;
+    game.competitors[0].public_debt_multiplier = 0.80;
+
+    let exact = game.current_acquisition_terms(0).unwrap();
+    let public = game.public_acquisition_estimate(0).unwrap();
 
     game.apply_decision(Decision::Diligence {
-        competitor_index: 1,
+        competitor_index: 0,
     })
     .unwrap();
+    let diligence = game.acquisition_terms(0).unwrap();
+    let exact_after_alert = game.current_acquisition_terms(0).unwrap();
 
-    assert!(game.has_diligence(1));
+    assert!(public.absorbed_cash > exact.absorbed_cash);
+    assert!(public.assumed_debt < exact.assumed_debt);
+    assert!((diligence.absorbed_cash - exact_after_alert.absorbed_cash).abs() < 0.01);
+    assert!((diligence.assumed_debt - exact_after_alert.assumed_debt).abs() < 0.01);
 }
 
 #[test]

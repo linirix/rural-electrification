@@ -56,6 +56,12 @@ pub const REVIEW_MIN_RATE_SUPPORT_RATIO: f64 = 0.72;
 pub const REVIEW_MIN_INTEREST_COVERAGE: f64 = 1.0;
 const REVIEW_MIN_PROFIT: f64 = -500.0;
 const BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO: f64 = 0.55;
+const PUBLIC_BALANCE_SHEET_DIVERGENCE_PROBABILITY: f64 = 0.25;
+const PUBLIC_BALANCE_SHEET_MAX_DIVERGENCE: f64 = 0.20;
+
+fn default_public_balance_sheet_multiplier() -> f64 {
+    1.0
+}
 
 mod attribution;
 mod competitors;
@@ -198,6 +204,10 @@ pub struct Utility {
     pub marketing_momentum: f64,
     pub asset_base: f64,
     pub last_quarter_customers: f64,
+    #[serde(default = "default_public_balance_sheet_multiplier")]
+    pub public_cash_multiplier: f64,
+    #[serde(default = "default_public_balance_sheet_multiplier")]
+    pub public_debt_multiplier: f64,
 }
 
 /// Capital project under construction and waiting to complete in a future quarter.
@@ -312,7 +322,7 @@ pub struct Outcome {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct Rng {
+pub(super) struct Rng {
     state: u64,
 }
 
@@ -778,20 +788,20 @@ impl Game {
                     );
                 }
 
-                if !self.has_diligence(competitor_index) {
-                    let cost = self
-                        .diligence_cost(competitor_index)
-                        .expect("competitor index checked before diligence prompt");
-                    return Err(format!(
-                        "Run 'diligence {}' first. It costs {} and reveals exact closing terms before you commit.",
-                        competitor_index + 1,
-                        money(cost)
-                    ));
-                }
-
+                let had_diligence = self.has_diligence(competitor_index);
+                let public_estimate = (!had_diligence)
+                    .then(|| self.public_acquisition_estimate(competitor_index))
+                    .flatten();
                 let terms = self
                     .acquisition_terms(competitor_index)
                     .expect("competitor index checked before acquisition");
+                if !had_diligence && self.player.cash + 0.01 < terms.price {
+                    return Err(format!(
+                        "The undiligenced close priced at {}, but cash on hand is only {}. Diligence would reveal and freeze exact terms before financing.",
+                        money(terms.price),
+                        money(self.player.cash)
+                    ));
+                }
                 self.require_cash(terms.price)?;
                 let acquired = self.competitors.remove(competitor_index);
                 let acquired_name = acquired.name.clone();
@@ -837,13 +847,25 @@ impl Game {
                     starting_customers,
                     pre_close_integration_strain,
                 );
+                let diligence_suffix = if had_diligence {
+                    String::new()
+                } else if let Some(public_estimate) = public_estimate {
+                    format!(
+                        " Closed without diligence; the public estimate centered on {} before hidden balance-sheet details resolved at close.",
+                        money(public_estimate.price)
+                    )
+                } else {
+                    " Closed without diligence; hidden balance-sheet details resolved at close."
+                        .to_string()
+                };
                 Ok(format!(
                     "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt). Integration will take {} quarter(s).",
                     money(terms.price),
                     money(terms.absorbed_cash),
                     money(terms.assumed_debt),
                     self.acquisition_cooldown
-                ) + &execution_suffix)
+                ) + &diligence_suffix
+                    + &execution_suffix)
             }
             Decision::AdjustRate { delta_cents } => {
                 if !delta_cents.is_finite() {
@@ -1322,6 +1344,14 @@ impl Game {
             .price
     }
 
+    pub fn public_acquisition_estimate(&self, competitor_index: usize) -> Option<AcquisitionTerms> {
+        let competitor = self.competitors.get(competitor_index)?;
+        let mut public_competitor = competitor.clone();
+        public_competitor.cash = competitor.public_cash_estimate();
+        public_competitor.debt = competitor.public_debt_estimate();
+        self.acquisition_terms_for_competitor(&public_competitor)
+    }
+
     pub fn has_diligence(&self, competitor_index: usize) -> bool {
         let Some(competitor) = self.competitors.get(competitor_index) else {
             return false;
@@ -1449,6 +1479,10 @@ impl Game {
 
     fn current_acquisition_terms(&self, competitor_index: usize) -> Option<AcquisitionTerms> {
         let competitor = self.competitors.get(competitor_index)?;
+        self.acquisition_terms_for_competitor(competitor)
+    }
+
+    fn acquisition_terms_for_competitor(&self, competitor: &Utility) -> Option<AcquisitionTerms> {
         let acquired_customers = competitor.customers * 0.96;
         let acquired_generation_capacity_mwh = competitor.generation_capacity_mwh * 0.90;
         let acquired_distribution_capacity = competitor.distribution_capacity * 0.94;
@@ -1822,6 +1856,8 @@ impl Game {
                         let incumbent_generation = incumbent_customers
                             * self.market.avg_mwh_per_customer
                             * self.rng.range(1.18, 1.42);
+                        let (public_cash_multiplier, public_debt_multiplier) =
+                            public_balance_sheet_multipliers(&mut self.rng);
                         let mut incumbent = Utility {
                             name: incumbent_name.clone(),
                             cash: 24_000.0 + self.rng.range(0.0, 8_000.0),
@@ -1837,6 +1873,8 @@ impl Game {
                             marketing_momentum: 0.22,
                             asset_base: 95_000.0 + self.rng.range(0.0, 28_000.0),
                             last_quarter_customers: incumbent_customers,
+                            public_cash_multiplier,
+                            public_debt_multiplier,
                         };
                         let defensive_floor = defensive_rate_floor(
                             &incumbent,
@@ -2615,6 +2653,14 @@ impl Utility {
         self.debt / self.asset_base.max(1.0)
     }
 
+    pub fn public_cash_estimate(&self) -> f64 {
+        self.cash * self.public_cash_multiplier.max(0.0)
+    }
+
+    pub fn public_debt_estimate(&self) -> f64 {
+        self.debt * self.public_debt_multiplier.max(0.0)
+    }
+
     pub fn customer_capacity(&self, market: &Market) -> f64 {
         let generation_customer_capacity =
             self.generation_capacity_mwh / market.avg_mwh_per_customer.max(0.05);
@@ -2748,6 +2794,7 @@ fn starting_utility(
         .max(20.0);
     let varied_asset_base =
         varied_pct(rng, asset_base, 0.12, initial_variance).max(varied_debt * 1.8);
+    let (public_cash_multiplier, public_debt_multiplier) = public_balance_sheet_multipliers(rng);
 
     Utility {
         name: name.to_string(),
@@ -2773,7 +2820,26 @@ fn starting_utility(
             .clamp(0.0, 0.18),
         asset_base: varied_asset_base,
         last_quarter_customers: varied_customers,
+        public_cash_multiplier,
+        public_debt_multiplier,
     }
+}
+
+pub(super) fn public_balance_sheet_multipliers(rng: &mut Rng) -> (f64, f64) {
+    if !rng.chance(PUBLIC_BALANCE_SHEET_DIVERGENCE_PROBABILITY) {
+        return (1.0, 1.0);
+    }
+
+    (
+        1.0 + rng.range(
+            -PUBLIC_BALANCE_SHEET_MAX_DIVERGENCE,
+            PUBLIC_BALANCE_SHEET_MAX_DIVERGENCE,
+        ),
+        1.0 + rng.range(
+            -PUBLIC_BALANCE_SHEET_MAX_DIVERGENCE,
+            PUBLIC_BALANCE_SHEET_MAX_DIVERGENCE,
+        ),
+    )
 }
 
 fn varied_pct(rng: &mut Rng, base: f64, percent: f64, initial_variance: InitialVariance) -> f64 {

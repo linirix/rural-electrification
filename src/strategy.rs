@@ -669,7 +669,7 @@ fn glonzo_deal(game: &mut Game, rng: &mut GlonzoRng) {
     if !rng.chance(0.58) {
         return;
     }
-    if let Some(terms) = game.acquisition_terms(index) {
+    if let Some(terms) = estimated_acquisition_terms(game, index) {
         glonzo_finance_toward(game, terms.price + rng.range(0.0, 18_000.0), rng);
         if game.player.cash >= terms.price {
             let _ = game.apply_decision(Decision::Acquire {
@@ -928,7 +928,7 @@ fn best_opportunistic_competitor(
     (0..game.competitors.len())
         .filter_map(|index| {
             let competitor = &game.competitors[index];
-            let terms = game.acquisition_terms(index)?;
+            let terms = estimated_acquisition_terms(game, index)?;
             if terms.price > game.player.asset_base * max_price_to_assets {
                 return None;
             }
@@ -1003,8 +1003,18 @@ fn borrow_up_to(game: &mut Game, target_amount: f64, max_debt_to_assets: f64) {
 
 fn cheapest_competitor(game: &Game) -> Option<(usize, f64)> {
     (0..game.competitors.len())
-        .map(|index| (index, game.acquisition_price(index)))
+        .filter_map(|index| {
+            estimated_acquisition_terms(game, index).map(|terms| (index, terms.price))
+        })
         .min_by(|left, right| left.1.total_cmp(&right.1))
+}
+
+fn estimated_acquisition_terms(game: &Game, index: usize) -> Option<AcquisitionTerms> {
+    if game.has_diligence(index) {
+        game.acquisition_terms(index)
+    } else {
+        game.public_acquisition_estimate(index)
+    }
 }
 
 struct GlonzoRng {
