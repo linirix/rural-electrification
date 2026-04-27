@@ -77,7 +77,7 @@ load campaign1
 - `diligence <number>` reveals exact acquisition terms for a rival for three quarters and freezes that target's acquisition quote during the diligence window.
 - `buy <number>` requires current diligence, available cash for the closing price, and no active integration cooldown.
 - `maintenance [amount]` has diminishing reliability and reputation impact as the asset base grows.
-- `expand` starts adjacent-territory entry once the core platform is mature enough.
+- `expand` starts adjacent-territory entry once the core platform is mature enough. Up to three adjacent entries are allowed, with each follow-on expansion costing more.
 
 Macroeconomic inputs change each quarter. Base rates, credit spreads, demand conditions, cost pressure, public rate tolerance, and active shocks affect debt service, borrowing room, growth, operating costs, customer churn, startup formation, and equity financing appetite.
 

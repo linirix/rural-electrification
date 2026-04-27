@@ -1038,12 +1038,6 @@ pub(super) fn adjacent_expansion_footer(game: &Game) -> String {
     if game.adjacent_expansion_pending() {
         return styled(YELLOW, "adjacent territory entry already in pipeline");
     }
-    if game.adjacent_expansions > 0 {
-        return styled(
-            DIM,
-            "adjacent territory open; later regional expansion not modeled yet",
-        );
-    }
     if let Some(blocker) = game.adjacent_expansion_blocker() {
         return blocker;
     }

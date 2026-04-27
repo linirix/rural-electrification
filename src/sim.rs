@@ -12,11 +12,14 @@ pub const ADJACENT_EXPANSION_DURATION_QUARTERS: u32 = 4;
 pub const ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS: f64 = 2_200.0;
 pub const ADJACENT_EXPANSION_INITIAL_CUSTOMERS: f64 = 260.0;
 pub const ADJACENT_EXPANSION_INCUMBENT_CUSTOMERS: f64 = 380.0;
+pub const MAX_ADJACENT_EXPANSIONS: u32 = 3;
 const BASE_ANNUAL_RATE: f64 = 0.052;
 const BASE_CREDIT_SPREAD: f64 = 0.018;
 const MAINTENANCE_REFERENCE_ASSET_BASE: f64 = 78_000.0;
 const ACQUISITION_CASH_ABSORPTION: f64 = 0.80;
 const ACQUISITION_DEBT_ASSUMPTION: f64 = 0.75;
+const EQUITY_BASE_CASH_DISCOUNT: f64 = 0.60;
+const EQUITY_BASE_ASSET_SUPPORT: f64 = 0.65;
 const NEW_GENERATION_EQUIPMENT_RELIABILITY: f64 = 0.965;
 const NEW_GENERATION_RELIABILITY_WEIGHT: f64 = 0.35;
 const MAX_GENERATION_RELIABILITY_LIFT: f64 = 0.085;
@@ -536,6 +539,8 @@ impl Game {
                 let old_shares = self.player.shares.max(1.0);
                 let financing_base = self.equity_issuance_base();
                 let pressure = amount / financing_base;
+                // Fatigue is accumulated on the same unitless scale as issue pressure, so repeat
+                // offerings price like a larger single offering even across separate commands.
                 let effective_pressure = pressure + self.equity_market_fatigue;
                 let effective_pressure_squared = effective_pressure * effective_pressure;
                 let finance_pressure = self.macro_state.financing_pressure();
@@ -603,6 +608,10 @@ impl Game {
                     .clamp(0.0, 0.09);
                 let overextension_drag =
                     ((amount / self.player.cash.max(1.0)) - 0.60).max(0.0) * 0.12;
+                // The repurchase premium is the price paid to coax sellers into the tender.
+                // It should not re-anchor the whole pre-buyback equity value. The smaller
+                // capital return signal below models the confidence/scarcity effect on the
+                // remaining float after cash has actually left the balance sheet.
                 let repurchase_premium = (pressure.min(1.0) * 0.55 + pressure.powf(1.20) * 0.04
                     - liquidity_drag
                     - overextension_drag
@@ -621,13 +630,20 @@ impl Game {
                 self.require_cash(actual_spend)?;
                 let remaining_shares = self.player.shares - shares_bought;
                 let float_retired = shares_bought / old_shares;
-                let transaction_pre_buyback_value = repurchase_price * old_shares;
-                let post_buyback_market_cap = (transaction_pre_buyback_value - actual_spend)
-                    .max(remaining_shares * MIN_STOCK_PRICE);
+                let realistic_post_market_cap =
+                    (old_market_cap - actual_spend).max(remaining_shares * MIN_STOCK_PRICE);
+                let realistic_price = realistic_post_market_cap / remaining_shares.max(1.0);
+                let capital_return_signal =
+                    (float_retired * 0.30 + pressure.min(1.0) * 0.04).clamp(0.0, 0.10);
+                let signal_lift = (capital_return_signal
+                    - liquidity_drag
+                    - overextension_drag
+                    - self.equity_market_fatigue * 0.45)
+                    .clamp(-0.08, 0.06);
                 self.player.cash -= actual_spend;
                 self.player.shares = remaining_shares;
                 self.player.stock_price =
-                    (post_buyback_market_cap / remaining_shares.max(1.0)).max(MIN_STOCK_PRICE);
+                    (realistic_price * (1.0 + signal_lift)).max(MIN_STOCK_PRICE);
                 Ok(format!(
                     "Bought back {:.0} shares at ${:.2}, spending {} and retiring {:.1}% of the float. Shares outstanding now {:.0}; stock is ${:.2}.",
                     shares_bought,
@@ -1071,7 +1087,7 @@ impl Game {
     }
 
     pub fn adjacent_expansion_cost(&self) -> f64 {
-        ADJACENT_EXPANSION_BASE_COST * (1.0 + f64::from(self.adjacent_expansions) * 0.25)
+        ADJACENT_EXPANSION_BASE_COST * (1.0 + f64::from(self.adjacent_expansions) * 0.50)
     }
 
     pub fn adjacent_expansion_duration(&self) -> u32 {
@@ -1091,11 +1107,10 @@ impl Game {
         if self.adjacent_expansion_pending() {
             return Some("Adjacent territory entry is already in the pipeline.".to_string());
         }
-        if self.adjacent_expansions > 0 {
-            return Some(
-                "Metro has already entered an adjacent territory; broader regional expansion is not modeled yet."
-                    .to_string(),
-            );
+        if self.adjacent_expansions >= MAX_ADJACENT_EXPANSIONS {
+            return Some(format!(
+                "Metro has already entered {MAX_ADJACENT_EXPANSIONS} adjacent territories; broader regional expansion is not modeled yet."
+            ));
         }
         if self.player.reliability < 0.82 {
             return Some(
@@ -1201,8 +1216,8 @@ impl Game {
 
     fn equity_issuance_base(&self) -> f64 {
         let market_cap = self.player.market_cap().max(1.0);
-        let cash_adjusted_cap = market_cap - self.player.cash.max(0.0) * 0.60;
-        let asset_support = self.player.asset_base.max(1.0) * 0.65;
+        let cash_adjusted_cap = market_cap - self.player.cash.max(0.0) * EQUITY_BASE_CASH_DISCOUNT;
+        let asset_support = self.player.asset_base.max(1.0) * EQUITY_BASE_ASSET_SUPPORT;
         cash_adjusted_cap
             .max(asset_support)
             .max(self.player.shares * MIN_STOCK_PRICE)

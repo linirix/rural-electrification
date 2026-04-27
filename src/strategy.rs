@@ -250,15 +250,15 @@ fn run_policy(strategy: Strategy, game: &mut Game) {
 }
 
 fn naive_policy(game: &mut Game) {
-    if game.player.cash < 6_000.0 && game.player.debt_to_assets() < 0.55 {
-        borrow_up_to(game, 12_000.0, 0.55);
+    if game.player.cash < 8_000.0 && game.player.debt_to_assets() < 0.60 {
+        borrow_up_to(game, 15_000.0, 0.60);
     }
 
-    if game.player.cash < 5_000.0 {
-        let _ = game.apply_decision(Decision::IssueStock { amount: 10_000.0 });
+    if game.player.cash < 6_000.0 {
+        let _ = game.apply_decision(Decision::IssueStock { amount: 12_000.0 });
     }
 
-    if game.player.capacity_headroom(&game.market) < 35.0 {
+    if game.player.capacity_headroom(&game.market) < 80.0 {
         let cost = distribution_project_cost(DISTRIBUTION_PROJECT_CAPACITY);
         if game.player.cash > cost + 5_000.0 {
             let _ = game.apply_decision(Decision::BuildDistribution {
@@ -267,7 +267,7 @@ fn naive_policy(game: &mut Game) {
         }
     }
 
-    if game.player.firm_generation_reserve_mwh(&game.market) < 25.0 {
+    if game.player.firm_generation_reserve_mwh(&game.market) < 45.0 {
         let cost = generation_project_cost(GENERATION_PROJECT_CAPACITY_MWH);
         if game.player.cash > cost + 6_000.0 {
             let _ = game.apply_decision(Decision::BuildGeneration {
@@ -276,15 +276,15 @@ fn naive_policy(game: &mut Game) {
         }
     }
 
-    if game.quarter.is_multiple_of(4) && game.player.cash > 7_000.0 {
-        let _ = game.apply_decision(Decision::Marketing { spend: 2_500.0 });
+    if game.quarter.is_multiple_of(3) && game.player.cash > 8_000.0 {
+        let _ = game.apply_decision(Decision::Marketing { spend: 3_500.0 });
     }
 
-    if game.player.reliability < 0.74 && game.player.cash > 6_500.0 {
-        let _ = game.apply_decision(Decision::Maintenance { spend: 3_500.0 });
+    if game.player.reliability < 0.80 && game.player.cash > 8_500.0 {
+        let _ = game.apply_decision(Decision::Maintenance { spend: 5_000.0 });
     }
 
-    if game.market_share() < 0.27 && game.player.rate_cents > 10.0 {
+    if game.market_share() < 0.30 && game.player.rate_cents > 9.8 {
         let _ = game.apply_decision(Decision::AdjustRate { delta_cents: -0.25 });
     }
 }

@@ -474,7 +474,7 @@ fn stock_buyback_reduces_cash_and_share_count() {
 }
 
 #[test]
-fn material_buyback_lifts_per_share_price_without_lifting_market_cap() {
+fn buybacks_lift_per_share_price_modestly() {
     let mut game = Game::with_seed(10);
     game.player.cash = 100_000.0;
     let starting_price = game.player.stock_price;
@@ -485,8 +485,14 @@ fn material_buyback_lifts_per_share_price_without_lifting_market_cap() {
         .unwrap();
 
     assert!(
-        game.player.stock_price > starting_price * 1.05,
-        "10% market-cap buyback should materially lift per-share price: {} -> {}",
+        game.player.stock_price > starting_price * 1.01,
+        "10% market-cap buyback should modestly lift per-share price: {} -> {}",
+        starting_price,
+        game.player.stock_price
+    );
+    assert!(
+        game.player.stock_price < starting_price * 1.08,
+        "10% market-cap buyback should not mechanically pump the full tender premium: {} -> {}",
         starting_price,
         game.player.stock_price
     );
@@ -497,28 +503,30 @@ fn material_buyback_lifts_per_share_price_without_lifting_market_cap() {
 }
 
 #[test]
-fn stock_buyback_uses_reverse_post_money_valuation() {
+fn stock_buyback_reduces_equity_at_current_market_cap() {
     let mut game = Game::with_seed(10);
     game.player.cash = 100_000.0;
     let starting_cash = game.player.cash;
-    let starting_shares = game.player.shares;
+    let starting_market_cap = game.player.market_cap();
     let amount = game.player.market_cap() * 0.12;
 
     game.apply_decision(Decision::BuyBackStock { amount })
         .unwrap();
 
-    let shares_bought = starting_shares - game.player.shares;
     let actual_spend = starting_cash - game.player.cash;
-    let repurchase_price = actual_spend / shares_bought;
-    let implied_pre_buyback_value = repurchase_price * starting_shares;
-    let expected_post_buyback_value = implied_pre_buyback_value - actual_spend;
+    let baseline_post_buyback_value = starting_market_cap - actual_spend;
 
-    assert!(shares_bought > 0.0);
     assert!(
-        (game.player.market_cap() - expected_post_buyback_value).abs() < 0.01,
-        "post-buyback market cap should equal transaction value less cash spent: actual {}, expected {}",
+        game.player.market_cap() >= baseline_post_buyback_value * 0.97,
+        "post-buyback market cap should stay anchored to pre-buyback value less cash spent: actual {}, baseline {}",
         game.player.market_cap(),
-        expected_post_buyback_value
+        baseline_post_buyback_value
+    );
+    assert!(
+        game.player.market_cap() <= baseline_post_buyback_value * 1.07,
+        "buyback signal should not re-anchor the whole company at the tender premium: actual {}, baseline {}",
+        game.player.market_cap(),
+        baseline_post_buyback_value
     );
 }
 
@@ -545,6 +553,25 @@ fn issue_then_buyback_roundtrip_loses_value_to_discount_and_fees() {
     assert!(
         game.player.shares > starting_shares,
         "roundtrip should leave dilution when stock is issued at a discount and repurchased through the market"
+    );
+}
+
+#[test]
+fn three_back_to_back_buybacks_cannot_pump_price_above_threshold() {
+    let mut game = Game::with_seed(1);
+    game.player.cash = 200_000.0;
+    let starting_price = game.player.stock_price;
+
+    for _ in 0..3 {
+        game.apply_decision(Decision::BuyBackStock { amount: 10_000.0 })
+            .unwrap();
+    }
+
+    assert!(
+        game.player.stock_price < starting_price * 1.20,
+        "three buybacks pumped price too aggressively: {} -> {}",
+        starting_price,
+        game.player.stock_price
     );
 }
 
@@ -1189,8 +1216,9 @@ fn adjacent_incumbent_rate_uses_current_market_not_old_floor() {
 }
 
 #[test]
-fn adjacent_expansion_cannot_be_started_twice() {
+fn adjacent_expansion_blocks_parallel_projects_but_allows_limited_follow_ons() {
     let mut game = eligible_adjacent_expansion_game();
+    game.player.cash = 1_000_000.0;
 
     game.apply_decision(Decision::EnterAdjacentMarket).unwrap();
     let pending_error = game
@@ -1201,11 +1229,19 @@ fn adjacent_expansion_cannot_be_started_twice() {
 
     game.pending_projects.clear();
     game.adjacent_expansions = 1;
+    let second_cost = game.adjacent_expansion_cost();
+    let second_message = game.apply_decision(Decision::EnterAdjacentMarket).unwrap();
+
+    assert!(second_message.contains("adjacent territory"));
+    assert!((second_cost - ADJACENT_EXPANSION_BASE_COST * 1.5).abs() < 0.01);
+
+    game.pending_projects.clear();
+    game.adjacent_expansions = MAX_ADJACENT_EXPANSIONS;
     let completed_error = game
         .apply_decision(Decision::EnterAdjacentMarket)
         .unwrap_err();
 
-    assert!(completed_error.contains("already entered"));
+    assert!(completed_error.contains("already entered 3 adjacent territories"));
 }
 
 #[test]

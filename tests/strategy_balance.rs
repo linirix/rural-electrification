@@ -32,6 +32,12 @@ fn strategy_win_rates_stay_in_design_bands() {
         organic * 100.0
     );
     assert!(
+        balanced - organic >= 0.10,
+        "balanced strategy should retain a meaningful edge over organic: balanced {:.1}%, organic {:.1}%",
+        balanced * 100.0,
+        organic * 100.0
+    );
+    assert!(
         mna - balanced <= 0.18,
         "M&A should not reopen the old dominant-strategy gap: mna {:.1}%, balanced {:.1}%",
         mna * 100.0,
