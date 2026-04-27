@@ -114,13 +114,14 @@ The strategy harness is the main balance tool:
 ```sh
 cargo run --bin playtest -- --seeds 50
 cargo run --bin playtest -- --strategy organic --seeds 500
+cargo run --bin playtest -- --strategy glonzo --seeds 500
 cargo run --bin playtest -- --all-strategies --seeds 500
 cargo run --bin playtest -- --sweep-starts --all-strategies --seeds 1000
 ```
 
 Useful playtest flags:
 
-- `--strategy naive|organic|balanced|mna|all`
+- `--strategy naive|organic|balanced|mna|glonzo|all`
 - `--all-strategies`
 - `--seeds <count>`
 - `--variance <amplitude>`

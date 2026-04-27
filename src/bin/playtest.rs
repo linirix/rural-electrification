@@ -255,6 +255,7 @@ fn parse_strategy(raw: &str) -> Option<StrategySelection> {
         "mna" | "ma" | "m&a" | "acquire" | "acquisition" | "expert" => {
             Some(StrategySelection::One(Strategy::Mna))
         }
+        "glonzo" | "random" | "chaos" => Some(StrategySelection::One(Strategy::Glonzo)),
         _ => None,
     }
 }

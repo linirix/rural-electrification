@@ -58,6 +58,20 @@ fn strategy_win_rates_stay_in_design_bands() {
     );
 }
 
+#[test]
+fn glonzo_random_strategy_runs_to_completion_with_varied_outcomes() {
+    let summary = run_strategy_batch(120, InitialVariance::default(), Strategy::Glonzo);
+    assert_eq!(summary.runs, 120);
+    assert_eq!(summary.victories + summary.defeats(), 120);
+    assert!(summary.average_finish_share().is_finite());
+    assert!(
+        summary.finish_share_range.max - summary.finish_share_range.min > 0.08,
+        "glonzo should create a broad random testing spread, got {:.1}-{:.1}%",
+        summary.finish_share_range.min * 100.0,
+        summary.finish_share_range.max * 100.0
+    );
+}
+
 fn assert_win_rate(strategy: Strategy, summary: &StrategySummary, min_win: f64, max_win: f64) {
     let win_rate = summary.win_rate();
     assert!(
