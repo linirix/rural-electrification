@@ -1,4 +1,6 @@
+mod costanza;
 mod glonzo;
+mod landshark;
 mod mna;
 mod naive;
 mod organic;
@@ -7,7 +9,9 @@ mod shared;
 mod summary;
 
 use crate::{ACQUISITION_STRESS_STRAINED, Game, InitialVariance, OutcomeKind, QuarterReport};
+use costanza::costanza_policy;
 use glonzo::{GlonzoRng, glonzo_policy};
+use landshark::landshark_policy;
 use mna::mna_policy;
 use naive::naive_policy;
 use organic::{balanced_policy, organic_policy, regional_policy};
@@ -23,11 +27,13 @@ pub enum Strategy {
     Regional,
     Mna,
     Raider,
+    Landshark,
+    Costanza,
     Glonzo,
 }
 
 impl Strategy {
-    pub fn all() -> [Strategy; 7] {
+    pub fn all() -> [Strategy; 9] {
         [
             Strategy::Naive,
             Strategy::Organic,
@@ -35,6 +41,8 @@ impl Strategy {
             Strategy::Regional,
             Strategy::Mna,
             Strategy::Raider,
+            Strategy::Landshark,
+            Strategy::Costanza,
             Strategy::Glonzo,
         ]
     }
@@ -47,6 +55,8 @@ impl Strategy {
             Strategy::Regional => "regional",
             Strategy::Mna => "mna",
             Strategy::Raider => "raider",
+            Strategy::Landshark => "landshark",
+            Strategy::Costanza => "costanza",
             Strategy::Glonzo => "glonzo",
         }
     }
@@ -166,6 +176,8 @@ fn run_policy(strategy: Strategy, game: &mut Game, state: &mut StrategyState) {
         Strategy::Regional => regional_policy(game),
         Strategy::Mna => mna_policy(game),
         Strategy::Raider => raider_policy(game),
+        Strategy::Landshark => landshark_policy(game),
+        Strategy::Costanza => costanza_policy(game),
         Strategy::Glonzo => {
             if let StrategyState::Glonzo(rng) = state {
                 glonzo_policy(game, rng);

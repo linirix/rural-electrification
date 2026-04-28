@@ -266,6 +266,8 @@ fn parse_strategy(raw: &str) -> Option<StrategySelection> {
             Some(StrategySelection::One(Strategy::Mna))
         }
         "raider" | "rollup" | "reckless" => Some(StrategySelection::One(Strategy::Raider)),
+        "landshark" | "optimizer" | "ev" => Some(StrategySelection::One(Strategy::Landshark)),
+        "costanza" | "opposite" | "contrarian" => Some(StrategySelection::One(Strategy::Costanza)),
         "glonzo" | "random" | "chaos" => Some(StrategySelection::One(Strategy::Glonzo)),
         _ => None,
     }

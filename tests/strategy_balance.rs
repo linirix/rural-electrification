@@ -90,6 +90,35 @@ fn glonzo_random_strategy_runs_to_completion_with_varied_outcomes() {
 }
 
 #[test]
+fn test_player_personalities_exercise_distinct_edges() {
+    let landshark = run_strategy_batch(250, InitialVariance::default(), Strategy::Landshark);
+    let costanza = run_strategy_batch(250, InitialVariance::default(), Strategy::Costanza);
+
+    assert_eq!(landshark.victories + landshark.defeats(), 250);
+    assert_eq!(costanza.victories + costanza.defeats(), 250);
+    assert!(
+        (0.58..=0.78).contains(&landshark.win_rate()),
+        "landshark should be a strong visible-mechanics optimizer, got {:.1}%",
+        landshark.win_rate() * 100.0
+    );
+    assert!(
+        landshark.finish_share_range.max >= 0.60,
+        "landshark should find high-upside visible lines, max finish share {:.1}%",
+        landshark.finish_share_range.max * 100.0
+    );
+    assert!(
+        (0.04..=0.16).contains(&costanza.win_rate()),
+        "costanza should beat naive instincts without becoming a tuned optimizer, got {:.1}%",
+        costanza.win_rate() * 100.0
+    );
+    assert!(
+        costanza.average_finish_share() > 0.38,
+        "costanza should materially improve on naive finish share, got {:.1}%",
+        costanza.average_finish_share() * 100.0
+    );
+}
+
+#[test]
 fn glonzo_uses_policy_seed_even_from_fixed_starts() {
     let summary = run_strategy_batch(120, InitialVariance::fixed(), Strategy::Glonzo);
     assert!(
