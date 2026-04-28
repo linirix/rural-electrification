@@ -62,7 +62,7 @@ fn run_batch(
     run_strategy_batch_with_observer(seeds, variance, strategy, |seed, game, report| {
         if verbose {
             println!(
-                "{} {} seed {}: share {:.1}%, customers {:.0}, cash {}, debt {}, reliability {:.0}%, profit {}, M&A stress {:.0} pts",
+                "{} {} seed {}: share {:.1}%, customers {:.0}, cash {}, debt {}, reliability {:.0}%, rate {:.1}c ({:.0}% of {:.1}c break-even), profit {}, M&A stress {:.0} pts",
                 report.label,
                 strategy.name(),
                 seed,
@@ -71,9 +71,15 @@ fn run_batch(
                 money(game.player.cash),
                 money(game.player.debt),
                 game.player.reliability * 100.0,
+                game.player.rate_cents,
+                game.player_rate_support_ratio().min(9.99) * 100.0,
+                game.player_break_even_rate_cents(),
                 money(report.profit),
                 game.acquisition_stress * 100.0
             );
+            for event in &report.events {
+                println!("  event: {event}");
+            }
         }
     })
 }

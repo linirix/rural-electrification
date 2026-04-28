@@ -836,6 +836,30 @@ fn weak_finances_reduce_effective_borrowing_room() {
 }
 
 #[test]
+fn low_rate_support_reduces_borrowing_room() {
+    let mut supported = Game::with_seed(432);
+    let mut underpriced = Game::with_seed(432);
+    supported.player.asset_base = 220_000.0;
+    underpriced.player.asset_base = 220_000.0;
+    supported.player.debt = 80_000.0;
+    underpriced.player.debt = 80_000.0;
+    supported.player.reliability = 0.88;
+    underpriced.player.reliability = 0.88;
+    supported.player.reputation = 70.0;
+    underpriced.player.reputation = 70.0;
+
+    let break_even = supported.player_break_even_rate_cents();
+    supported.player.rate_cents = break_even * (REVIEW_MIN_RATE_SUPPORT_RATIO + 0.05);
+    underpriced.player.rate_cents = break_even * (REVIEW_MIN_RATE_SUPPORT_RATIO - 0.18);
+
+    assert!(
+        underpriced.borrowing_limit_ratio() < supported.borrowing_limit_ratio() - 0.02,
+        "lenders should reduce borrowing room when rates do not support the cost base"
+    );
+    assert!(underpriced.borrowing_room() < supported.borrowing_room() - 4_000.0);
+}
+
+#[test]
 fn macro_environment_changes_each_quarter() {
     let mut game = Game::with_seed(44);
     let starting_rate = game.macro_state.benchmark_credit_rate();
@@ -1093,6 +1117,38 @@ fn formal_review_rejects_below_cost_market_lead() {
     assert!(outcome.details.contains("rate support"));
     assert!(outcome.details.contains("no outstanding debt"));
     assert!(!outcome.details.contains("9.9x"));
+}
+
+#[test]
+fn formal_review_failure_explains_high_share_without_service_quality() {
+    let mut game = Game::with_seed(522);
+    game.quarter = game.campaign_quarters;
+    game.player.customers = 2_400.0;
+    game.player.generation_capacity_mwh = 1_100.0;
+    game.player.distribution_capacity = 2_800.0;
+    game.player.reliability = REVIEW_MIN_RELIABILITY - 0.03;
+    game.player.rate_cents = 12.0;
+    game.player.debt = 20_000.0;
+    game.player.asset_base = 240_000.0;
+    for competitor in &mut game.competitors {
+        competitor.customers = 20.0;
+    }
+    let finances = FirmFinances {
+        revenue: 40_000.0,
+        operating_cost: 25_000.0,
+        interest: 1_000.0,
+        profit: 14_000.0,
+        served_mwh: 3_000.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().expect("expected formal review");
+    assert_eq!(outcome.kind, OutcomeKind::Defeat);
+    assert!(outcome.details.contains("Review gaps"));
+    assert!(outcome.details.contains("service reliability"));
+    assert!(outcome.details.contains("Scale alone was not enough"));
 }
 
 #[test]
@@ -1588,6 +1644,37 @@ fn regional_mandate_can_be_missed_after_formal_review() {
     assert_eq!(outcome.kind, OutcomeKind::Defeat);
     assert!(outcome.headline.contains("Regional Mandate"));
     assert!(outcome.can_continue);
+    assert!(outcome.details.contains("Mandate gaps"));
+}
+
+#[test]
+fn regional_mandate_failure_explains_scale_without_platform() {
+    let mut game = Game::with_seed(69);
+    game.review_completed = true;
+    game.quarter = REGIONAL_MANDATE_QUARTER;
+    game.adjacent_expansions = REGIONAL_MANDATE_EXPANSION_TARGET - 1;
+    game.player.customers = 3_000.0;
+    game.player.reliability = REGIONAL_MANDATE_RELIABILITY_TARGET + 0.03;
+    game.player.asset_base = 400_000.0;
+    game.player.debt = 120_000.0;
+    for competitor in &mut game.competitors {
+        competitor.customers = 30.0;
+    }
+    let finances = FirmFinances {
+        revenue: 20_000.0,
+        operating_cost: 12_000.0,
+        interest: 500.0,
+        profit: 7_500.0,
+        served_mwh: 2_000.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().unwrap();
+    assert_eq!(outcome.kind, OutcomeKind::Defeat);
+    assert!(outcome.details.contains("territories"));
+    assert!(outcome.details.contains("large customer base"));
 }
 
 #[test]

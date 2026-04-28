@@ -1190,6 +1190,13 @@ impl Game {
         let reputation_drag = ((50.0 - self.player.reputation) / 100.0).clamp(0.0, 0.18) * 0.48;
         let stress_drag =
             (self.acquisition_stress - ACQUISITION_STRESS_NOTICE).clamp(0.0, 0.80) * 0.10;
+        let break_even_rate = self.player_break_even_rate_cents();
+        let rate_support_drag = if break_even_rate <= 0.0 {
+            0.0
+        } else {
+            let support_ratio = self.player.rate_cents / break_even_rate;
+            (REVIEW_MIN_RATE_SUPPORT_RATIO - support_ratio).clamp(0.0, 0.35) * 0.15
+        };
         let mut coverage_drag: f64 = 0.0;
         if let Some(report) = &self.last_report {
             if report.profit < 0.0 {
@@ -1203,7 +1210,12 @@ impl Game {
             }
         }
 
-        (macro_limit - service_drag - reputation_drag - stress_drag - coverage_drag)
+        (macro_limit
+            - service_drag
+            - reputation_drag
+            - stress_drag
+            - rate_support_drag
+            - coverage_drag)
             .clamp(0.40, macro_limit)
     }
 
@@ -2594,15 +2606,11 @@ impl Game {
                 self.outcome = Some(Outcome {
                     kind: OutcomeKind::Defeat,
                     headline: "Board Lost Confidence".to_string(),
-                    details: format!(
-                        "After Year 5 you held {:.0}% of connected accounts. The board wanted durable leadership: share, service, leverage, and rates that can support the cost base. Current rate support was {:.0}% of break-even ({:.1}c) with {}.",
-                        share * 100.0,
-                        sustainability.rate_support_ratio.min(9.99) * 100.0,
-                        sustainability.break_even_rate,
-                        review_interest_coverage_summary(
-                            self.player.debt,
-                            sustainability.interest_coverage
-                        )
+                    details: year_five_review_failure_details(
+                        self,
+                        finances,
+                        share,
+                        sustainability,
                     ),
                     can_continue: true,
                 });
@@ -2629,15 +2637,7 @@ impl Game {
                 self.outcome = Some(Outcome {
                     kind: OutcomeKind::Defeat,
                     headline: "Regional Mandate Missed".to_string(),
-                    details: format!(
-                        "By Year 10 Metro held {:.0}% share with {} adjacent territories. The board wanted {:.0}% share, {} territories, {:.0}% reliability, and debt/assets below {:.0}%.",
-                        self.market_share() * 100.0,
-                        self.adjacent_expansions,
-                        REGIONAL_MANDATE_SHARE_TARGET * 100.0,
-                        REGIONAL_MANDATE_EXPANSION_TARGET,
-                        REGIONAL_MANDATE_RELIABILITY_TARGET * 100.0,
-                        REGIONAL_MANDATE_LEVERAGE_LIMIT * 100.0
-                    ),
+                    details: regional_mandate_failure_details(self),
                     can_continue: true,
                 });
             }
@@ -2687,6 +2687,126 @@ fn review_interest_coverage_summary(debt: f64, coverage: f64) -> String {
     } else {
         format!("{coverage:.1}x interest coverage")
     }
+}
+
+fn year_five_review_failure_details(
+    game: &Game,
+    finances: &FirmFinances,
+    share: f64,
+    sustainability: ReviewSustainability,
+) -> String {
+    let mut gaps = Vec::new();
+    if share < 0.45 {
+        gaps.push(format!("share {:.0}% vs 45%", share * 100.0));
+    }
+    if game.player.reliability < REVIEW_MIN_RELIABILITY {
+        gaps.push(format!(
+            "service reliability {:.0}% vs {:.0}%",
+            game.player.reliability * 100.0,
+            REVIEW_MIN_RELIABILITY * 100.0
+        ));
+    }
+    if game.player.debt_to_assets() > 0.95 {
+        gaps.push(format!(
+            "debt/assets {:.0}% vs 95%",
+            game.player.debt_to_assets() * 100.0
+        ));
+    }
+    if finances.profit < REVIEW_MIN_PROFIT {
+        gaps.push(format!("profit ${:.1}k", finances.profit / 1_000.0));
+    }
+    if sustainability.rate_support_ratio < REVIEW_MIN_RATE_SUPPORT_RATIO {
+        gaps.push(format!(
+            "rate support {:.0}% vs {:.0}%",
+            sustainability.rate_support_ratio * 100.0,
+            REVIEW_MIN_RATE_SUPPORT_RATIO * 100.0
+        ));
+    }
+    if sustainability.interest_coverage < REVIEW_MIN_INTEREST_COVERAGE {
+        gaps.push(format!(
+            "interest coverage {:.1}x vs {:.1}x",
+            sustainability.interest_coverage, REVIEW_MIN_INTEREST_COVERAGE
+        ));
+    }
+
+    let gap_summary = if gaps.is_empty() {
+        "No single review metric missed by much, but the combined profile did not look durable."
+            .to_string()
+    } else {
+        format!("Review gaps: {}.", gaps.join("; "))
+    };
+    let scale_note = if share >= 0.70 && !gaps.is_empty() {
+        " Scale alone was not enough: the board treated unreliable service, weak rate support, or strained financing as evidence that the franchise was overextended."
+    } else {
+        ""
+    };
+
+    format!(
+        "After Year 5 you held {:.0}% of connected accounts. The board wanted durable leadership: share, service, leverage, and rates that can support the cost base. Current rate support was {:.0}% of break-even ({:.1}c) with {}. {}{}",
+        share * 100.0,
+        sustainability.rate_support_ratio.min(9.99) * 100.0,
+        sustainability.break_even_rate,
+        review_interest_coverage_summary(game.player.debt, sustainability.interest_coverage),
+        gap_summary,
+        scale_note
+    )
+}
+
+fn regional_mandate_failure_details(game: &Game) -> String {
+    let share = game.market_share();
+    let debt_to_assets = game.player.debt_to_assets();
+    let mut gaps = Vec::new();
+    if share < REGIONAL_MANDATE_SHARE_TARGET {
+        gaps.push(format!(
+            "share {:.0}% vs {:.0}%",
+            share * 100.0,
+            REGIONAL_MANDATE_SHARE_TARGET * 100.0
+        ));
+    }
+    if game.adjacent_expansions < REGIONAL_MANDATE_EXPANSION_TARGET {
+        gaps.push(format!(
+            "territories {} vs {}",
+            game.adjacent_expansions, REGIONAL_MANDATE_EXPANSION_TARGET
+        ));
+    }
+    if game.player.reliability < REGIONAL_MANDATE_RELIABILITY_TARGET {
+        gaps.push(format!(
+            "reliability {:.0}% vs {:.0}%",
+            game.player.reliability * 100.0,
+            REGIONAL_MANDATE_RELIABILITY_TARGET * 100.0
+        ));
+    }
+    if debt_to_assets > REGIONAL_MANDATE_LEVERAGE_LIMIT {
+        gaps.push(format!(
+            "debt/assets {:.0}% vs {:.0}%",
+            debt_to_assets * 100.0,
+            REGIONAL_MANDATE_LEVERAGE_LIMIT * 100.0
+        ));
+    }
+
+    let gap_summary = if gaps.is_empty() {
+        "No individual gate missed by much, but the board did not see a durable regional platform."
+            .to_string()
+    } else {
+        format!("Mandate gaps: {}.", gaps.join("; "))
+    };
+    let scale_note = if share >= 0.70 && !gaps.is_empty() {
+        " A large customer base did not offset the missing operating commitments."
+    } else {
+        ""
+    };
+
+    format!(
+        "By Year 10 Metro held {:.0}% share with {} adjacent territories. The board wanted {:.0}% share, {} territories, {:.0}% reliability, and debt/assets below {:.0}%. {}{}",
+        share * 100.0,
+        game.adjacent_expansions,
+        REGIONAL_MANDATE_SHARE_TARGET * 100.0,
+        REGIONAL_MANDATE_EXPANSION_TARGET,
+        REGIONAL_MANDATE_RELIABILITY_TARGET * 100.0,
+        REGIONAL_MANDATE_LEVERAGE_LIMIT * 100.0,
+        gap_summary,
+        scale_note
+    )
 }
 
 fn merger_execution_risk(

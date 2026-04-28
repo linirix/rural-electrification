@@ -15,6 +15,49 @@ Coverage:
 - `20,000` seeds across six starting-variance profiles and all strategies (`1,080,000` playthroughs)
 - `50,000` max-variance seeds across all strategies (`450,000` playthroughs)
 
+## 2026-04-27 Final Matrix Addendum
+
+Additional coverage:
+
+- `50,000` seeds across six starting-variance profiles and all strategies (`2,700,000` playthroughs)
+- `100,000` default-variance stress seeds across all strategies (`900,000` playthroughs)
+- `100,000` max-variance stress seeds across all strategies (`900,000` playthroughs)
+
+### High-Share Failure Seeds
+
+These are useful for testing whether the end screen explains that market share alone is not enough.
+
+| playtest seed | game seed | strategy | notes |
+|---:|---:|---|---|
+| 83386 | 83636158 | raider | 97.4% share, 69% reliability, board defeat |
+| 57883 | 58056649 | raider | 97.1% share, 53% reliability, board defeat |
+| 66264 | 66462792 | glonzo | 97.1% share, 90% reliability, negative profit, board defeat |
+| 38777 | 38893331 | glonzo | 97.3% share at max variance, negative profit, board defeat |
+| 15704 | 15751112 | glonzo | 94.8% share at max variance, negative cash, receivership |
+
+### Early Collapse Seeds
+
+These are good regression seeds for reckless-play failure messaging and market-access loss.
+
+| playtest seed | game seed | strategy | notes |
+|---:|---:|---|---|
+| 49310 | 49457930 | mna | Max variance Q2 market-access loss after reliability falls to 41% |
+| 99196 | 99493588 | glonzo | Max variance Q2 market-access loss |
+| 35291 | 35396873 | glonzo | Default variance Q3 market-access loss |
+| 41919 | 42044757 | glonzo | Default variance Q3 market-access loss with 52.7% share |
+
+### Close Max-Variance Wins
+
+These are useful for testing tense but fair endings under the harshest start variance.
+
+| playtest seed | game seed | strategy | notes |
+|---:|---:|---|---|
+| 73428 | 73648284 | naive | 45.5% share, 84% reliability, clean low-leverage win |
+| 44173 | 44305519 | organic | 45.5% share, $3.0k profit |
+| 96484 | 96773452 | balanced | 45.5% share, 83% reliability |
+| 54929 | 55093787 | mna | 45.5% share after 62.6% peak |
+| 6039 | 6057117 | regional | 58.5% Y10 share, 88% reliability |
+
 ### Balanced Challenge Seeds
 
 Organic loses, while balanced and landshark win. These look useful for demonstrating why the balanced strategy exists.
