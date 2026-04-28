@@ -1,11 +1,15 @@
-use crate::{DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game};
+use crate::{
+    ACQUISITION_STRESS_NOTICE, DISTRIBUTION_PROJECT_CAPACITY, Decision,
+    GENERATION_PROJECT_CAPACITY_MWH, Game,
+};
 
 use super::shared::cheapest_competitor;
 
 pub(super) fn mna_policy(game: &mut Game) {
     if let Some((index, price)) = cheapest_competitor(game) {
         let reserve = if game.quarter < 4 { 5_000.0 } else { 10_000.0 };
-        let diligence_cost = if game.has_diligence(index) {
+        let should_skip_diligence = should_skip_diligence_for_bolt_on(game, index);
+        let diligence_cost = if game.has_diligence(index) || should_skip_diligence {
             0.0
         } else {
             game.diligence_cost(index).unwrap_or(0.0)
@@ -28,7 +32,10 @@ pub(super) fn mna_policy(game: &mut Game) {
             });
         }
 
-        if !game.has_diligence(index) && game.player.cash > diligence_cost + reserve * 0.25 {
+        if !should_skip_diligence
+            && !game.has_diligence(index)
+            && game.player.cash > diligence_cost + reserve * 0.25
+        {
             let _ = game.apply_decision(Decision::Diligence {
                 competitor_index: index,
             });
@@ -78,7 +85,9 @@ pub(super) fn mna_policy(game: &mut Game) {
 
     if let Some((index, price)) = cheapest_competitor(game) {
         let can_absorb_debt = game.player.debt_to_assets() < 0.82;
-        if !game.has_diligence(index)
+        let should_skip_diligence = should_skip_diligence_for_bolt_on(game, index);
+        if !should_skip_diligence
+            && !game.has_diligence(index)
             && let Some(cost) = game.diligence_cost(index)
             && game.player.cash > cost + 5_000.0
         {
@@ -92,4 +101,17 @@ pub(super) fn mna_policy(game: &mut Game) {
             });
         }
     }
+}
+
+fn should_skip_diligence_for_bolt_on(game: &Game, competitor_index: usize) -> bool {
+    let Some(target) = game.competitors.get(competitor_index) else {
+        return false;
+    };
+    let small_target = target.customers <= game.player.customers.max(1.0) * 0.18;
+    let low_stress = game
+        .acquisition_stress_score(competitor_index)
+        .map(|score| score < ACQUISITION_STRESS_NOTICE)
+        .unwrap_or(false);
+
+    small_target && low_stress
 }

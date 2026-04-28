@@ -6,9 +6,9 @@ const REGRESSION_SEEDS: u32 = 250;
 fn strategy_profiles_stay_in_design_bands() {
     let variance = InitialVariance::default();
     let cases = [
-        (Strategy::Naive, 0.00, 0.07),
-        (Strategy::Organic, 0.62, 0.80),
-        (Strategy::Balanced, 0.66, 0.84),
+        (Strategy::Naive, 0.00, 0.05),
+        (Strategy::Organic, 0.54, 0.70),
+        (Strategy::Balanced, 0.60, 0.78),
         (Strategy::Mna, 0.45, 0.68),
     ];
 
@@ -35,7 +35,7 @@ fn strategy_profiles_stay_in_design_bands() {
         organic * 100.0
     );
     assert!(
-        balanced >= mna + 0.08,
+        balanced >= mna + 0.04,
         "balanced play should outperform reckless M&A while still carrying deal risk: balanced {:.1}%, mna {:.1}%",
         balanced * 100.0,
         mna * 100.0

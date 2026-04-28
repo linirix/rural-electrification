@@ -1494,12 +1494,12 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
         );
     }
 
-    if game.acquisition_stress >= 0.62 {
+    if game.acquisition_stress >= ACQUISITION_STRESS_STRAINED {
         push_line(
             81,
             signal_line("M&A", RED, "covenants strained after acquisition"),
         );
-    } else if game.acquisition_stress >= 0.38 {
+    } else if game.acquisition_stress >= ACQUISITION_STRESS_NOTICE {
         push_line(
             57,
             signal_line("M&A", YELLOW, "lenders watching integration"),

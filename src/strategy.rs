@@ -6,7 +6,7 @@ mod raider;
 mod shared;
 mod summary;
 
-use crate::{Game, InitialVariance, OutcomeKind, QuarterReport};
+use crate::{ACQUISITION_STRESS_STRAINED, Game, InitialVariance, OutcomeKind, QuarterReport};
 use glonzo::{GlonzoRng, glonzo_policy};
 use mna::mna_policy;
 use naive::naive_policy;
@@ -74,7 +74,7 @@ where
     F: FnMut(u32, &Game, &QuarterReport),
 {
     let seeds = seeds.max(1);
-    const MATERIAL_ACQUISITION_STRESS: f64 = 0.62;
+    const MATERIAL_ACQUISITION_STRESS: f64 = ACQUISITION_STRESS_STRAINED;
     let mut summary = StrategySummary {
         runs: seeds,
         ..StrategySummary::default()

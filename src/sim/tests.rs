@@ -1125,6 +1125,34 @@ fn below_cost_pricing_creates_financing_pressure() {
 }
 
 #[test]
+fn moderately_below_cost_pricing_creates_financing_pressure() {
+    let mut game = Game::with_seed(522);
+    let break_even = game.player_break_even_rate_cents();
+    game.player.rate_cents = break_even * (BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO - 0.02);
+    game.player.reputation = 70.0;
+    game.equity_market_fatigue = 0.0;
+    let finances = FirmFinances {
+        revenue: 4_000.0,
+        operating_cost: 4_500.0,
+        interest: 300.0,
+        profit: -800.0,
+        served_mwh: 500.0,
+        unmet_demand_ratio: 0.0,
+    };
+    let mut events = Vec::new();
+
+    game.apply_below_cost_pricing_pressure(&finances, &mut events);
+
+    assert!(game.equity_market_fatigue > 0.0);
+    assert!(game.player.reputation < 70.0);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("Below-cost pricing"))
+    );
+}
+
+#[test]
 fn year_two_board_checkpoint_penalizes_low_share() {
     let mut game = Game::with_seed(54);
     game.quarter = BOARD_CHECKPOINT_QUARTER;
@@ -1674,6 +1702,35 @@ fn acquisition_stress_can_force_receivership_when_losses_follow() {
     assert_eq!(outcome.headline, "Bankers Forced Receivership");
     assert!(outcome.details.contains("strained acquisition"));
     assert!(!outcome.can_continue);
+}
+
+#[test]
+fn depressed_leveraged_player_can_face_hostile_takeover() {
+    let mut game = Game::with_seed(34);
+    game.quarter = HOSTILE_TAKEOVER_MIN_QUARTER + 1;
+    game.player.asset_base = 300_000.0;
+    game.player.debt = 270_000.0;
+    game.player.cash = 15_000.0;
+    game.player.shares = 2_000.0;
+    game.player.stock_price = 45.0;
+    game.competitors[0].cash = HOSTILE_TAKEOVER_RIVAL_CASH + 20_000.0;
+    let bidder_name = game.competitors[0].name.clone();
+    let finances = FirmFinances {
+        revenue: 14_000.0,
+        operating_cost: 11_000.0,
+        interest: 1_000.0,
+        profit: 2_000.0,
+        served_mwh: 900.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().expect("expected takeover defeat");
+    assert_eq!(outcome.kind, OutcomeKind::Defeat);
+    assert_eq!(outcome.headline, "Hostile Takeover");
+    assert!(!outcome.can_continue);
+    assert!(outcome.details.contains(&bidder_name));
 }
 
 #[test]

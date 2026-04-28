@@ -42,16 +42,20 @@ pub const MAX_PUBLIC_RATE_PREMIUM_CENTS: f64 = 5.0;
 const RECEIVERSHIP_DEBT_TO_ASSETS: f64 = 1.05;
 const DISTRESSED_COVERAGE_RECEIVERSHIP_DEBT_TO_ASSETS: f64 = 0.92;
 const DISTRESSED_COVERAGE_RECEIVERSHIP: f64 = 0.65;
+const HOSTILE_TAKEOVER_MIN_QUARTER: u32 = 12;
+const HOSTILE_TAKEOVER_MARKET_CAP_TO_ASSETS: f64 = 0.40;
+const HOSTILE_TAKEOVER_DEBT_TO_ASSETS: f64 = 0.85;
+const HOSTILE_TAKEOVER_RIVAL_CASH: f64 = 80_000.0;
 const MAX_RELIABILITY: f64 = 0.98;
 const MIN_MAINTENANCE_RELIABILITY_GAIN: f64 = 0.0005;
 const DILIGENCE_DURATION_QUARTERS: u32 = 3;
 const DILIGENCE_ALERT_MAX_BACKING: f64 = 8_000.0;
 const MERGER_RISK_MIN: f64 = 0.06;
 const MERGER_RISK_MAX: f64 = 0.46;
-const ACQUISITION_STRESS_NOTICE: f64 = 0.38;
-const ACQUISITION_STRESS_STRAINED: f64 = 0.62;
-const ACQUISITION_STRESS_DISTRESSED: f64 = 0.88;
-const ACQUISITION_STRESS_RECEIVERSHIP: f64 = 0.96;
+pub const ACQUISITION_STRESS_NOTICE: f64 = 0.38;
+pub const ACQUISITION_STRESS_STRAINED: f64 = 0.62;
+pub const ACQUISITION_STRESS_DISTRESSED: f64 = 0.88;
+pub const ACQUISITION_STRESS_RECEIVERSHIP: f64 = 0.96;
 const BOARD_CHECKPOINT_QUARTER: u32 = 8;
 const BOARD_CHECKPOINT_SHARE_TARGET: f64 = 0.32;
 const BOARD_CHECKPOINT_REPUTATION_PENALTY: f64 = 3.0;
@@ -62,7 +66,7 @@ pub const REVIEW_MIN_RATE_SUPPORT_RATIO: f64 = 0.72;
 pub const REVIEW_MIN_INTEREST_COVERAGE: f64 = 1.0;
 pub const REVIEW_MIN_RELIABILITY: f64 = 0.72;
 const REVIEW_MIN_PROFIT: f64 = -500.0;
-const BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO: f64 = 0.55;
+const BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO: f64 = 0.68;
 const PUBLIC_BALANCE_SHEET_DIVERGENCE_PROBABILITY: f64 = 0.25;
 const PUBLIC_BALANCE_SHEET_MAX_DIVERGENCE: f64 = 0.20;
 
@@ -2470,6 +2474,25 @@ impl Game {
         }
     }
 
+    fn hostile_takeover_bidder_name(&self) -> Option<String> {
+        if self.quarter <= HOSTILE_TAKEOVER_MIN_QUARTER || self.player.asset_base <= 0.0 {
+            return None;
+        }
+
+        let market_cap_to_assets = self.player.market_cap() / self.player.asset_base.max(1.0);
+        if market_cap_to_assets >= HOSTILE_TAKEOVER_MARKET_CAP_TO_ASSETS
+            || self.player.debt_to_assets() <= HOSTILE_TAKEOVER_DEBT_TO_ASSETS
+        {
+            return None;
+        }
+
+        self.competitors
+            .iter()
+            .filter(|competitor| competitor.cash >= HOSTILE_TAKEOVER_RIVAL_CASH)
+            .max_by(|left, right| left.cash.total_cmp(&right.cash))
+            .map(|competitor| competitor.name.clone())
+    }
+
     fn check_outcome(&mut self, finances: &FirmFinances) {
         if self.outcome.is_some() {
             return;
@@ -2526,6 +2549,19 @@ impl Game {
                 headline: "Bankers Forced Receivership".to_string(),
                 details: "Lenders lost confidence after leverage stayed high while earnings no longer covered debt service."
                     .to_string(),
+                can_continue: false,
+            });
+            return;
+        }
+
+        if let Some(bidder_name) = self.hostile_takeover_bidder_name() {
+            self.outcome = Some(Outcome {
+                kind: OutcomeKind::Defeat,
+                headline: "Hostile Takeover".to_string(),
+                details: format!(
+                    "{} moved to acquire {} after the market valued the company below its asset base while leverage left the board with few defenses.",
+                    bidder_name, self.player.name
+                ),
                 can_continue: false,
             });
             return;
