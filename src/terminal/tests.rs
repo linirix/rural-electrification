@@ -239,6 +239,63 @@ fn rivals_command_shows_rival_screen() {
 }
 
 #[test]
+fn report_command_shows_last_quarter_screen() {
+    let mut game = Game::with_seed(119);
+    game.advance_quarter();
+
+    match handle_command(&mut game, "report") {
+        CommandResult::ShowReport => {}
+        _ => panic!("report should show the last-quarter detail screen"),
+    }
+}
+
+#[test]
+fn stable_dashboard_panels_keep_fixed_heights() {
+    let mut game = Game::with_seed(120);
+    assert_eq!(
+        stable_panel_lines(last_quarter_lines(&game), 5, "report for full detail").len(),
+        5
+    );
+    assert_eq!(
+        stable_panel_lines(signal_lines(&game), 6, "board for remaining risks").len(),
+        6
+    );
+    assert_eq!(
+        stable_panel_lines(project_lines(&game), 5, "board for planning context").len(),
+        5
+    );
+    assert_eq!(
+        stable_panel_lines(compact_command_lines(&game), 5, "help for all commands").len(),
+        5
+    );
+
+    game.advance_quarter();
+    game.pending_projects.push(crate::Project {
+        name: "Test generation".to_string(),
+        kind: crate::ProjectKind::Generation {
+            capacity_mwh: 500.0,
+        },
+        quarters_remaining: 2,
+    });
+    game.pending_projects.push(crate::Project {
+        name: "Test distribution".to_string(),
+        kind: crate::ProjectKind::Distribution {
+            customer_capacity: 700.0,
+        },
+        quarters_remaining: 1,
+    });
+    game.acquisition_cooldown = 3;
+    assert_eq!(
+        stable_panel_lines(last_quarter_lines(&game), 5, "report for full detail").len(),
+        5
+    );
+    assert_eq!(
+        stable_panel_lines(project_lines(&game), 5, "board for planning context").len(),
+        5
+    );
+}
+
+#[test]
 fn empty_input_returns_from_subscreens_to_dashboard() {
     assert!(should_return_to_dashboard("\n", TerminalScreen::Subscreen));
     assert!(should_return_to_dashboard(

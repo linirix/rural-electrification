@@ -1,46 +1,6 @@
 use super::render::*;
 use super::*;
 
-pub(super) fn competitor_lines(game: &Game) -> Vec<String> {
-    if game.competitors.is_empty() {
-        return vec!["No active rivals.".to_string()];
-    }
-
-    let mut lines = Vec::new();
-    let total_connected = game.total_connected_customers().max(1.0);
-    let name_width = if dashboard_width() >= 112 { 22 } else { 15 };
-    for (index, competitor) in game.competitors.iter().enumerate() {
-        let (acquisition_note, acquisition_tone) = acquisition_status(game, index);
-        let (health_label, health_tone) = rival_health_label(competitor);
-
-        let rate_tone = if competitor.rate_cents + 0.4 < game.player.rate_cents {
-            RED
-        } else if competitor.rate_cents > game.player.rate_cents + 0.4 {
-            GREEN
-        } else {
-            CYAN
-        };
-        let name = shorten_plain(&competitor.name, name_width);
-        lines.push(format!(
-            "{}. {}   {} {}   {} {}   {} {}   {} {}",
-            styled(DIM, index + 1),
-            styled(BOLD, format!("{name:<name_width$}")),
-            muted("share"),
-            styled(
-                BOLD,
-                format!("{:.0}%", competitor.customers / total_connected * 100.0)
-            ),
-            muted("rate"),
-            styled(rate_tone, format!("{:.1}c", competitor.rate_cents)),
-            muted("health"),
-            styled(health_tone, health_label),
-            muted("buy"),
-            styled(acquisition_tone, acquisition_note)
-        ));
-    }
-    lines
-}
-
 pub(super) fn rival_overview_lines(game: &Game) -> Vec<String> {
     vec![
         format!(
@@ -382,16 +342,56 @@ fn acquisition_underwriting_tone(score: f64) -> &'static str {
 }
 
 pub(super) fn dashboard_competitor_lines(game: &Game) -> Vec<String> {
-    let mut lines = competitor_lines(game);
-    let visible_rivals = if dashboard_width() >= 112 { 4 } else { 3 };
-    if game.competitors.len() > visible_rivals {
-        lines.truncate(visible_rivals);
+    if game.competitors.is_empty() {
+        return vec!["No active rivals.".to_string()];
+    }
+
+    let total_connected = game.total_connected_customers().max(1.0);
+    let name_width = if dashboard_width() >= 132 { 21 } else { 15 };
+    let visible_rivals = 3;
+    let mut lines = vec![format!(
+        "{} {}  {:>5}  {:>5}  {:<10} {}",
+        styled(DIM, "#"),
+        styled(DIM, format!("{:<name_width$}", "rival")),
+        styled(DIM, "share"),
+        styled(DIM, "rate"),
+        styled(DIM, "health"),
+        styled(DIM, "buy")
+    )];
+
+    for (index, competitor) in game.competitors.iter().take(visible_rivals).enumerate() {
+        let (acquisition_note, acquisition_tone) = acquisition_status(game, index);
+        let (health_label, health_tone) = rival_health_label(competitor);
+        let rate_tone = if competitor.rate_cents + 0.4 < game.player.rate_cents {
+            RED
+        } else if competitor.rate_cents > game.player.rate_cents + 0.4 {
+            GREEN
+        } else {
+            CYAN
+        };
+        let name = shorten_plain(&competitor.name, name_width);
         lines.push(format!(
-            "{} use 'rivals' for {} more",
-            muted("More:"),
-            game.competitors.len() - visible_rivals
+            "{} {}  {:>5}  {:>5}  {:<10} {}",
+            styled(DIM, index + 1),
+            styled(BOLD, format!("{name:<name_width$}")),
+            styled(
+                BOLD,
+                format!("{:.0}%", competitor.customers / total_connected * 100.0)
+            ),
+            styled(rate_tone, format!("{:.1}c", competitor.rate_cents)),
+            styled(health_tone, health_label),
+            styled(acquisition_tone, acquisition_note)
         ));
     }
+
+    if game.competitors.len() > visible_rivals {
+        let remaining = game.competitors.len() - visible_rivals;
+        lines.push(format!(
+            "{} use 'rivals' for {remaining} more",
+            muted("More")
+        ));
+    }
+
     lines
 }
 

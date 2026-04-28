@@ -59,6 +59,7 @@ pub(super) fn handle_command(game: &mut Game, command: &str) -> CommandResult {
             }
         }
         "competitors" | "rivals" => CommandResult::ShowRivals,
+        "report" | "reports" | "result" | "results" | "events" => CommandResult::ShowReport,
         "board" | "goals" | "objectives" | "milestones" | "region" | "regional" => {
             CommandResult::ShowBoard
         }

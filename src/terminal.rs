@@ -10,7 +10,7 @@ use crate::sim::{
     AcquisitionTerms, DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH,
     Game, MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH,
     MAX_PUBLIC_RATE_PREMIUM_CENTS, MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH,
-    Outcome, OutcomeKind, ProjectKind, QuarterReport, REGIONAL_MANDATE_EXPANSION_TARGET,
+    Outcome, OutcomeKind, QuarterReport, REGIONAL_MANDATE_EXPANSION_TARGET,
     REGIONAL_MANDATE_LEVERAGE_LIMIT, REGIONAL_MANDATE_QUARTER, REGIONAL_MANDATE_RELIABILITY_TARGET,
     REGIONAL_MANDATE_SHARE_TARGET, REVIEW_MIN_INTEREST_COVERAGE, REVIEW_MIN_RATE_SUPPORT_RATIO,
     REVIEW_MIN_RELIABILITY, ShockKind, Utility, distribution_project_cost,
@@ -29,13 +29,13 @@ mod tests;
 use command::handle_command;
 use render::{clear_screen, print_box, styled};
 use screens::{
-    print_board, print_competitors, print_help, print_notice, print_outcome, print_report,
+    print_board, print_competitors, print_help, print_last_report, print_notice, print_outcome,
     print_status,
 };
 
 const MIN_SCREEN_WIDTH: usize = 88;
-const DEFAULT_SCREEN_WIDTH: usize = 118;
-const MAX_SCREEN_WIDTH: usize = 124;
+const DEFAULT_SCREEN_WIDTH: usize = 132;
+const MAX_SCREEN_WIDTH: usize = 148;
 const COLUMN_GAP: usize = 2;
 const SHARE_TARGET: f64 = 0.45;
 const RELIABILITY_TARGET: f64 = REVIEW_MIN_RELIABILITY;
@@ -165,8 +165,8 @@ pub fn run() -> io::Result<()> {
             }
             CommandResult::Advanced(report) => {
                 clear_screen();
+                debug_assert!(!report.label.is_empty());
                 print_status(&game);
-                print_report(&report);
                 current_screen = TerminalScreen::Dashboard;
                 if let Some(outcome) = &game.outcome {
                     print_outcome(outcome);
@@ -193,6 +193,11 @@ pub fn run() -> io::Result<()> {
             CommandResult::ShowBoard => {
                 clear_screen();
                 print_board(&game);
+                current_screen = TerminalScreen::Subscreen;
+            }
+            CommandResult::ShowReport => {
+                clear_screen();
+                print_last_report(&game);
                 current_screen = TerminalScreen::Subscreen;
             }
             CommandResult::Preview(lines) => {
@@ -231,6 +236,7 @@ enum CommandResult {
     ShowHelp,
     ShowRivals,
     ShowBoard,
+    ShowReport,
     Preview(Vec<String>),
     Quit,
 }

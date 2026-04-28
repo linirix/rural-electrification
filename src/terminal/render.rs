@@ -7,6 +7,7 @@ pub(super) fn cheapest_diligenced_competitor(game: &Game) -> Option<(usize, f64)
         .min_by(|left, right| left.1.total_cmp(&right.1))
 }
 
+#[cfg(test)]
 pub(super) fn cheapest_diligence_target(game: &Game) -> Option<(usize, f64)> {
     (0..game.competitors.len())
         .filter(|index| !game.has_diligence(*index))
@@ -86,6 +87,7 @@ pub(super) fn should_use_ansi(no_color_set: bool, term: Option<&str>) -> bool {
     !no_color_set && term != Some("dumb")
 }
 
+#[cfg(test)]
 pub(super) fn action_line(
     command: impl std::fmt::Display,
     effect: impl std::fmt::Display,
