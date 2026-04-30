@@ -352,6 +352,7 @@ fn start_screen_mentions_objectives_and_core_commands() {
     .concat()
     .join(" ");
 
+    assert!(text.contains("more corgi's rural electrification!"));
     assert!(text.contains("Metro Consolidated"));
     assert!(text.contains("Year 5 review"));
     assert!(text.contains("Year 10 regional mandate"));

@@ -26,6 +26,7 @@ pub(super) fn print_start_screen(game: &Game) {
 
 pub(super) fn start_screen_overview_lines(game: &Game) -> Vec<String> {
     vec![
+        styled(BOLD_CYAN, "more corgi's rural electrification!"),
         format!(
             "You run {} in {}.",
             styled(BOLD, &game.player.name),
