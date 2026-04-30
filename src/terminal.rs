@@ -142,6 +142,13 @@ pub fn run() -> io::Result<()> {
             continue;
         }
 
+        if should_open_report_from_dashboard(&line, current_screen) {
+            clear_screen();
+            print_last_report(&game);
+            current_screen = TerminalScreen::Subscreen;
+            continue;
+        }
+
         let command = line.trim();
         if command.is_empty() {
             continue;
@@ -214,10 +221,14 @@ enum TerminalScreen {
 }
 
 fn should_return_to_dashboard(raw_line: &str, current_screen: TerminalScreen) -> bool {
-    if current_screen == TerminalScreen::Dashboard {
-        return false;
-    }
+    current_screen != TerminalScreen::Dashboard && is_blank_input(raw_line)
+}
 
+fn should_open_report_from_dashboard(raw_line: &str, current_screen: TerminalScreen) -> bool {
+    current_screen == TerminalScreen::Dashboard && is_blank_input(raw_line)
+}
+
+fn is_blank_input(raw_line: &str) -> bool {
     let input = raw_line.trim_end_matches(['\n', '\r']);
     input.chars().all(char::is_whitespace)
 }

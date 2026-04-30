@@ -383,6 +383,31 @@ fn empty_input_returns_from_subscreens_to_dashboard() {
         " \n",
         TerminalScreen::Dashboard
     ));
+    assert!(!should_open_report_from_dashboard(
+        "\n",
+        TerminalScreen::Subscreen
+    ));
+}
+
+#[test]
+fn empty_input_opens_report_from_dashboard() {
+    assert!(should_open_report_from_dashboard(
+        "\n",
+        TerminalScreen::Dashboard
+    ));
+    assert!(should_open_report_from_dashboard(
+        "\r\n",
+        TerminalScreen::Dashboard
+    ));
+    assert!(should_open_report_from_dashboard(
+        "   \n",
+        TerminalScreen::Dashboard
+    ));
+    assert!(!should_open_report_from_dashboard(
+        " report\n",
+        TerminalScreen::Dashboard
+    ));
+    assert!(!should_return_to_dashboard("\n", TerminalScreen::Dashboard));
 }
 
 #[test]
