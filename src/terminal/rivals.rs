@@ -48,7 +48,9 @@ pub(super) fn rival_detail_lines(game: &Game) -> Vec<String> {
 
     let total_connected = game.total_connected_customers().max(1.0);
     let mut lines = Vec::new();
-    for (index, competitor) in game.competitors.iter().enumerate() {
+    let ranked = ranked_competitor_indices(game);
+    for (rank_position, index) in ranked.iter().copied().enumerate() {
+        let competitor = &game.competitors[index];
         let share = competitor.customers / total_connected;
         let customer_delta = competitor.customers - competitor.last_quarter_customers;
         let rate_gap = competitor.rate_cents - game.player.rate_cents;
@@ -64,7 +66,7 @@ pub(super) fn rival_detail_lines(game: &Game) -> Vec<String> {
 
         lines.push(format!(
             "{}. {}",
-            styled(DIM, index + 1),
+            styled(DIM, rank_position + 1),
             styled(BOLD, &competitor.name)
         ));
         lines.push(format!(
@@ -158,7 +160,7 @@ pub(super) fn rival_detail_lines(game: &Game) -> Vec<String> {
                 }
             }
         }
-        if index + 1 < game.competitors.len() {
+        if rank_position + 1 < ranked.len() {
             lines.push(String::new());
         }
     }
@@ -179,13 +181,14 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
     if !game.has_diligence(competitor_index) {
         let cost = game.diligence_cost(competitor_index).unwrap_or(0.0);
         let (low, high) = public_acquisition_range(game, competitor_index);
+        let rank = competitor_rank(game, competitor_index).unwrap_or(competitor_index + 1);
         lines.push(format!(
             "   {} {}-{}   {} {}",
             muted("M&A estimate"),
             styled(YELLOW, money(low)),
             styled(YELLOW, money(high)),
             muted("next"),
-            styled(BOLD_CYAN, format!("diligence {}", competitor_index + 1))
+            styled(BOLD_CYAN, format!("diligence {rank}"))
         ));
         lines.push(format!(
             "   {} public estimate only; buy now accepts close risk, or diligence freezes exact terms ({})",
@@ -359,7 +362,12 @@ pub(super) fn dashboard_competitor_lines(game: &Game) -> Vec<String> {
         styled(DIM, "buy")
     )];
 
-    for (index, competitor) in game.competitors.iter().take(visible_rivals).enumerate() {
+    for (rank_position, index) in ranked_competitor_indices(game)
+        .into_iter()
+        .take(visible_rivals)
+        .enumerate()
+    {
+        let competitor = &game.competitors[index];
         let (acquisition_note, acquisition_tone) = acquisition_status(game, index);
         let (health_label, health_tone) = rival_health_label(competitor);
         let rate_tone = if competitor.rate_cents + 0.4 < game.player.rate_cents {
@@ -372,7 +380,7 @@ pub(super) fn dashboard_competitor_lines(game: &Game) -> Vec<String> {
         let name = shorten_plain(&competitor.name, name_width);
         lines.push(format!(
             "{} {}  {}  {}  {} {}",
-            styled(DIM, format!("{:>1}", index + 1)),
+            styled(DIM, format!("{:>1}", rank_position + 1)),
             styled(BOLD, format!("{name:<name_width$}")),
             styled(
                 BOLD,

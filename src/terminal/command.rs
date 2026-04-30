@@ -4,6 +4,7 @@ use std::{
 };
 
 use super::preview::preview_command;
+use super::render::competitor_index_for_rank;
 use super::*;
 
 pub(super) fn handle_command(game: &mut Game, command: &str) -> CommandResult {
@@ -245,26 +246,28 @@ pub(super) fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, St
             Ok(Decision::RepayDebt { amount })
         }
         "buy" | "acquire" => {
-            let Some(index) = parts.get(1).and_then(|value| value.parse::<usize>().ok()) else {
+            let Some(rank) = parts.get(1).and_then(|value| value.parse::<usize>().ok()) else {
                 return Err("Use 'buy 1', 'buy 2', etc.".to_string());
             };
-            if index == 0 {
+            if rank == 0 {
                 return Err("Competitor numbers start at 1.".to_string());
             }
-            Ok(Decision::Acquire {
-                competitor_index: index - 1,
-            })
+            let Some(competitor_index) = competitor_index_for_rank(game, rank) else {
+                return Err(format!("No rival is ranked {rank} right now."));
+            };
+            Ok(Decision::Acquire { competitor_index })
         }
         "diligence" | "dilig" | "inspect" => {
-            let Some(index) = parts.get(1).and_then(|value| value.parse::<usize>().ok()) else {
+            let Some(rank) = parts.get(1).and_then(|value| value.parse::<usize>().ok()) else {
                 return Err("Use 'diligence 1', 'diligence 2', etc.".to_string());
             };
-            if index == 0 {
+            if rank == 0 {
                 return Err("Competitor numbers start at 1.".to_string());
             }
-            Ok(Decision::Diligence {
-                competitor_index: index - 1,
-            })
+            let Some(competitor_index) = competitor_index_for_rank(game, rank) else {
+                return Err(format!("No rival is ranked {rank} right now."));
+            };
+            Ok(Decision::Diligence { competitor_index })
         }
         "rate" => {
             let delta = match parse_rate_delta(parts, game.player.rate_cents) {

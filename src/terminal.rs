@@ -121,7 +121,7 @@ fn acquisition_integration_burden_tone(value: f64) -> &'static str {
 
 pub fn run() -> io::Result<()> {
     let mut game = Game::new();
-    let mut current_screen = TerminalScreen::Subscreen;
+    let mut current_screen = TerminalScreen::Start;
 
     clear_screen();
     print_start_screen(&game);
@@ -135,17 +135,9 @@ pub fn run() -> io::Result<()> {
             break;
         }
 
-        if should_return_to_dashboard(&line, current_screen) {
-            clear_screen();
-            print_status(&game);
-            current_screen = TerminalScreen::Dashboard;
-            continue;
-        }
-
-        if should_open_report_from_dashboard(&line, current_screen) {
-            clear_screen();
-            print_last_report(&game);
-            current_screen = TerminalScreen::Subscreen;
+        if is_blank_input(&line) {
+            current_screen = current_screen.next_on_enter();
+            render_terminal_screen(&game, current_screen);
             continue;
         }
 
@@ -183,29 +175,29 @@ pub fn run() -> io::Result<()> {
             CommandResult::ShowHelp => {
                 clear_screen();
                 print_help();
-                current_screen = TerminalScreen::Subscreen;
+                current_screen = TerminalScreen::Help;
             }
             CommandResult::ShowRivals => {
                 clear_screen();
                 print_competitors(&game);
-                current_screen = TerminalScreen::Subscreen;
+                current_screen = TerminalScreen::Rivals;
             }
             CommandResult::ShowBoard => {
                 clear_screen();
                 print_board(&game);
-                current_screen = TerminalScreen::Subscreen;
+                current_screen = TerminalScreen::Board;
             }
             CommandResult::ShowReport => {
                 clear_screen();
                 print_last_report(&game);
-                current_screen = TerminalScreen::Subscreen;
+                current_screen = TerminalScreen::Report;
             }
             CommandResult::Preview(lines) => {
                 clear_screen();
                 print_status(&game);
                 println!();
                 print_box("Command Preview", &lines);
-                current_screen = TerminalScreen::Subscreen;
+                current_screen = TerminalScreen::Preview;
             }
             CommandResult::Quit => break,
         }
@@ -216,21 +208,43 @@ pub fn run() -> io::Result<()> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TerminalScreen {
+    Start,
     Dashboard,
-    Subscreen,
+    Report,
+    Rivals,
+    Board,
+    Help,
+    Preview,
 }
 
-fn should_return_to_dashboard(raw_line: &str, current_screen: TerminalScreen) -> bool {
-    current_screen != TerminalScreen::Dashboard && is_blank_input(raw_line)
-}
-
-fn should_open_report_from_dashboard(raw_line: &str, current_screen: TerminalScreen) -> bool {
-    current_screen == TerminalScreen::Dashboard && is_blank_input(raw_line)
+impl TerminalScreen {
+    fn next_on_enter(self) -> Self {
+        match self {
+            Self::Start => Self::Dashboard,
+            Self::Dashboard => Self::Report,
+            Self::Report => Self::Rivals,
+            Self::Rivals => Self::Board,
+            Self::Board => Self::Help,
+            Self::Help | Self::Preview => Self::Dashboard,
+        }
+    }
 }
 
 fn is_blank_input(raw_line: &str) -> bool {
     let input = raw_line.trim_end_matches(['\n', '\r']);
     input.chars().all(char::is_whitespace)
+}
+
+fn render_terminal_screen(game: &Game, screen: TerminalScreen) {
+    clear_screen();
+    match screen {
+        TerminalScreen::Start => print_start_screen(game),
+        TerminalScreen::Dashboard | TerminalScreen::Preview => print_status(game),
+        TerminalScreen::Report => print_last_report(game),
+        TerminalScreen::Rivals => print_competitors(game),
+        TerminalScreen::Board => print_board(game),
+        TerminalScreen::Help => print_help(),
+    }
 }
 
 enum CommandResult {

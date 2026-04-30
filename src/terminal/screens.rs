@@ -70,7 +70,8 @@ pub(super) fn start_screen_command_lines(game: &Game) -> Vec<String> {
 pub(super) fn start_screen_begin_lines() -> Vec<String> {
     vec![
         "Press Return to open the main dashboard.".to_string(),
-        "Return also leaves any later subscreen and brings you back to the dashboard.".to_string(),
+        "After that, Return cycles: Dashboard -> Report -> Rivals -> Board -> Help.".to_string(),
+        "One more Return brings the cycle back to the dashboard.".to_string(),
         "Type help at any time for the full command reference.".to_string(),
     ]
 }
@@ -110,7 +111,7 @@ pub(super) fn print_help() {
             "region         regional mandate".to_string(),
             "report         last quarter detail".to_string(),
             "preview/quote  inspect command".to_string(),
-            "Return         return to dashboard".to_string(),
+            "Return         next screen in cycle".to_string(),
             "next / n / end finish quarter".to_string(),
             "continue       post-review play".to_string(),
             "save [name]    write save file".to_string(),
@@ -473,15 +474,17 @@ pub(super) fn compact_command_lines(game: &Game) -> Vec<String> {
     ];
 
     let opportunity = if let Some((index, price)) = cheapest_diligenced_competitor(game) {
+        let rank = competitor_rank(game, index).unwrap_or(index + 1);
         if game.competitors.len() == 1 {
             "buy blocked: final rival protected".to_string()
         } else if game.acquisition_cooldown > 0 {
-            format!("buy {} waits {}q", index + 1, game.acquisition_cooldown)
+            format!("buy {rank} waits {}q", game.acquisition_cooldown)
         } else {
-            format!("buy {} needs {}", index + 1, money(price))
+            format!("buy {rank} needs {}", money(price))
         }
     } else if let Some((index, estimate)) = cheapest_public_acquisition_target(game) {
-        format!("buy/diligence {} est {}", index + 1, money(estimate))
+        let rank = competitor_rank(game, index).unwrap_or(index + 1);
+        format!("buy/diligence {rank} est {}", money(estimate))
     } else if should_show_adjacent_expansion(game) {
         format!("expand {}", adjacent_expansion_footer(game))
     } else {
@@ -547,12 +550,13 @@ pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {
     let reliability = game.player.reliability;
     let leverage = game.player.debt_to_assets();
     let rate_support = game.player_rate_support_ratio();
+    let review_targets = scorecard_review_targets(game);
 
-    vec![
+    let mut lines = vec![
         format!(
             "{} {} | {} {} | {} {} | {} {}",
-            muted("Review"),
-            styled(BOLD_CYAN, quarters_remaining_label(game)),
+            muted("Next review"),
+            styled(BOLD_CYAN, next_review_status_label(game)),
             muted("Rate"),
             styled(BOLD_CYAN, format!("{:.1}c/kWh", game.player.rate_cents)),
             muted("Avg"),
@@ -566,46 +570,71 @@ pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {
         score_line(
             "Share",
             share,
-            SHARE_TARGET,
+            review_targets.share,
             share_tone(share),
-            format!("{:.0}% target", SHARE_TARGET * 100.0),
-            if share >= SHARE_TARGET {
+            format!("{:.0}% target", review_targets.share * 100.0),
+            if share >= review_targets.share {
                 "target met".to_string()
             } else {
-                format!("{:.0} pts to go", (SHARE_TARGET - share) * 100.0)
+                format!("{:.0} pts to go", (review_targets.share - share) * 100.0)
             },
         ),
         score_line(
             "Reliability",
             reliability,
-            RELIABILITY_TARGET,
+            review_targets.reliability,
             reliability_tone(reliability),
-            format!("{:.0}% target", RELIABILITY_TARGET * 100.0),
-            if reliability >= RELIABILITY_TARGET {
+            format!("{:.0}% target", review_targets.reliability * 100.0),
+            if reliability >= review_targets.reliability {
                 format!(
                     "{:.0} pts above",
-                    (reliability - RELIABILITY_TARGET) * 100.0
+                    (reliability - review_targets.reliability) * 100.0
                 )
             } else {
                 format!(
                     "{:.0} pts short",
-                    (RELIABILITY_TARGET - reliability) * 100.0
+                    (review_targets.reliability - reliability) * 100.0
                 )
             },
         ),
         score_line(
             "Debt/assets",
             leverage,
-            LEVERAGE_LIMIT,
+            review_targets.leverage,
             leverage_tone(leverage),
-            format!("{:.0}% limit", LEVERAGE_LIMIT * 100.0),
-            if leverage <= LEVERAGE_LIMIT {
-                format!("{:.0} pts room", (LEVERAGE_LIMIT - leverage) * 100.0)
+            format!("{:.0}% limit", review_targets.leverage * 100.0),
+            if leverage <= review_targets.leverage {
+                format!(
+                    "{:.0} pts room",
+                    (review_targets.leverage - leverage) * 100.0
+                )
             } else {
-                format!("{:.0} pts over", (leverage - LEVERAGE_LIMIT) * 100.0)
+                format!(
+                    "{:.0} pts over",
+                    (leverage - review_targets.leverage) * 100.0
+                )
             },
         ),
-        score_line(
+    ];
+
+    if review_targets.regional {
+        lines.push(score_line(
+            "Territories",
+            game.adjacent_expansions as f64,
+            REGIONAL_MANDATE_EXPANSION_TARGET as f64,
+            expansion_tone(game.adjacent_expansions),
+            format!("{} needed", REGIONAL_MANDATE_EXPANSION_TARGET),
+            if game.adjacent_expansions >= REGIONAL_MANDATE_EXPANSION_TARGET {
+                "target met".to_string()
+            } else {
+                format!(
+                    "{} to go",
+                    REGIONAL_MANDATE_EXPANSION_TARGET - game.adjacent_expansions
+                )
+            },
+        ));
+    } else {
+        lines.push(score_line(
             "Rate support",
             rate_support.min(1.35),
             REVIEW_MIN_RATE_SUPPORT_RATIO,
@@ -616,8 +645,55 @@ pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {
             } else {
                 format!("{:.0}% of break-even", rate_support * 100.0)
             },
-        ),
-    ]
+        ));
+    }
+
+    lines
+}
+
+struct ScorecardReviewTargets {
+    share: f64,
+    reliability: f64,
+    leverage: f64,
+    regional: bool,
+}
+
+fn scorecard_review_targets(game: &Game) -> ScorecardReviewTargets {
+    if game.review_completed {
+        ScorecardReviewTargets {
+            share: REGIONAL_MANDATE_SHARE_TARGET,
+            reliability: REGIONAL_MANDATE_RELIABILITY_TARGET,
+            leverage: REGIONAL_MANDATE_LEVERAGE_LIMIT,
+            regional: true,
+        }
+    } else {
+        ScorecardReviewTargets {
+            share: SHARE_TARGET,
+            reliability: RELIABILITY_TARGET,
+            leverage: LEVERAGE_LIMIT,
+            regional: false,
+        }
+    }
+}
+
+fn next_review_status_label(game: &Game) -> String {
+    if !game.review_completed {
+        return review_countdown_label("Y5", game.campaign_quarters.saturating_sub(game.quarter));
+    }
+
+    if game.regional_mandate_completed {
+        "all reviews complete".to_string()
+    } else {
+        review_countdown_label("Y10 mandate", game.regional_mandate_due_in())
+    }
+}
+
+fn review_countdown_label(name: &str, remaining: u32) -> String {
+    match remaining {
+        0 => format!("{name} due now"),
+        1 => format!("{name} in 1 quarter"),
+        _ => format!("{name} in {remaining} quarters"),
+    }
 }
 
 pub(super) fn score_line(
@@ -1725,6 +1801,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
     ));
 
     if let Some((index, price)) = cheapest_diligenced_competitor(game) {
+        let rank = competitor_rank(game, index).unwrap_or(index + 1);
         if game.competitors.len() == 1 {
             lines.push(action_line(
                 "buy",
@@ -1732,7 +1809,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
             ));
         } else if game.acquisition_cooldown > 0 {
             lines.push(action_line(
-                format!("buy {}", index + 1),
+                format!("buy {rank}"),
                 format!(
                     "unavailable for {} more quarter(s) during integration",
                     styled(YELLOW, game.acquisition_cooldown)
@@ -1740,7 +1817,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
             ));
         } else {
             lines.push(action_line(
-                format!("buy {}", index + 1),
+                format!("buy {rank}"),
                 format!(
                     "{} cash plus debt; integration strain follows",
                     styled(BOLD_YELLOW, money(price))
@@ -1748,6 +1825,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
             ));
         }
     } else if let Some((index, estimate)) = cheapest_public_acquisition_target(game) {
+        let rank = competitor_rank(game, index).unwrap_or(index + 1);
         if game.competitors.len() == 1 {
             lines.push(action_line(
                 "buy",
@@ -1755,7 +1833,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
             ));
         } else if game.acquisition_cooldown > 0 {
             lines.push(action_line(
-                format!("diligence {}", index + 1),
+                format!("diligence {rank}"),
                 format!(
                     "can inspect now; acquisitions wait {}q",
                     styled(YELLOW, game.acquisition_cooldown)
@@ -1767,13 +1845,13 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
                 .map(|cost| {
                     format!(
                         "; diligence {} freezes terms for {}",
-                        index + 1,
+                        rank,
                         styled(BOLD_YELLOW, money(cost))
                     )
                 })
                 .unwrap_or_default();
             lines.push(action_line(
-                format!("buy {} | diligence {}", index + 1, index + 1),
+                format!("buy {rank} | diligence {rank}"),
                 format!(
                     "public est {}; close risk{}",
                     styled(BOLD_YELLOW, money(estimate)),
@@ -1782,8 +1860,9 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
             ));
         }
     } else if let Some((index, cost)) = cheapest_diligence_target(game) {
+        let rank = competitor_rank(game, index).unwrap_or(index + 1);
         lines.push(action_line(
-            format!("diligence {}", index + 1),
+            format!("diligence {rank}"),
             format!(
                 "{} to reveal exact acquisition terms",
                 styled(BOLD_YELLOW, money(cost))

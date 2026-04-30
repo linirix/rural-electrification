@@ -1,5 +1,33 @@
 use super::*;
 
+pub(super) fn ranked_competitor_indices(game: &Game) -> Vec<usize> {
+    let mut indices = (0..game.competitors.len()).collect::<Vec<_>>();
+    indices.sort_by(|left, right| {
+        game.competitors[*right]
+            .customers
+            .total_cmp(&game.competitors[*left].customers)
+            .then_with(|| {
+                game.competitors[*left]
+                    .name
+                    .cmp(&game.competitors[*right].name)
+            })
+            .then_with(|| left.cmp(right))
+    });
+    indices
+}
+
+pub(super) fn competitor_index_for_rank(game: &Game, rank: usize) -> Option<usize> {
+    rank.checked_sub(1)
+        .and_then(|offset| ranked_competitor_indices(game).get(offset).copied())
+}
+
+pub(super) fn competitor_rank(game: &Game, competitor_index: usize) -> Option<usize> {
+    ranked_competitor_indices(game)
+        .into_iter()
+        .position(|index| index == competitor_index)
+        .map(|position| position + 1)
+}
+
 pub(super) fn cheapest_diligenced_competitor(game: &Game) -> Option<(usize, f64)> {
     (0..game.competitors.len())
         .filter(|index| game.has_diligence(*index))

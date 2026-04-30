@@ -361,53 +361,46 @@ fn start_screen_mentions_objectives_and_core_commands() {
     assert!(text.contains("rivals / board"));
     assert!(text.contains("save / load"));
     assert!(text.contains("Press Return"));
+    assert!(text.contains("Report -> Rivals -> Board -> Help"));
 }
 
 #[test]
-fn empty_input_returns_from_subscreens_to_dashboard() {
-    assert!(should_return_to_dashboard("\n", TerminalScreen::Subscreen));
-    assert!(should_return_to_dashboard(
-        "\r\n",
-        TerminalScreen::Subscreen
-    ));
-    assert!(should_return_to_dashboard(" \n", TerminalScreen::Subscreen));
-    assert!(should_return_to_dashboard(
-        "   \r\n",
-        TerminalScreen::Subscreen
-    ));
-    assert!(!should_return_to_dashboard(
-        " status\n",
-        TerminalScreen::Subscreen
-    ));
-    assert!(!should_return_to_dashboard(
-        " \n",
-        TerminalScreen::Dashboard
-    ));
-    assert!(!should_open_report_from_dashboard(
-        "\n",
-        TerminalScreen::Subscreen
-    ));
+fn blank_input_detection_accepts_return_and_spaces_only() {
+    assert!(is_blank_input("\n"));
+    assert!(is_blank_input("\r\n"));
+    assert!(is_blank_input(" \n"));
+    assert!(is_blank_input("   \r\n"));
+    assert!(!is_blank_input(" status\n"));
+    assert!(!is_blank_input(" report\n"));
 }
 
 #[test]
-fn empty_input_opens_report_from_dashboard() {
-    assert!(should_open_report_from_dashboard(
-        "\n",
+fn enter_cycles_through_dashboard_subscreens() {
+    assert_eq!(
+        TerminalScreen::Start.next_on_enter(),
         TerminalScreen::Dashboard
-    ));
-    assert!(should_open_report_from_dashboard(
-        "\r\n",
+    );
+    assert_eq!(
+        TerminalScreen::Dashboard.next_on_enter(),
+        TerminalScreen::Report
+    );
+    assert_eq!(
+        TerminalScreen::Report.next_on_enter(),
+        TerminalScreen::Rivals
+    );
+    assert_eq!(
+        TerminalScreen::Rivals.next_on_enter(),
+        TerminalScreen::Board
+    );
+    assert_eq!(TerminalScreen::Board.next_on_enter(), TerminalScreen::Help);
+    assert_eq!(
+        TerminalScreen::Help.next_on_enter(),
         TerminalScreen::Dashboard
-    ));
-    assert!(should_open_report_from_dashboard(
-        "   \n",
+    );
+    assert_eq!(
+        TerminalScreen::Preview.next_on_enter(),
         TerminalScreen::Dashboard
-    ));
-    assert!(!should_open_report_from_dashboard(
-        " report\n",
-        TerminalScreen::Dashboard
-    ));
-    assert!(!should_return_to_dashboard("\n", TerminalScreen::Dashboard));
+    );
 }
 
 #[test]
@@ -428,6 +421,59 @@ fn dashboard_rival_lines_show_public_health_not_exact_operations() {
     assert!(lines.iter().any(|line| line.contains("health")));
     assert!(lines.iter().any(|line| line.contains("share")));
     assert!(!lines.iter().any(|line| line.contains("rel")));
+}
+
+#[test]
+fn rival_screens_rank_competitors_by_market_share() {
+    let mut game = Game::with_seed(113);
+    game.competitors[0].name = "Small Rival".to_string();
+    game.competitors[0].customers = 100.0;
+    game.competitors[1].name = "Large Rival".to_string();
+    game.competitors[1].customers = 300.0;
+    game.competitors[2].name = "Middle Rival".to_string();
+    game.competitors[2].customers = 200.0;
+
+    assert_eq!(ranked_competitor_indices(&game), vec![1, 2, 0]);
+
+    let dashboard = dashboard_competitor_lines(&game);
+    assert!(dashboard[1].contains("Large Rival"));
+    assert!(dashboard[2].contains("Middle Rival"));
+    assert!(dashboard[3].contains("Small Rival"));
+
+    let detail = rival_detail_lines(&game).join("\n");
+    let large = detail
+        .find("Large Rival")
+        .expect("large rival should render");
+    let middle = detail
+        .find("Middle Rival")
+        .expect("middle rival should render");
+    let small = detail
+        .find("Small Rival")
+        .expect("small rival should render");
+    assert!(large < middle);
+    assert!(middle < small);
+}
+
+#[test]
+fn acquisition_commands_use_market_share_rank_numbers() {
+    let mut game = Game::with_seed(113);
+    game.competitors[0].customers = 100.0;
+    game.competitors[1].customers = 300.0;
+    game.competitors[2].customers = 200.0;
+
+    match parse_decision(&game, &["buy", "1"]).unwrap() {
+        Decision::Acquire { competitor_index } => assert_eq!(competitor_index, 1),
+        _ => panic!("buy 1 should parse as an acquisition"),
+    }
+    match parse_decision(&game, &["diligence", "2"]).unwrap() {
+        Decision::Diligence { competitor_index } => assert_eq!(competitor_index, 2),
+        _ => panic!("diligence 2 should parse as diligence"),
+    }
+    assert!(
+        parse_decision(&game, &["buy", "4"])
+            .unwrap_err()
+            .contains("No rival is ranked 4")
+    );
 }
 
 #[test]
@@ -885,6 +931,40 @@ fn post_review_dashboard_guides_regional_expansion_work() {
     assert!(status.contains("Integration"));
     assert!(commands.contains("expand"));
     assert!(commands.contains("regional integration"));
+}
+
+#[test]
+fn scorecard_uses_y5_review_before_formal_review() {
+    let game = Game::with_seed(151);
+    let joined = scorecard_lines(&game).join(" ");
+
+    assert!(joined.contains("Next review"));
+    assert!(joined.contains("Y5 in 20 quarters"));
+    assert!(joined.contains("45% target"));
+    assert!(joined.contains("72% target"));
+    assert!(joined.contains("95% limit"));
+    assert!(joined.contains("Rate support"));
+    assert!(!joined.contains("Territories"));
+}
+
+#[test]
+fn scorecard_uses_regional_review_after_continuation() {
+    let mut game = Game::with_seed(152);
+    game.review_completed = true;
+    game.quarter = 24;
+    game.adjacent_expansions = 1;
+
+    let joined = scorecard_lines(&game).join(" ");
+
+    assert!(joined.contains("Next review"));
+    assert!(joined.contains("Y10 mandate in 16 quarters"));
+    assert!(joined.contains("58% target"));
+    assert!(joined.contains("82% target"));
+    assert!(joined.contains("90% limit"));
+    assert!(joined.contains("Territories"));
+    assert!(joined.contains("2 needed"));
+    assert!(!joined.contains("Rate support"));
+    assert!(!joined.contains("review complete"));
 }
 
 #[test]
