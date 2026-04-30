@@ -350,12 +350,12 @@ pub(super) fn dashboard_competitor_lines(game: &Game) -> Vec<String> {
     let name_width = if dashboard_width() >= 132 { 21 } else { 15 };
     let visible_rivals = 3;
     let mut lines = vec![format!(
-        "{} {}  {:>5}  {:>5}  {:<10} {}",
-        styled(DIM, "#"),
+        "{} {}  {}  {}  {} {}",
+        styled(DIM, format!("{:>1}", "#")),
         styled(DIM, format!("{:<name_width$}", "rival")),
-        styled(DIM, "share"),
-        styled(DIM, "rate"),
-        styled(DIM, "health"),
+        styled(DIM, format!("{:>5}", "share")),
+        styled(DIM, format!("{:>5}", "rate")),
+        styled(DIM, format!("{:<10}", "health")),
         styled(DIM, "buy")
     )];
 
@@ -371,15 +371,21 @@ pub(super) fn dashboard_competitor_lines(game: &Game) -> Vec<String> {
         };
         let name = shorten_plain(&competitor.name, name_width);
         lines.push(format!(
-            "{} {}  {:>5}  {:>5}  {:<10} {}",
-            styled(DIM, index + 1),
+            "{} {}  {}  {}  {} {}",
+            styled(DIM, format!("{:>1}", index + 1)),
             styled(BOLD, format!("{name:<name_width$}")),
             styled(
                 BOLD,
-                format!("{:.0}%", competitor.customers / total_connected * 100.0)
+                format!(
+                    "{:>5}",
+                    format!("{:.0}%", competitor.customers / total_connected * 100.0)
+                )
             ),
-            styled(rate_tone, format!("{:.1}c", competitor.rate_cents)),
-            styled(health_tone, health_label),
+            styled(
+                rate_tone,
+                format!("{:>5}", format!("{:.1}c", competitor.rate_cents))
+            ),
+            styled(health_tone, format!("{health_label:<10}")),
             styled(acquisition_tone, acquisition_note)
         ));
     }

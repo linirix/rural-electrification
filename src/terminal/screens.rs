@@ -10,6 +10,71 @@ pub(super) struct BoardTarget {
     leverage: f64,
 }
 
+pub(super) fn print_start_screen(game: &Game) {
+    print_box(
+        &format!("{} | Start", game.player.name),
+        &start_screen_overview_lines(game),
+    );
+    print_box_pair(
+        "How To Read It",
+        &start_screen_metric_lines(),
+        "Useful Commands",
+        &start_screen_command_lines(game),
+    );
+    print_box("Begin", &start_screen_begin_lines());
+}
+
+pub(super) fn start_screen_overview_lines(game: &Game) -> Vec<String> {
+    vec![
+        format!(
+            "You run {} in {}.",
+            styled(BOLD, &game.player.name),
+            game.market.territory
+        ),
+        "Build a durable utility: enough customers, enough capacity, reliable service.".to_string(),
+        "Keep a balance sheet that can survive bad quarters.".to_string(),
+        "The Year 5 review tests share, reliability, leverage, and sustainable earnings."
+            .to_string(),
+        "Continued games add a Year 10 regional mandate.".to_string(),
+    ]
+}
+
+pub(super) fn start_screen_metric_lines() -> Vec<String> {
+    vec![
+        "Cash: projects and shock cushion.".to_string(),
+        "Rates: revenue, churn, public tolerance.".to_string(),
+        "Capacity: watts and customer hookups.".to_string(),
+        "Reliability: growth, churn, reputation.".to_string(),
+        "Debt/assets: lender room and failure risk.".to_string(),
+    ]
+}
+
+pub(super) fn start_screen_command_lines(game: &Game) -> Vec<String> {
+    vec![
+        compact_action_line("next / n", "finish the quarter"),
+        compact_action_line("preview <cmd>", "inspect before acting"),
+        compact_action_line(
+            "rate / build",
+            format!(
+                "set price; add gen/lines near {:.1}c",
+                game.market.standard_rate_cents
+            ),
+        ),
+        compact_action_line("marketing / maint", "growth; reliability"),
+        compact_action_line("capital", "debt, equity, buybacks"),
+        compact_action_line("rivals / board", "competitors; objectives"),
+        compact_action_line("save / load", "keep long campaigns"),
+    ]
+}
+
+pub(super) fn start_screen_begin_lines() -> Vec<String> {
+    vec![
+        "Press Return to open the main dashboard.".to_string(),
+        "Return also leaves any later subscreen and brings you back to the dashboard.".to_string(),
+        "Type help at any time for the full command reference.".to_string(),
+    ]
+}
+
 pub(super) fn print_help() {
     println!("{}", styled(BOLD_CYAN, "Electrification Command Reference"));
     print_box_pair(
@@ -79,7 +144,7 @@ pub(super) fn print_status(game: &Game) {
     );
     print_box_pair(
         "Last Quarter",
-        &stable_panel_lines(last_quarter_lines(game), 5, "report for full detail"),
+        &stable_panel_lines(last_quarter_lines(game), 6, "report for full detail"),
         "Signals",
         &stable_panel_lines(signal_lines(game), 6, "board for remaining risks"),
     );
@@ -271,13 +336,13 @@ pub(super) fn last_quarter_lines(game: &Game) -> Vec<String> {
     ];
 
     if let Some(driver) = report.attributions.first() {
-        lines.push(format!("{} {}", muted("Driver"), driver));
+        lines.extend(dashboard_note_lines("Driver", driver, 2));
     } else {
         lines.push(format!("{} no unusual operating driver", muted("Driver")));
     }
 
     if let Some(event) = report.events.first() {
-        lines.push(format!("{} {}", muted("Event"), event));
+        lines.extend(dashboard_note_lines("Event", event, 2));
     } else {
         lines.push(format!("{} none", muted("Events")));
     }
@@ -293,6 +358,38 @@ pub(super) fn last_quarter_lines(game: &Game) -> Vec<String> {
     }
 
     lines
+}
+
+fn dashboard_note_lines(label: &str, text: &str, max_lines: usize) -> Vec<String> {
+    let prefix = format!("{} ", muted(label));
+    let width = dashboard_pair_content_width();
+    let text_width = width.saturating_sub(visible_width(&prefix)).max(16);
+    let mut wrapped = wrap_plain_text(text, text_width);
+    if wrapped.len() > max_lines {
+        wrapped.truncate(max_lines);
+        if let Some(last) = wrapped.last_mut() {
+            let suffix = " ... report";
+            let keep = text_width.saturating_sub(suffix.len()).max(8);
+            *last = format!("{}{}", shorten_plain(last, keep), suffix);
+        }
+    }
+
+    let continuation = " ".repeat(visible_width(&prefix));
+    wrapped
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                format!("{prefix}{line}")
+            } else {
+                format!("{continuation}{line}")
+            }
+        })
+        .collect()
+}
+
+fn dashboard_pair_content_width() -> usize {
+    paired_column_widths(dashboard_width()).0.saturating_sub(4)
 }
 
 fn report_margin(report: &QuarterReport) -> f64 {
@@ -357,7 +454,7 @@ pub(super) fn compact_command_lines(game: &Game) -> Vec<String> {
         compact_action_line(
             "build",
             format!(
-                "gen400 {} | lines600 {}",
+                "gen 400 {} | lines 600 {}",
                 project_quote_short("gen", 400.0),
                 project_quote_short("lines", 600.0)
             ),

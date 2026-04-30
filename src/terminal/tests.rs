@@ -296,6 +296,40 @@ fn stable_dashboard_panels_keep_fixed_heights() {
 }
 
 #[test]
+fn compact_commands_show_build_sizes_with_spaces() {
+    let game = Game::with_seed(120);
+    let commands = compact_command_lines(&game).join(" ");
+
+    assert!(commands.contains("gen 400"));
+    assert!(commands.contains("lines 600"));
+    assert!(!commands.contains("gen400"));
+    assert!(!commands.contains("lines600"));
+}
+
+#[test]
+fn start_screen_mentions_objectives_and_core_commands() {
+    let game = Game::with_seed(120);
+    let text = [
+        start_screen_overview_lines(&game),
+        start_screen_metric_lines(),
+        start_screen_command_lines(&game),
+        start_screen_begin_lines(),
+    ]
+    .concat()
+    .join(" ");
+
+    assert!(text.contains("Metro Consolidated"));
+    assert!(text.contains("Year 5 review"));
+    assert!(text.contains("Year 10 regional mandate"));
+    assert!(text.contains("reliable service"));
+    assert!(text.contains("preview"));
+    assert!(text.contains("next / n"));
+    assert!(text.contains("rivals / board"));
+    assert!(text.contains("save / load"));
+    assert!(text.contains("Press Return"));
+}
+
+#[test]
 fn empty_input_returns_from_subscreens_to_dashboard() {
     assert!(should_return_to_dashboard("\n", TerminalScreen::Subscreen));
     assert!(should_return_to_dashboard(
@@ -335,6 +369,37 @@ fn dashboard_rival_lines_show_public_health_not_exact_operations() {
     assert!(lines.iter().any(|line| line.contains("health")));
     assert!(lines.iter().any(|line| line.contains("share")));
     assert!(!lines.iter().any(|line| line.contains("rel")));
+}
+
+#[test]
+fn dashboard_rival_table_keeps_health_and_buy_columns_aligned() {
+    let game = Game::with_seed(113);
+    let lines = dashboard_competitor_lines(&game);
+    let header = lines.first().expect("dashboard competitor header");
+    let health_column = visible_width(
+        &header[..header
+            .find("health")
+            .expect("header should include health column")],
+    );
+    let buy_column = visible_width(
+        &header[..header
+            .find("buy")
+            .expect("header should include buy column")],
+    );
+
+    for line in lines.iter().skip(1).take(3) {
+        let health_index = ["healthy", "strained", "vulnerable"]
+            .iter()
+            .filter_map(|label| line.find(label))
+            .next()
+            .expect("rival row should include health label");
+        let buy_index = line
+            .find("estimate")
+            .expect("default row should show estimate");
+
+        assert_eq!(visible_width(&line[..health_index]), health_column);
+        assert_eq!(visible_width(&line[..buy_index]), buy_column);
+    }
 }
 
 #[test]

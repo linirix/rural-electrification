@@ -28,10 +28,10 @@ mod screens;
 mod tests;
 
 use command::handle_command;
-use render::{clear_screen, print_box, styled};
+use render::{clear_screen, print_box};
 use screens::{
     print_board, print_competitors, print_help, print_last_report, print_notice, print_outcome,
-    print_status,
+    print_start_screen, print_status,
 };
 
 const MIN_SCREEN_WIDTH: usize = 88;
@@ -121,18 +121,10 @@ fn acquisition_integration_burden_tone(value: f64) -> &'static str {
 
 pub fn run() -> io::Result<()> {
     let mut game = Game::new();
-    let mut current_screen = TerminalScreen::Dashboard;
+    let mut current_screen = TerminalScreen::Subscreen;
 
     clear_screen();
-    println!("{}", styled(BOLD_CYAN, "Electrification"));
-    println!(
-        "You are general manager of {} in {}.",
-        styled(BOLD, &game.player.name),
-        game.market.territory
-    );
-    println!("Build a dominant, solvent, reliable utility before the market review ends.");
-    println!("Type 'help' for commands.\n");
-    print_status(&game);
+    print_start_screen(&game);
 
     loop {
         print!("\n{}> ", game.date_label());
