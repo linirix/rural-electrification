@@ -253,8 +253,8 @@ fn report_command_shows_last_quarter_screen() {
 fn stable_dashboard_panels_keep_fixed_heights() {
     let mut game = Game::with_seed(120);
     assert_eq!(
-        stable_panel_lines(last_quarter_lines(&game), 5, "report for full detail").len(),
-        5
+        stable_panel_lines(last_quarter_lines(&game), 6, "report for full detail").len(),
+        6
     );
     assert_eq!(
         stable_panel_lines(signal_lines(&game), 6, "board for remaining risks").len(),
@@ -286,8 +286,8 @@ fn stable_dashboard_panels_keep_fixed_heights() {
     });
     game.acquisition_cooldown = 3;
     assert_eq!(
-        stable_panel_lines(last_quarter_lines(&game), 5, "report for full detail").len(),
-        5
+        stable_panel_lines(last_quarter_lines(&game), 6, "report for full detail").len(),
+        6
     );
     assert_eq!(
         stable_panel_lines(project_lines(&game), 5, "board for planning context").len(),
@@ -304,6 +304,40 @@ fn compact_commands_show_build_sizes_with_spaces() {
     assert!(commands.contains("lines 600"));
     assert!(!commands.contains("gen400"));
     assert!(!commands.contains("lines600"));
+}
+
+#[test]
+fn last_quarter_wraps_driver_and_event_inside_dashboard_column() {
+    let mut game = Game::with_seed(120);
+    game.last_report = Some(QuarterReport {
+        label: "Year 2 Q3".to_string(),
+        revenue: 18_000.0,
+        operating_cost: 12_000.0,
+        interest: 800.0,
+        profit: 5_200.0,
+        new_customers: 52.0,
+        lost_customers: 9.0,
+        lost_customer_rate: 0.014,
+        market_share: 0.36,
+        prior_market_share: 0.34,
+        attributions: vec![
+            "Reliable service and rate advantage pulled switching customers from several rivals even as distribution headroom tightened.".to_string(),
+        ],
+        events: vec![
+            "A credit committee noted the below-cost pricing trend and reduced near-term borrowing room until margins recover.".to_string(),
+        ],
+    });
+
+    let lines = last_quarter_lines(&game);
+    let panel_width = paired_column_widths(dashboard_width()).0.saturating_sub(4);
+    let joined = lines.join(" ");
+
+    assert!(lines.len() <= 6);
+    assert!(lines.iter().all(|line| visible_width(line) <= panel_width));
+    assert!(joined.contains("Reliable service"));
+    assert!(joined.contains("rate advantage"));
+    assert!(joined.contains("credit committee"));
+    assert!(joined.contains("borrowing room"));
 }
 
 #[test]

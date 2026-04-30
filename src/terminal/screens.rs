@@ -347,13 +347,7 @@ pub(super) fn last_quarter_lines(game: &Game) -> Vec<String> {
         lines.push(format!("{} none", muted("Events")));
     }
 
-    if report.attributions.len() > 1 || report.events.len() > 1 {
-        lines.push(format!(
-            "{} {}",
-            muted("More"),
-            styled(CYAN, "type 'report' for complete drivers and events")
-        ));
-    } else {
+    if lines.len() < 6 {
         lines.push(format!("{} report for full detail", muted("More")));
     }
 
