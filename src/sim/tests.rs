@@ -2313,6 +2313,56 @@ fn acquisition_terms_match_actual_close_effects() {
 }
 
 #[test]
+fn acquiring_low_rate_anchor_lifts_public_rate_tolerance() {
+    let mut game = Game::with_seed(62);
+    game.player.cash = 750_000.0;
+    game.player.customers = 850.0;
+    game.player.rate_cents = 10.5;
+    game.market.rate_tolerance_adjustment_cents = 0.0;
+    game.competitors[0].customers = 520.0;
+    game.competitors[0].rate_cents = 6.8;
+    game.competitors[1].customers = 420.0;
+    game.competitors[1].rate_cents = 10.8;
+    game.competitors[2].customers = 390.0;
+    game.competitors[2].rate_cents = 11.1;
+    let starting_tolerance = public_rate_tolerance(&game.market);
+
+    let message = game
+        .apply_decision(Decision::Acquire {
+            competitor_index: 0,
+        })
+        .unwrap();
+
+    assert!(public_rate_tolerance(&game.market) > starting_tolerance + 0.20);
+    assert!(message.contains("low-rate alternative"));
+}
+
+#[test]
+fn acquiring_higher_rate_rival_does_not_lift_public_rate_tolerance() {
+    let mut game = Game::with_seed(62);
+    game.player.cash = 750_000.0;
+    game.player.customers = 850.0;
+    game.player.rate_cents = 8.4;
+    game.market.rate_tolerance_adjustment_cents = 0.0;
+    game.competitors[0].customers = 520.0;
+    game.competitors[0].rate_cents = 10.9;
+    game.competitors[1].customers = 420.0;
+    game.competitors[1].rate_cents = 8.6;
+    game.competitors[2].customers = 390.0;
+    game.competitors[2].rate_cents = 8.8;
+    let starting_tolerance = public_rate_tolerance(&game.market);
+
+    let message = game
+        .apply_decision(Decision::Acquire {
+            competitor_index: 0,
+        })
+        .unwrap();
+
+    assert!((public_rate_tolerance(&game.market) - starting_tolerance).abs() < 0.001);
+    assert!(!message.contains("low-rate alternative"));
+}
+
+#[test]
 fn acquisition_integration_uses_pre_acquisition_weights() {
     let mut game = Game::with_seed(61);
     game.player.cash = 400_000.0;

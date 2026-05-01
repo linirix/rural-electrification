@@ -62,6 +62,8 @@ const BOARD_CHECKPOINT_REPUTATION_PENALTY: f64 = 3.0;
 const BOARD_CHECKPOINT_EQUITY_FATIGUE: f64 = 0.30;
 const MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = -1.25;
 const MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = 1.35;
+const ACQUISITION_RATE_ANCHOR_TOLERANCE_MULTIPLIER: f64 = 0.70;
+const ACQUISITION_RATE_ANCHOR_MAX_LIFT_CENTS: f64 = 0.45;
 pub const REVIEW_MIN_RATE_SUPPORT_RATIO: f64 = 0.72;
 pub const REVIEW_MIN_INTEREST_COVERAGE: f64 = 1.0;
 pub const REVIEW_MIN_RELIABILITY: f64 = 0.72;
@@ -819,6 +821,7 @@ impl Game {
                     ));
                 }
                 self.require_cash(terms.price)?;
+                let rate_anchor_suffix = self.apply_acquisition_rate_anchor_shift(competitor_index);
                 let acquired = self.competitors.remove(competitor_index);
                 let acquired_name = acquired.name.clone();
                 let starting_customers = self.player.customers;
@@ -892,7 +895,8 @@ impl Game {
                     self.acquisition_cooldown
                 ) + &diligence_suffix
                     + &underwriting_suffix
-                    + &execution_suffix)
+                    + &execution_suffix
+                    + &rate_anchor_suffix)
             }
             Decision::AdjustRate { delta_cents } => {
                 if !delta_cents.is_finite() {
@@ -1361,6 +1365,43 @@ impl Game {
             total += weight;
         }
         weighted / total.max(1.0)
+    }
+
+    fn apply_acquisition_rate_anchor_shift(&mut self, competitor_index: usize) -> String {
+        let Some(competitor) = self.competitors.get(competitor_index) else {
+            return String::new();
+        };
+        let target_rate = competitor.rate_cents;
+        let target_customers = competitor.customers.max(0.0);
+        let alternative_rate = self.alternative_rate_for_competitor(competitor_index);
+        let low_rate_gap = (alternative_rate - target_rate).max(0.0);
+        if low_rate_gap < 0.20 || target_customers <= 0.0 {
+            return String::new();
+        }
+
+        let target_share =
+            (target_customers / self.total_connected_customers().max(1.0)).clamp(0.0, 1.0);
+        let requested_lift =
+            (low_rate_gap * target_share * ACQUISITION_RATE_ANCHOR_TOLERANCE_MULTIPLIER)
+                .clamp(0.0, ACQUISITION_RATE_ANCHOR_MAX_LIFT_CENTS);
+        if requested_lift < 0.025 {
+            return String::new();
+        }
+
+        let old_adjustment = self.market.rate_tolerance_adjustment_cents;
+        self.market.rate_tolerance_adjustment_cents = (old_adjustment + requested_lift).clamp(
+            MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS,
+            MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS,
+        );
+        let actual_lift = self.market.rate_tolerance_adjustment_cents - old_adjustment;
+        if actual_lift >= 0.05 {
+            format!(
+                " Removing a low-rate alternative lifted public rate tolerance by {:.1}c.",
+                actual_lift
+            )
+        } else {
+            String::new()
+        }
     }
 
     fn equity_issuance_base(&self) -> f64 {
