@@ -196,9 +196,22 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
             money(cost)
         ));
         lines.push(format!(
-            "   {} watch service quality, liquidity buffer, and leverage before closing without diligence",
-            muted("risk clues")
+            "   {} net cost {}, est post cash {}, est leverage {}",
+            muted("estimate"),
+            styled(YELLOW, money(terms.net_cash_cost)),
+            styled(cash_tone(terms.post_cash), money(terms.post_cash)),
+            styled(
+                leverage_tone(terms.post_debt_to_assets),
+                format!("{:.0}%", terms.post_debt_to_assets * 100.0)
+            )
         ));
+        if let Some(competitor) = game.competitors.get(competitor_index) {
+            lines.push(public_acquisition_service_line(game, competitor, &terms));
+        }
+        lines.push(acquisition_funding_line(game, &terms, false));
+        if let Some(line) = acquisition_rate_anchor_line(game, competitor_index) {
+            lines.push(line);
+        }
         lines.push(acquisition_underwriting_line(game, competitor_index, false));
         return lines;
     }
@@ -234,6 +247,9 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
     if let Some(competitor) = game.competitors.get(competitor_index) {
         lines.push(acquisition_service_line(game, competitor, &terms));
     }
+    if let Some(line) = acquisition_rate_anchor_line(game, competitor_index) {
+        lines.push(line);
+    }
     if terms.public_interest_concession > 0.0 {
         lines.push(format!(
             "   {} {} public-interest concession; post-deal share about {:.0}%",
@@ -262,36 +278,29 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
                 )
             )
         ));
-    } else if game.player.cash + 0.01 < terms.price {
-        lines.push(format!(
-            "   {} {}",
-            muted("funding"),
-            styled(
-                BOLD_RED,
-                format!(
-                    "need {} more cash to close",
-                    money(terms.price - game.player.cash)
-                )
-            )
-        ));
-    } else if terms.post_debt_to_assets > 0.95 {
-        lines.push(format!(
-            "   {} {}",
-            muted("funding"),
-            styled(
-                BOLD_YELLOW,
-                "would leave balance sheet above board leverage limit"
-            )
-        ));
     } else {
-        lines.push(format!(
-            "   {} {}",
-            muted("funding"),
-            styled(BOLD_GREEN, "closeable with current cash")
-        ));
+        lines.push(acquisition_funding_line(game, &terms, true));
     }
 
     lines
+}
+
+fn public_acquisition_service_line(
+    game: &Game,
+    competitor: &Utility,
+    terms: &AcquisitionTerms,
+) -> String {
+    let (health_label, health_tone) = rival_health_label(competitor);
+    let burden = acquisition_projected_integration_burden(game, terms);
+    format!(
+        "   {} public health {}; integration burden {}; exact service quality requires diligence",
+        styled(acquisition_integration_burden_tone(burden), "service"),
+        styled(health_tone, health_label),
+        styled(
+            acquisition_integration_burden_tone(burden),
+            acquisition_integration_burden_label(burden)
+        )
+    )
 }
 
 fn acquisition_service_line(game: &Game, competitor: &Utility, terms: &AcquisitionTerms) -> String {
@@ -342,6 +351,60 @@ fn acquisition_underwriting_tone(score: f64) -> &'static str {
         "guarded" => YELLOW,
         _ => GREEN,
     }
+}
+
+fn acquisition_funding_line(game: &Game, terms: &AcquisitionTerms, exact_terms: bool) -> String {
+    let label = if exact_terms {
+        "funding"
+    } else {
+        "est funding"
+    };
+    let caveat = if exact_terms {
+        ""
+    } else {
+        "; close price can move"
+    };
+    if game.player.cash + 0.01 < terms.price {
+        format!(
+            "   {} {}",
+            muted(label),
+            styled(
+                BOLD_RED,
+                format!(
+                    "need {} more cash to close{caveat}",
+                    money(terms.price - game.player.cash)
+                )
+            )
+        )
+    } else if terms.post_debt_to_assets > 0.95 {
+        format!(
+            "   {} {}",
+            muted(label),
+            styled(
+                BOLD_YELLOW,
+                format!("would leave balance sheet above board leverage limit{caveat}")
+            )
+        )
+    } else {
+        format!(
+            "   {} {}",
+            muted(label),
+            styled(BOLD_GREEN, format!("closeable with current cash{caveat}"))
+        )
+    }
+}
+
+fn acquisition_rate_anchor_line(game: &Game, competitor_index: usize) -> Option<String> {
+    let lift = game.acquisition_rate_anchor_lift_cents(competitor_index)?;
+    if lift < 0.05 {
+        return None;
+    }
+    let tone = if lift >= 0.25 { BOLD_YELLOW } else { YELLOW };
+    Some(format!(
+        "   {} removing this low-rate alternative may lift public tolerance by about {}",
+        muted("rate anchor"),
+        styled(tone, format!("{lift:.1}c"))
+    ))
 }
 
 pub(super) fn dashboard_competitor_lines(game: &Game) -> Vec<String> {

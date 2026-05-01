@@ -1367,16 +1367,14 @@ impl Game {
         weighted / total.max(1.0)
     }
 
-    fn apply_acquisition_rate_anchor_shift(&mut self, competitor_index: usize) -> String {
-        let Some(competitor) = self.competitors.get(competitor_index) else {
-            return String::new();
-        };
+    pub fn acquisition_rate_anchor_lift_cents(&self, competitor_index: usize) -> Option<f64> {
+        let competitor = self.competitors.get(competitor_index)?;
         let target_rate = competitor.rate_cents;
         let target_customers = competitor.customers.max(0.0);
         let alternative_rate = self.alternative_rate_for_competitor(competitor_index);
         let low_rate_gap = (alternative_rate - target_rate).max(0.0);
         if low_rate_gap < 0.20 || target_customers <= 0.0 {
-            return String::new();
+            return Some(0.0);
         }
 
         let target_share =
@@ -1384,16 +1382,28 @@ impl Game {
         let requested_lift =
             (low_rate_gap * target_share * ACQUISITION_RATE_ANCHOR_TOLERANCE_MULTIPLIER)
                 .clamp(0.0, ACQUISITION_RATE_ANCHOR_MAX_LIFT_CENTS);
-        if requested_lift < 0.025 {
+        let old_adjustment = self.market.rate_tolerance_adjustment_cents;
+        let new_adjustment = (old_adjustment + requested_lift).clamp(
+            MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS,
+            MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS,
+        );
+        Some((new_adjustment - old_adjustment).max(0.0))
+    }
+
+    fn apply_acquisition_rate_anchor_shift(&mut self, competitor_index: usize) -> String {
+        let actual_lift = self
+            .acquisition_rate_anchor_lift_cents(competitor_index)
+            .unwrap_or(0.0);
+        if actual_lift < 0.025 {
             return String::new();
         }
 
         let old_adjustment = self.market.rate_tolerance_adjustment_cents;
-        self.market.rate_tolerance_adjustment_cents = (old_adjustment + requested_lift).clamp(
+        self.market.rate_tolerance_adjustment_cents = (old_adjustment + actual_lift).clamp(
             MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS,
             MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS,
         );
-        let actual_lift = self.market.rate_tolerance_adjustment_cents - old_adjustment;
+        let actual_lift = (self.market.rate_tolerance_adjustment_cents - old_adjustment).max(0.0);
         if actual_lift >= 0.05 {
             format!(
                 " Removing a low-rate alternative lifted public rate tolerance by {:.1}c.",

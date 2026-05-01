@@ -355,6 +355,12 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                         terms.acquired_customers
                     ));
                     lines.push(acquisition_service_line(game, competitor, &terms));
+                    if let Some(line) =
+                        acquisition_rate_anchor_preview_line(game, *competitor_index)
+                    {
+                        lines.push(line);
+                    }
+                    lines.push(acquisition_funding_preview_line(game, &terms, true));
                 }
                 lines
             } else {
@@ -386,6 +392,12 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                         &terms,
                     ));
                     lines.push(acquisition_service_line(game, competitor, &terms));
+                    if let Some(line) =
+                        acquisition_rate_anchor_preview_line(game, *competitor_index)
+                    {
+                        lines.push(line);
+                    }
+                    lines.push(acquisition_funding_preview_line(game, &terms, true));
                     lines
                 } else {
                     let cost = game.diligence_cost(*competitor_index).unwrap_or(0.0);
@@ -398,6 +410,25 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                         styled(BOLD_YELLOW, money(cost)),
                         styled(BOLD, shorten_plain(&competitor.name, 16))
                     )];
+                    if let Some(terms) = game.public_acquisition_estimate(*competitor_index) {
+                        lines.push(format!(
+                            "{} center net cost {}, est post cash {}, est leverage {}.",
+                            muted("Estimate:"),
+                            styled(YELLOW, money(terms.net_cash_cost)),
+                            styled(cash_tone(terms.post_cash), money(terms.post_cash)),
+                            styled(
+                                leverage_tone(terms.post_debt_to_assets),
+                                format!("{:.0}%", terms.post_debt_to_assets * 100.0)
+                            )
+                        ));
+                        lines.push(public_acquisition_service_line(game, competitor, &terms));
+                        if let Some(line) =
+                            acquisition_rate_anchor_preview_line(game, *competitor_index)
+                        {
+                            lines.push(line);
+                        }
+                        lines.push(acquisition_funding_preview_line(game, &terms, false));
+                    }
                     lines.push(public_acquisition_underwriting_line(
                         game,
                         *competitor_index,
@@ -515,6 +546,24 @@ fn acquisition_risk_line(
     )
 }
 
+fn public_acquisition_service_line(
+    game: &Game,
+    competitor: &Utility,
+    terms: &AcquisitionTerms,
+) -> String {
+    let (health_label, health_tone) = rival_health_label(competitor);
+    let burden = acquisition_projected_integration_burden(game, terms);
+    format!(
+        "{} public health {}; integration burden {}; exact service quality requires diligence.",
+        styled(acquisition_integration_burden_tone(burden), "Service:"),
+        styled(health_tone, health_label),
+        styled(
+            acquisition_integration_burden_tone(burden),
+            acquisition_integration_burden_label(burden)
+        )
+    )
+}
+
 fn acquisition_service_line(game: &Game, competitor: &Utility, terms: &AcquisitionTerms) -> String {
     let projected_reliability = acquisition_projected_reliability(game, competitor, terms);
     let burden = acquisition_projected_integration_burden(game, terms);
@@ -533,6 +582,56 @@ fn acquisition_service_line(game: &Game, competitor: &Utility, terms: &Acquisiti
             acquisition_integration_burden_label(burden)
         )
     )
+}
+
+fn acquisition_funding_preview_line(
+    game: &Game,
+    terms: &AcquisitionTerms,
+    exact_terms: bool,
+) -> String {
+    let label = if exact_terms {
+        "Funding:"
+    } else {
+        "Est funding:"
+    };
+    let caveat = if exact_terms {
+        ""
+    } else {
+        "; close price can move"
+    };
+    if game.player.cash + 0.01 < terms.price {
+        format!(
+            "{} need {} more cash to close{}.",
+            styled(BOLD_RED, label),
+            money(terms.price - game.player.cash),
+            caveat
+        )
+    } else if terms.post_debt_to_assets > 0.95 {
+        format!(
+            "{} post-close leverage would sit above the board limit{}.",
+            styled(BOLD_YELLOW, label),
+            caveat
+        )
+    } else {
+        format!(
+            "{} closeable with current cash{}.",
+            styled(BOLD_GREEN, label),
+            caveat
+        )
+    }
+}
+
+fn acquisition_rate_anchor_preview_line(game: &Game, competitor_index: usize) -> Option<String> {
+    let lift = game.acquisition_rate_anchor_lift_cents(competitor_index)?;
+    if lift < 0.05 {
+        return None;
+    }
+    let tone = if lift >= 0.25 { BOLD_YELLOW } else { YELLOW };
+    Some(format!(
+        "{} removing this low-rate alternative may lift public tolerance by about {}.",
+        styled(tone, "Rate anchor:"),
+        styled(tone, format!("{lift:.1}c"))
+    ))
 }
 
 fn public_acquisition_underwriting_line(game: &Game, competitor_index: usize) -> String {

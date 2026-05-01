@@ -553,8 +553,13 @@ fn rival_detail_hides_exact_deal_terms_before_diligence() {
             .iter()
             .any(|line| line.contains("public estimates only"))
     );
-    assert!(lines.iter().any(|line| line.contains("risk clues")));
-    assert!(lines.iter().any(|line| line.contains("service quality")));
+    assert!(lines.iter().any(|line| line.contains("estimate")));
+    assert!(lines.iter().any(|line| line.contains("est leverage")));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("exact service quality requires diligence"))
+    );
     assert!(!lines.iter().any(|line| line.contains("post debt/assets")));
     assert!(!lines.iter().any(|line| line.contains("reliability")));
     assert!(!lines.iter().any(|line| line.contains("headroom")));
@@ -562,7 +567,26 @@ fn rival_detail_hides_exact_deal_terms_before_diligence() {
     assert!(!lines.iter().any(|line| line.contains("debt/assets")));
     assert!(!lines.iter().any(|line| line.contains("reputation")));
     assert!(!lines.iter().any(|line| line.contains("assets")));
-    assert!(!lines.iter().any(|line| line.contains("cash ")));
+}
+
+#[test]
+fn rival_acquisition_lines_surface_low_rate_anchor_effect() {
+    let mut game = Game::with_seed(62);
+    game.player.cash = 750_000.0;
+    game.player.customers = 850.0;
+    game.player.rate_cents = 10.5;
+    game.market.rate_tolerance_adjustment_cents = 0.0;
+    game.competitors[0].customers = 520.0;
+    game.competitors[0].rate_cents = 6.8;
+    game.competitors[1].customers = 420.0;
+    game.competitors[1].rate_cents = 10.8;
+    game.competitors[2].customers = 390.0;
+    game.competitors[2].rate_cents = 11.1;
+
+    let lines = rival_acquisition_lines(&game, 0);
+
+    assert!(lines.iter().any(|line| line.contains("rate anchor")));
+    assert!(lines.iter().any(|line| line.contains("public tolerance")));
 }
 
 #[test]
@@ -594,6 +618,30 @@ fn acquisition_preview_without_diligence_shows_public_range() {
             assert!(lines.iter().any(|line| line.contains("Underwriting")));
             assert!(lines.iter().any(|line| line.contains("service quality")));
             assert!(lines.iter().any(|line| line.contains("liquidity buffer")));
+            assert!(lines.iter().any(|line| line.contains("est leverage")));
+        }
+        _ => panic!("preview buy should show preview output"),
+    }
+}
+
+#[test]
+fn acquisition_preview_surfaces_low_rate_anchor_effect() {
+    let mut game = Game::with_seed(62);
+    game.player.cash = 750_000.0;
+    game.player.customers = 850.0;
+    game.player.rate_cents = 10.5;
+    game.market.rate_tolerance_adjustment_cents = 0.0;
+    game.competitors[0].customers = 520.0;
+    game.competitors[0].rate_cents = 6.8;
+    game.competitors[1].customers = 420.0;
+    game.competitors[1].rate_cents = 10.8;
+    game.competitors[2].customers = 390.0;
+    game.competitors[2].rate_cents = 11.1;
+
+    match handle_command(&mut game, "preview buy 1") {
+        CommandResult::Preview(lines) => {
+            assert!(lines.iter().any(|line| line.contains("Rate anchor")));
+            assert!(lines.iter().any(|line| line.contains("public tolerance")));
         }
         _ => panic!("preview buy should show preview output"),
     }
