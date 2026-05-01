@@ -100,6 +100,7 @@ pub(super) fn print_help() {
         &[
             "issue [amount]       issue stock".to_string(),
             "buyback [amount]     repurchase shares".to_string(),
+            "dividend [amount]    pay owners pro rata".to_string(),
             "borrow [amount|max]  raise debt".to_string(),
             "repay [amount|max]   pay debt down".to_string(),
             "diligence <number>   reveal deal terms".to_string(),
@@ -1336,7 +1337,12 @@ pub(super) fn financial_lines(game: &Game) -> Vec<String> {
             muted("Founder"),
             styled(
                 ownership_tone(game.player_ownership()),
-                format!("{:.1}%", game.player_ownership() * 100.0)
+                format!(
+                    "{:.0}/{:.0} ({:.1}%)",
+                    game.player_owned_shares,
+                    game.player.shares,
+                    game.player_ownership() * 100.0
+                )
             )
         ),
         format!(
@@ -1863,7 +1869,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
         "rate | capital",
         if dashboard_width() >= 112 {
             format!(
-                "rate {:.1} near market; borrow max {} at {}; issue/buyback",
+                "rate {:.1} near market; borrow max {} at {}; issue/buyback/dividend",
                 game.market.standard_rate_cents,
                 styled(
                     borrowing_room_tone(game.borrowing_room()),
@@ -1876,7 +1882,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
             )
         } else {
             format!(
-                "rate {:.1}; borrow max {} @ {}; equity",
+                "rate {:.1}; borrow max {} @ {}; equity/dividend",
                 game.market.standard_rate_cents,
                 styled(
                     borrowing_room_tone(game.borrowing_room()),

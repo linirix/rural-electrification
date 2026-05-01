@@ -45,7 +45,8 @@ const DISTRESSED_COVERAGE_RECEIVERSHIP: f64 = 0.65;
 const HOSTILE_TAKEOVER_MIN_QUARTER: u32 = 12;
 const HOSTILE_TAKEOVER_MARKET_CAP_TO_ASSETS: f64 = 0.40;
 const HOSTILE_TAKEOVER_DEBT_TO_ASSETS: f64 = 0.85;
-const HOSTILE_TAKEOVER_RIVAL_CASH: f64 = 80_000.0;
+const HOSTILE_TAKEOVER_RIVAL_FINANCING_CAPACITY: f64 = 80_000.0;
+const HOSTILE_TAKEOVER_RIVAL_DEBT_CAPACITY_WEIGHT: f64 = 0.55;
 const MAX_RELIABILITY: f64 = 0.98;
 const MIN_MAINTENANCE_RELIABILITY_GAIN: f64 = 0.0005;
 const DILIGENCE_DURATION_QUARTERS: u32 = 3;
@@ -276,6 +277,7 @@ pub enum Decision {
     Marketing { spend: f64 },
     IssueStock { amount: f64 },
     BuyBackStock { amount: f64 },
+    DeclareDividend { amount: f64 },
     Borrow { amount: f64 },
     RepayDebt { amount: f64 },
     Diligence { competitor_index: usize },
@@ -560,521 +562,562 @@ impl Game {
         }
 
         match decision {
-            Decision::BuildGeneration { capacity_mwh } => {
-                let capacity_mwh = positive_amount(capacity_mwh, "generation project size")?;
-                let capacity_mwh =
-                    capacity_mwh.clamp(MIN_GENERATION_PROJECT_MWH, MAX_GENERATION_PROJECT_MWH);
-                let cost = generation_project_cost(capacity_mwh);
-                let quarters = generation_project_duration(capacity_mwh);
-                self.require_cash(cost)?;
-                self.player.cash -= cost;
-                self.player.asset_base += cost;
-                self.pending_projects.push(Project {
-                    name: "generation expansion".to_string(),
-                    kind: ProjectKind::Generation { capacity_mwh },
-                    quarters_remaining: quarters,
-                });
-                Ok(format!(
-                    "Started a generation expansion for {}. It will add {:.0} MWh/quarter in {} quarter(s) and refresh fleet reliability when online.",
-                    money(cost),
-                    capacity_mwh,
-                    quarters
-                ))
-            }
+            Decision::BuildGeneration { capacity_mwh } => self.apply_build_generation(capacity_mwh),
             Decision::BuildDistribution { customer_capacity } => {
-                let customer_capacity =
-                    positive_amount(customer_capacity, "distribution project size")?;
-                let customer_capacity = customer_capacity.clamp(
-                    MIN_DISTRIBUTION_PROJECT_CUSTOMERS,
-                    MAX_DISTRIBUTION_PROJECT_CUSTOMERS,
-                );
-                let cost = distribution_project_cost(customer_capacity);
-                let quarters = distribution_project_duration(customer_capacity);
-                self.require_cash(cost)?;
-                self.player.cash -= cost;
-                self.player.asset_base += cost;
-                self.pending_projects.push(Project {
-                    name: "distribution expansion".to_string(),
-                    kind: ProjectKind::Distribution { customer_capacity },
-                    quarters_remaining: quarters,
-                });
-                Ok(format!(
-                    "Started a distribution expansion for {}. It will add room for {:.0} customers in {} quarter(s).",
-                    money(cost),
-                    customer_capacity,
-                    quarters
-                ))
+                self.apply_build_distribution(customer_capacity)
             }
-            Decision::EnterAdjacentMarket => {
-                self.require_adjacent_expansion_ready()?;
-                let cost = self.adjacent_expansion_cost();
-                self.require_cash(cost)?;
-                self.player.cash -= cost;
-                self.player.asset_base += cost;
-                self.pending_projects.push(Project {
-                    name: "adjacent territory entry".to_string(),
-                    kind: ProjectKind::AdjacentTerritory {
-                        addressable_customers: ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS,
-                        initial_customers: ADJACENT_EXPANSION_INITIAL_CUSTOMERS,
-                        incumbent_customers: ADJACENT_EXPANSION_INCUMBENT_CUSTOMERS,
-                    },
-                    quarters_remaining: ADJACENT_EXPANSION_DURATION_QUARTERS,
-                });
-                Ok(format!(
-                    "Started adjacent territory entry for {}. It will open about {:.0} addressable customers in {} quarter(s), with an initial foothold and a local incumbent rival.",
-                    money(cost),
-                    ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS,
-                    ADJACENT_EXPANSION_DURATION_QUARTERS
-                ))
-            }
-            Decision::Marketing { spend } => {
-                let spend = positive_amount(spend, "marketing spend")?;
-                let spend = spend.clamp(1_000.0, 25_000.0);
-                self.require_cash(spend)?;
-                self.player.cash -= spend;
-                self.player.marketing_momentum += (spend / 5_000.0) * 0.13;
-                self.player.reputation =
-                    (self.player.reputation + spend / 4_000.0).clamp(0.0, 100.0);
-                let regional_relief =
-                    self.reduce_regional_integration(spend / 160_000.0, "marketing");
-                Ok(format!(
-                    "Spent {} on customer acquisition, financing offers, and sales coverage.",
-                    money(spend)
-                ) + &regional_relief)
-            }
-            Decision::IssueStock { amount } => {
-                let amount = positive_amount(amount, "stock issuance")?;
-                let old_shares = self.player.shares.max(1.0);
-                let financing_base = self.equity_issuance_base();
-                let pressure = amount / financing_base;
-                // Fatigue is accumulated on the same unitless scale as issue pressure, so repeat
-                // offerings price like a larger single offering even across separate commands.
-                let effective_pressure = pressure + self.equity_market_fatigue;
-                let effective_pressure_squared = effective_pressure * effective_pressure;
-                let finance_pressure = self.macro_state.financing_pressure();
-                let issue_discount = (0.03
-                    + effective_pressure * 0.05
-                    + effective_pressure_squared * 0.08
-                    + finance_pressure * 0.055)
-                    .clamp(0.03, 0.65);
-                let raw_issue_price = self.player.stock_price * (1.0 - issue_discount);
-                if raw_issue_price <= MIN_STOCK_PRICE * 1.05 && amount > financing_base * 0.15 {
-                    return Err(
-                        "The market cannot absorb that stock sale at a viable price; try a smaller issue or rebuild valuation."
-                            .to_string(),
-                    );
-                }
-                let issue_price = raw_issue_price.max(MIN_STOCK_PRICE);
-                let new_shares = amount / issue_price;
-                let fee_rate = 0.025
-                    + effective_pressure * 0.012
-                    + effective_pressure_squared * 0.020
-                    + finance_pressure * 0.012;
-                if fee_rate >= 0.75 {
-                    return Err(format!(
-                        "The market cannot absorb that stock sale. Expected fees would consume {:.0}% of gross proceeds; try a smaller issue.",
-                        fee_rate * 100.0
-                    ));
-                }
-                let underwriting_cost = amount * fee_rate;
-                let net_proceeds = amount - underwriting_cost;
-                let transaction_pre_money = issue_price * old_shares;
-                let post_money_market_cap = (transaction_pre_money + net_proceeds)
-                    .max((old_shares + new_shares) * MIN_STOCK_PRICE);
-                self.player.cash += net_proceeds;
-                self.player.shares += new_shares;
-                self.player.stock_price =
-                    (post_money_market_cap / self.player.shares).max(MIN_STOCK_PRICE);
-                self.player.reputation = (self.player.reputation
-                    - effective_pressure * 1.5
-                    - effective_pressure_squared * 1.5)
-                    .clamp(0.0, 100.0);
-                self.equity_market_fatigue =
-                    (self.equity_market_fatigue + pressure * 0.80).clamp(0.0, 6.0);
-                Ok(format!(
-                    "Issued {:.0} shares at ${:.2}. Gross {}, net cash {} after fees; dilution reset stock to ${:.2}.",
-                    new_shares,
-                    issue_price,
-                    money(amount),
-                    money(net_proceeds),
-                    self.player.stock_price
-                ))
-            }
-            Decision::BuyBackStock { amount } => {
-                let buyback_share_floor = self
-                    .player_owned_shares
-                    .max(MIN_PUBLIC_SHARES_AFTER_BUYBACK);
-                if self.player.shares <= buyback_share_floor {
-                    return Err(
-                        "The company has too few public shares to buy back more.".to_string()
-                    );
-                }
-                let amount = positive_amount(amount, "stock buyback")?;
-                let old_market_cap = self.player.market_cap().max(1.0);
-                let old_shares = self.player.shares.max(1.0);
-                let pressure = amount / old_market_cap;
-                let remaining_cash_if_filled = self.player.cash - amount.min(self.player.cash);
-                let liquidity_drag = ((8_000.0 - remaining_cash_if_filled).max(0.0) / 8_000.0
-                    * 0.09)
-                    .clamp(0.0, 0.09);
-                let overextension_drag =
-                    ((amount / self.player.cash.max(1.0)) - 0.60).max(0.0) * 0.12;
-                // The repurchase premium is the price paid to coax sellers into the tender.
-                // It should not re-anchor the whole pre-buyback equity value. The smaller
-                // capital return signal below models the confidence/scarcity effect on the
-                // remaining float after cash has actually left the balance sheet.
-                let repurchase_premium = (pressure.min(1.0) * 0.55 + pressure.powf(1.20) * 0.04
-                    - liquidity_drag
-                    - overextension_drag
-                    - self.equity_market_fatigue * 0.45)
-                    .clamp(-0.18, 0.30);
-                let repurchase_price =
-                    (self.player.stock_price * (1.0 + repurchase_premium)).max(MIN_STOCK_PRICE);
-                let max_shares = (self.player.shares - buyback_share_floor).max(0.0);
-                let shares_bought = (amount / repurchase_price).min(max_shares);
-                if shares_bought < 1.0 {
-                    return Err(
-                        "The buyback is too small to retire a meaningful share count.".to_string(),
-                    );
-                }
-                let actual_spend = shares_bought * repurchase_price;
-                self.require_cash(actual_spend)?;
-                let remaining_shares = self.player.shares - shares_bought;
-                let float_retired = shares_bought / old_shares;
-                let realistic_post_market_cap =
-                    (old_market_cap - actual_spend).max(remaining_shares * MIN_STOCK_PRICE);
-                let realistic_price = realistic_post_market_cap / remaining_shares.max(1.0);
-                let capital_return_signal =
-                    (float_retired * 0.30 + pressure.min(1.0) * 0.04).clamp(0.0, 0.10);
-                let signal_lift = (capital_return_signal
-                    - liquidity_drag
-                    - overextension_drag
-                    - self.equity_market_fatigue * 0.45)
-                    .clamp(-0.08, 0.06);
-                self.player.cash -= actual_spend;
-                self.player.shares = remaining_shares;
-                self.player.stock_price =
-                    (realistic_price * (1.0 + signal_lift)).max(MIN_STOCK_PRICE);
-                Ok(format!(
-                    "Bought back {:.0} shares at ${:.2}, spending {} and retiring {:.1}% of the float. Shares outstanding now {:.0}; stock is ${:.2}.",
-                    shares_bought,
-                    repurchase_price,
-                    money(actual_spend),
-                    float_retired * 100.0,
-                    self.player.shares,
-                    self.player.stock_price
-                ))
-            }
-            Decision::Borrow { amount } => {
-                let amount = positive_amount(amount, "debt issuance")?;
-                let debt_capacity = self.borrowing_room();
-                if amount > debt_capacity {
-                    return Err(format!(
-                        "Bankers will only extend about {} more under current credit conditions.",
-                        money(debt_capacity)
-                    ));
-                }
-                self.player.cash += amount;
-                self.player.debt += amount;
-                let leverage = self.player.debt_to_assets();
-                let annual_rate = self.macro_state.annual_interest_rate_for(&self.player);
-                if leverage > 0.82 {
-                    self.player.reputation = (self.player.reputation - 3.2).clamp(0.0, 100.0);
-                } else if leverage > 0.68 {
-                    self.player.reputation = (self.player.reputation - 1.4).clamp(0.0, 100.0);
-                }
-                Ok(format!(
-                    "Borrowed {} at a current floating rate of {:.1}% annual. Debt/assets now {:.0}%.",
-                    money(amount),
-                    annual_rate * 100.0,
-                    leverage * 100.0
-                ))
-            }
-            Decision::RepayDebt { amount } => {
-                if self.player.debt <= 0.0 {
-                    return Err("There is no debt outstanding.".to_string());
-                }
-                let amount = positive_amount(amount, "debt repayment")?;
-                let payment = amount.min(self.player.debt);
-                self.require_cash(payment)?;
-                self.player.cash -= payment;
-                self.player.debt -= payment;
-                if self.player.debt > 0.0 {
-                    Ok(format!(
-                        "Repaid {} of debt. Debt/assets now {:.0}%; floating rate now {:.1}% annual.",
-                        money(payment),
-                        self.player.debt_to_assets() * 100.0,
-                        self.macro_state.annual_interest_rate_for(&self.player) * 100.0
-                    ))
-                } else {
-                    Ok("Repaid all outstanding debt.".to_string())
-                }
-            }
-            Decision::Diligence { competitor_index } => {
-                if competitor_index >= self.competitors.len() {
-                    return Err("No competitor has that number.".to_string());
-                }
-                let cost = self
-                    .diligence_cost(competitor_index)
-                    .expect("competitor index checked before diligence");
-                self.require_cash(cost)?;
-                self.player.cash -= cost;
-                let name = self.competitors[competitor_index].name.clone();
-                let mut alert_message = None;
-                if let Some(report) = self
-                    .diligence_reports
-                    .iter_mut()
-                    .find(|report| report.competitor_name == name && report.quarters_remaining > 0)
-                {
-                    report.quarters_remaining = DILIGENCE_DURATION_QUARTERS;
-                } else {
-                    alert_message = Some(self.apply_diligence_alert_response(competitor_index));
-                    let quoted_terms = self
-                        .current_acquisition_terms(competitor_index)
-                        .expect("competitor index checked before diligence terms quote");
-                    self.diligence_reports
-                        .retain(|report| report.competitor_name != name);
-                    self.diligence_reports.push(DiligenceReport {
-                        competitor_name: name.clone(),
-                        quarters_remaining: DILIGENCE_DURATION_QUARTERS,
-                        quoted_terms,
-                    });
-                }
-                let alert_suffix = alert_message
-                    .map(|message| format!(" {message}"))
-                    .unwrap_or_else(|| {
-                        " Existing diligence was extended without a new market signal.".to_string()
-                    });
-                Ok(format!(
-                    "Completed diligence on {name} for {}. Exact acquisition terms are available for {} quarter(s).{}",
-                    money(cost),
-                    DILIGENCE_DURATION_QUARTERS,
-                    alert_suffix
-                ))
-            }
-            Decision::Acquire { competitor_index } => {
-                if self.acquisition_cooldown > 0 {
-                    return Err(format!(
-                        "Integration capacity is tied up for {} more quarter(s) before another acquisition.",
-                        self.acquisition_cooldown
-                    ));
-                }
-
-                if competitor_index >= self.competitors.len() {
-                    return Err("No competitor has that number.".to_string());
-                }
-
-                if self.competitors.len() == 1 {
-                    return Err(
-                        "The market regulator will not approve the last independent rival's sale."
-                            .to_string(),
-                    );
-                }
-
-                let had_diligence = self.has_diligence(competitor_index);
-                let public_estimate = (!had_diligence)
-                    .then(|| self.public_acquisition_estimate(competitor_index))
-                    .flatten();
-                let terms = self
-                    .acquisition_terms(competitor_index)
-                    .expect("competitor index checked before acquisition");
-                if !had_diligence && self.player.cash + 0.01 < terms.price {
-                    return Err(format!(
-                        "The undiligenced close priced at {}, but cash on hand is only {}. Diligence would reveal and freeze exact terms before financing.",
-                        money(terms.price),
-                        money(self.player.cash)
-                    ));
-                }
-                self.require_cash(terms.price)?;
-                let rate_anchor_suffix = self.apply_acquisition_rate_anchor_shift(competitor_index);
-                let acquired = self.competitors.remove(competitor_index);
-                let acquired_name = acquired.name.clone();
-                let starting_customers = self.player.customers;
-                let starting_generation_capacity = self.player.generation_capacity_mwh;
-                let combined_reputation = weighted_average(
-                    self.player.reputation,
-                    starting_customers,
-                    acquired.reputation,
-                    terms.acquired_customers * 0.65,
-                )
-                .clamp(0.0, 100.0);
-                let combined_reliability = weighted_average(
-                    self.player.reliability,
-                    starting_generation_capacity,
-                    acquired.reliability,
-                    terms.acquired_generation_capacity_mwh * 0.70,
-                )
-                .clamp(0.35, 0.98);
-                let pre_close_integration_strain = self.integration_strain;
-                self.player.cash -= terms.price;
-                self.player.cash += terms.absorbed_cash;
-                self.player.debt += terms.assumed_debt;
-                // Integration losses keep roll-ups from being pure scale arbitrage.
-                self.player.customers += terms.acquired_customers;
-                self.player.generation_capacity_mwh += terms.acquired_generation_capacity_mwh;
-                self.player.distribution_capacity += terms.acquired_distribution_capacity;
-                self.player.asset_base += terms.acquired_asset_base;
-                self.player.reputation = combined_reputation;
-                self.player.reliability = combined_reliability;
-                self.player.reliability = (self.player.reliability - 0.035).clamp(0.35, 0.98);
-                self.player.reputation = (self.player.reputation - 1.5).clamp(0.0, 100.0);
-                self.acquisition_cooldown =
-                    acquisition_integration_cooldown(starting_customers, terms.acquired_customers);
-                self.integration_strain = (self.integration_strain
-                    + acquisition_integration_strain(starting_customers, terms.acquired_customers))
-                .clamp(0.0, 1.6);
-                let acquisition_stress_add = acquisition_covenant_stress_score(
-                    &acquired,
-                    &terms,
-                    starting_customers,
-                    pre_close_integration_strain,
-                    !had_diligence,
-                );
-                self.acquisition_stress =
-                    (self.acquisition_stress + acquisition_stress_add).clamp(0.0, 1.8);
-                self.diligence_reports
-                    .retain(|report| report.competitor_name != acquired_name);
-                let execution_suffix = self.apply_merger_execution_outcome(
-                    &acquired,
-                    &terms,
-                    starting_customers,
-                    pre_close_integration_strain,
-                );
-                let diligence_suffix = if had_diligence {
-                    String::new()
-                } else if let Some(public_estimate) = public_estimate {
-                    format!(
-                        " Closed without diligence; the public estimate centered on {} before hidden balance-sheet details resolved at close.",
-                        money(public_estimate.price)
-                    )
-                } else {
-                    " Closed without diligence; hidden balance-sheet details resolved at close."
-                        .to_string()
-                };
-                let underwriting_suffix = acquisition_underwriting_suffix(acquisition_stress_add);
-                Ok(format!(
-                    "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt). Integration will take {} quarter(s).",
-                    money(terms.price),
-                    money(terms.absorbed_cash),
-                    money(terms.assumed_debt),
-                    self.acquisition_cooldown
-                ) + &diligence_suffix
-                    + &underwriting_suffix
-                    + &execution_suffix
-                    + &rate_anchor_suffix)
-            }
-            Decision::AdjustRate { delta_cents } => {
-                if !delta_cents.is_finite() {
-                    return Err("The rate change must be a finite number.".to_string());
-                }
-                if delta_cents > 0.0 && self.rate_frozen() {
-                    return Err(
-                        "The market-wide rate freeze blocks any rate increase right now."
-                            .to_string(),
-                    );
-                }
-                let old = self.player.rate_cents;
-                let requested_rate = self.player.rate_cents + delta_cents;
-                if requested_rate <= 0.0 {
-                    return Err(
-                        "Rates must stay above 0.0c/kWh; use a positive tariff.".to_string()
-                    );
-                }
-                let public_ceiling =
-                    public_rate_tolerance(&self.market) + MAX_PUBLIC_RATE_PREMIUM_CENTS;
-                if delta_cents > 0.0 && requested_rate > public_ceiling {
-                    return Err(format!(
-                        "A {:.1}c rate is beyond public tolerance. Keep rates at or below {:.1}c/kWh or raise gradually.",
-                        requested_rate, public_ceiling
-                    ));
-                }
-                if requested_rate > MAX_CREDIBLE_RATE_CENTS {
-                    return Err(format!(
-                        "A {:.1}c rate is not a credible tariff. Keep rates at or below {:.1}c and let market consequences do the rest.",
-                        requested_rate, MAX_CREDIBLE_RATE_CENTS
-                    ));
-                }
-                self.player.rate_cents = requested_rate;
-                let actual_delta = self.player.rate_cents - old;
-                if actual_delta > 0.0 {
-                    self.player.reputation =
-                        (self.player.reputation - actual_delta * 1.8).clamp(0.0, 100.0);
-                    Ok(format!(
-                        "Raised the rate from {:.1}c to {:.1}c per kWh.",
-                        old, self.player.rate_cents
-                    ))
-                } else if actual_delta < 0.0 {
-                    self.player.reputation =
-                        (self.player.reputation + (-actual_delta) * 0.9).clamp(0.0, 100.0);
-                    Ok(format!(
-                        "Cut the rate from {:.1}c to {:.1}c per kWh.",
-                        old, self.player.rate_cents
-                    ))
-                } else {
-                    Ok(format!(
-                        "The rate remains {:.1}c per kWh.",
-                        self.player.rate_cents
-                    ))
-                }
-            }
+            Decision::EnterAdjacentMarket => self.apply_enter_adjacent_market(),
+            Decision::Marketing { spend } => self.apply_marketing(spend),
+            Decision::IssueStock { amount } => self.apply_issue_stock(amount),
+            Decision::BuyBackStock { amount } => self.apply_buyback_stock(amount),
+            Decision::DeclareDividend { amount } => self.apply_declare_dividend(amount),
+            Decision::Borrow { amount } => self.apply_borrow(amount),
+            Decision::RepayDebt { amount } => self.apply_repay_debt(amount),
+            Decision::Diligence { competitor_index } => self.apply_diligence(competitor_index),
+            Decision::Acquire { competitor_index } => self.apply_acquire(competitor_index),
+            Decision::AdjustRate { delta_cents } => self.apply_adjust_rate(delta_cents),
             Decision::HireMaintenanceManager { target_reliability } => {
-                let target = validate_maintenance_manager_target(target_reliability)?;
-                self.maintenance_manager_target = Some(target);
-                Ok(format!(
-                    "Hired a maintenance manager to maintain reliability near {:.0}%, spending up to {:.0}% of last quarter's profit.",
-                    target * 100.0,
-                    MAINTENANCE_MANAGER_PROFIT_SHARE * 100.0
-                ))
+                self.apply_hire_maintenance_manager(target_reliability)
             }
-            Decision::FireMaintenanceManager => {
-                if self.maintenance_manager_target.take().is_some() {
-                    Ok("Dismissed the maintenance manager.".to_string())
-                } else {
-                    Ok("No maintenance manager was on staff.".to_string())
-                }
-            }
+            Decision::FireMaintenanceManager => self.apply_fire_maintenance_manager(),
             Decision::HireMarketingManager { target_reputation } => {
-                let target = validate_marketing_manager_target(target_reputation)?;
-                self.marketing_manager_target = Some(target);
-                Ok(format!(
-                    "Hired a marketing manager to build reputation toward {:.0}, spending up to {:.0}% of last quarter's profit.",
-                    target,
-                    MARKETING_MANAGER_PROFIT_SHARE * 100.0
-                ))
+                self.apply_hire_marketing_manager(target_reputation)
             }
-            Decision::FireMarketingManager => {
-                if self.marketing_manager_target.take().is_some() {
-                    Ok("Dismissed the marketing manager.".to_string())
-                } else {
-                    Ok("No marketing manager was on staff.".to_string())
-                }
-            }
-            Decision::Maintenance { spend } => {
-                let spend = positive_amount(spend, "maintenance spend")?;
-                let spend = spend.clamp(1_500.0, 20_000.0);
-                let gain = maintenance_reliability_gain(&self.player, spend);
-                let new_reliability = (self.player.reliability + gain).clamp(0.35, MAX_RELIABILITY);
-                let actual_gain = new_reliability - self.player.reliability;
-                if actual_gain < MIN_MAINTENANCE_RELIABILITY_GAIN {
-                    return Err("Reliability is already at the 98% operating cap; maintenance would not improve service enough to justify spending.".to_string());
-                }
-                self.require_cash(spend)?;
-                self.player.cash -= spend;
-                self.player.reliability = new_reliability;
-                self.player.reputation = (self.player.reputation
-                    + maintenance_reputation_gain(&self.player, spend))
-                .clamp(0.0, 100.0);
-                let regional_relief =
-                    self.reduce_regional_integration(spend / 140_000.0, "service work");
-                Ok(format!(
-                    "Spent {} on reliability work; gained {:.1} reliability points.",
-                    money(spend),
-                    actual_gain * 100.0
-                ) + &regional_relief)
-            }
+            Decision::FireMarketingManager => self.apply_fire_marketing_manager(),
+            Decision::Maintenance { spend } => self.apply_maintenance(spend),
         }
     }
 
+    fn apply_build_generation(&mut self, capacity_mwh: f64) -> Result<String, String> {
+        let capacity_mwh = positive_amount(capacity_mwh, "generation project size")?;
+        let capacity_mwh =
+            capacity_mwh.clamp(MIN_GENERATION_PROJECT_MWH, MAX_GENERATION_PROJECT_MWH);
+        let cost = generation_project_cost(capacity_mwh);
+        let quarters = generation_project_duration(capacity_mwh);
+        self.require_cash(cost)?;
+        self.player.cash -= cost;
+        self.player.asset_base += cost;
+        self.pending_projects.push(Project {
+            name: "generation expansion".to_string(),
+            kind: ProjectKind::Generation { capacity_mwh },
+            quarters_remaining: quarters,
+        });
+        Ok(format!(
+            "Started a generation expansion for {}. It will add {:.0} MWh/quarter in {} quarter(s) and refresh fleet reliability when online.",
+            money(cost),
+            capacity_mwh,
+            quarters
+        ))
+    }
+
+    fn apply_build_distribution(&mut self, customer_capacity: f64) -> Result<String, String> {
+        let customer_capacity = positive_amount(customer_capacity, "distribution project size")?;
+        let customer_capacity = customer_capacity.clamp(
+            MIN_DISTRIBUTION_PROJECT_CUSTOMERS,
+            MAX_DISTRIBUTION_PROJECT_CUSTOMERS,
+        );
+        let cost = distribution_project_cost(customer_capacity);
+        let quarters = distribution_project_duration(customer_capacity);
+        self.require_cash(cost)?;
+        self.player.cash -= cost;
+        self.player.asset_base += cost;
+        self.pending_projects.push(Project {
+            name: "distribution expansion".to_string(),
+            kind: ProjectKind::Distribution { customer_capacity },
+            quarters_remaining: quarters,
+        });
+        Ok(format!(
+            "Started a distribution expansion for {}. It will add room for {:.0} customers in {} quarter(s).",
+            money(cost),
+            customer_capacity,
+            quarters
+        ))
+    }
+
+    fn apply_enter_adjacent_market(&mut self) -> Result<String, String> {
+        self.require_adjacent_expansion_ready()?;
+        let cost = self.adjacent_expansion_cost();
+        self.require_cash(cost)?;
+        self.player.cash -= cost;
+        self.player.asset_base += cost;
+        self.pending_projects.push(Project {
+            name: "adjacent territory entry".to_string(),
+            kind: ProjectKind::AdjacentTerritory {
+                addressable_customers: ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS,
+                initial_customers: ADJACENT_EXPANSION_INITIAL_CUSTOMERS,
+                incumbent_customers: ADJACENT_EXPANSION_INCUMBENT_CUSTOMERS,
+            },
+            quarters_remaining: ADJACENT_EXPANSION_DURATION_QUARTERS,
+        });
+        Ok(format!(
+            "Started adjacent territory entry for {}. It will open about {:.0} addressable customers in {} quarter(s), with an initial foothold and a local incumbent rival.",
+            money(cost),
+            ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS,
+            ADJACENT_EXPANSION_DURATION_QUARTERS
+        ))
+    }
+
+    fn apply_marketing(&mut self, spend: f64) -> Result<String, String> {
+        let spend = positive_amount(spend, "marketing spend")?;
+        let spend = spend.clamp(1_000.0, 25_000.0);
+        self.require_cash(spend)?;
+        self.player.cash -= spend;
+        self.player.marketing_momentum += (spend / 5_000.0) * 0.13;
+        self.player.reputation = (self.player.reputation + spend / 4_000.0).clamp(0.0, 100.0);
+        let regional_relief = self.reduce_regional_integration(spend / 160_000.0, "marketing");
+        Ok(format!(
+            "Spent {} on customer acquisition, financing offers, and sales coverage.",
+            money(spend)
+        ) + &regional_relief)
+    }
+
+    fn apply_issue_stock(&mut self, amount: f64) -> Result<String, String> {
+        let amount = positive_amount(amount, "stock issuance")?;
+        let old_shares = self.player.shares.max(1.0);
+        let financing_base = self.equity_issuance_base();
+        let pressure = amount / financing_base;
+        // Fatigue is accumulated on the same unitless scale as issue pressure, so repeat
+        // offerings price like a larger single offering even across separate commands.
+        let effective_pressure = pressure + self.equity_market_fatigue;
+        let effective_pressure_squared = effective_pressure * effective_pressure;
+        let finance_pressure = self.macro_state.financing_pressure();
+        let issue_discount = (0.03
+            + effective_pressure * 0.05
+            + effective_pressure_squared * 0.08
+            + finance_pressure * 0.055)
+            .clamp(0.03, 0.65);
+        let raw_issue_price = self.player.stock_price * (1.0 - issue_discount);
+        if raw_issue_price <= MIN_STOCK_PRICE * 1.05 && amount > financing_base * 0.15 {
+            return Err(
+                "The market cannot absorb that stock sale at a viable price; try a smaller issue or rebuild valuation."
+                    .to_string(),
+            );
+        }
+        let issue_price = raw_issue_price.max(MIN_STOCK_PRICE);
+        let new_shares = amount / issue_price;
+        let fee_rate = 0.025
+            + effective_pressure * 0.012
+            + effective_pressure_squared * 0.020
+            + finance_pressure * 0.012;
+        if fee_rate >= 0.75 {
+            return Err(format!(
+                "The market cannot absorb that stock sale. Expected fees would consume {:.0}% of gross proceeds; try a smaller issue.",
+                fee_rate * 100.0
+            ));
+        }
+        let underwriting_cost = amount * fee_rate;
+        let net_proceeds = amount - underwriting_cost;
+        let transaction_pre_money = issue_price * old_shares;
+        let post_money_market_cap =
+            (transaction_pre_money + net_proceeds).max((old_shares + new_shares) * MIN_STOCK_PRICE);
+        self.player.cash += net_proceeds;
+        self.player.shares += new_shares;
+        self.player.stock_price = (post_money_market_cap / self.player.shares).max(MIN_STOCK_PRICE);
+        self.player.reputation =
+            (self.player.reputation - effective_pressure * 1.5 - effective_pressure_squared * 1.5)
+                .clamp(0.0, 100.0);
+        self.equity_market_fatigue = (self.equity_market_fatigue + pressure * 0.80).clamp(0.0, 6.0);
+        Ok(format!(
+            "Issued {:.0} shares at ${:.2}. Gross {}, net cash {} after fees; dilution reset stock to ${:.2}.",
+            new_shares,
+            issue_price,
+            money(amount),
+            money(net_proceeds),
+            self.player.stock_price
+        ))
+    }
+
+    fn apply_buyback_stock(&mut self, amount: f64) -> Result<String, String> {
+        let buyback_share_floor = self
+            .player_owned_shares
+            .max(MIN_PUBLIC_SHARES_AFTER_BUYBACK);
+        if self.player.shares <= buyback_share_floor {
+            return Err("The company has too few public shares to buy back more.".to_string());
+        }
+        let amount = positive_amount(amount, "stock buyback")?;
+        let old_market_cap = self.player.market_cap().max(1.0);
+        let old_shares = self.player.shares.max(1.0);
+        let pressure = amount / old_market_cap;
+        let remaining_cash_if_filled = self.player.cash - amount.min(self.player.cash);
+        let liquidity_drag =
+            ((8_000.0 - remaining_cash_if_filled).max(0.0) / 8_000.0 * 0.09).clamp(0.0, 0.09);
+        let overextension_drag = ((amount / self.player.cash.max(1.0)) - 0.60).max(0.0) * 0.12;
+        // The repurchase premium is the price paid to coax sellers into the tender.
+        // It should not re-anchor the whole pre-buyback equity value. The smaller
+        // capital return signal below models the confidence/scarcity effect on the
+        // remaining float after cash has actually left the balance sheet.
+        let repurchase_premium = (pressure.min(1.0) * 0.55 + pressure.powf(1.20) * 0.04
+            - liquidity_drag
+            - overextension_drag
+            - self.equity_market_fatigue * 0.45)
+            .clamp(-0.18, 0.30);
+        let repurchase_price =
+            (self.player.stock_price * (1.0 + repurchase_premium)).max(MIN_STOCK_PRICE);
+        let max_shares = (self.player.shares - buyback_share_floor).max(0.0);
+        let shares_bought = (amount / repurchase_price).min(max_shares);
+        if shares_bought < 1.0 {
+            return Err("The buyback is too small to retire a meaningful share count.".to_string());
+        }
+        let actual_spend = shares_bought * repurchase_price;
+        self.require_cash(actual_spend)?;
+        let remaining_shares = self.player.shares - shares_bought;
+        let float_retired = shares_bought / old_shares;
+        let realistic_post_market_cap =
+            (old_market_cap - actual_spend).max(remaining_shares * MIN_STOCK_PRICE);
+        let realistic_price = realistic_post_market_cap / remaining_shares.max(1.0);
+        let capital_return_signal =
+            (float_retired * 0.30 + pressure.min(1.0) * 0.04).clamp(0.0, 0.10);
+        let signal_lift = (capital_return_signal
+            - liquidity_drag
+            - overextension_drag
+            - self.equity_market_fatigue * 0.45)
+            .clamp(-0.08, 0.06);
+        self.player.cash -= actual_spend;
+        self.player.shares = remaining_shares;
+        self.player.stock_price = (realistic_price * (1.0 + signal_lift)).max(MIN_STOCK_PRICE);
+        Ok(format!(
+            "Bought back {:.0} shares at ${:.2}, spending {} and retiring {:.1}% of the float. Shares outstanding now {:.0}; stock is ${:.2}.",
+            shares_bought,
+            repurchase_price,
+            money(actual_spend),
+            float_retired * 100.0,
+            self.player.shares,
+            self.player.stock_price
+        ))
+    }
+
+    fn apply_declare_dividend(&mut self, amount: f64) -> Result<String, String> {
+        let amount = positive_amount(amount, "dividend")?;
+        self.require_cash(amount)?;
+        let shares = self.player.shares.max(1.0);
+        let dividend_per_share = amount / shares;
+        let founder_payment = dividend_per_share * self.player_owned_shares.max(0.0);
+        self.player.cash -= amount;
+        self.player.stock_price =
+            (self.player.stock_price - dividend_per_share).max(MIN_STOCK_PRICE);
+        self.player_dividends_received += founder_payment;
+        Ok(format!(
+            "Declared a {} dividend (${:.2}/share). Founder received {}; company cash fell by {}.",
+            money(amount),
+            dividend_per_share,
+            money(founder_payment),
+            money(amount)
+        ))
+    }
+
+    fn apply_borrow(&mut self, amount: f64) -> Result<String, String> {
+        let amount = positive_amount(amount, "debt issuance")?;
+        let debt_capacity = self.borrowing_room();
+        if amount > debt_capacity {
+            return Err(format!(
+                "Bankers will only extend about {} more under current credit conditions.",
+                money(debt_capacity)
+            ));
+        }
+        self.player.cash += amount;
+        self.player.debt += amount;
+        let leverage = self.player.debt_to_assets();
+        let annual_rate = self.macro_state.annual_interest_rate_for(&self.player);
+        if leverage > 0.82 {
+            self.player.reputation = (self.player.reputation - 3.2).clamp(0.0, 100.0);
+        } else if leverage > 0.68 {
+            self.player.reputation = (self.player.reputation - 1.4).clamp(0.0, 100.0);
+        }
+        Ok(format!(
+            "Borrowed {} at a current floating rate of {:.1}% annual. Debt/assets now {:.0}%.",
+            money(amount),
+            annual_rate * 100.0,
+            leverage * 100.0
+        ))
+    }
+
+    fn apply_repay_debt(&mut self, amount: f64) -> Result<String, String> {
+        if self.player.debt <= 0.0 {
+            return Err("There is no debt outstanding.".to_string());
+        }
+        let amount = positive_amount(amount, "debt repayment")?;
+        let payment = amount.min(self.player.debt);
+        self.require_cash(payment)?;
+        self.player.cash -= payment;
+        self.player.debt -= payment;
+        if self.player.debt > 0.0 {
+            Ok(format!(
+                "Repaid {} of debt. Debt/assets now {:.0}%; floating rate now {:.1}% annual.",
+                money(payment),
+                self.player.debt_to_assets() * 100.0,
+                self.macro_state.annual_interest_rate_for(&self.player) * 100.0
+            ))
+        } else {
+            Ok("Repaid all outstanding debt.".to_string())
+        }
+    }
+
+    fn apply_diligence(&mut self, competitor_index: usize) -> Result<String, String> {
+        if competitor_index >= self.competitors.len() {
+            return Err("No competitor has that number.".to_string());
+        }
+        let cost = self
+            .diligence_cost(competitor_index)
+            .expect("competitor index checked before diligence");
+        self.require_cash(cost)?;
+        self.player.cash -= cost;
+        let name = self.competitors[competitor_index].name.clone();
+        let mut alert_message = None;
+        if let Some(report) = self
+            .diligence_reports
+            .iter_mut()
+            .find(|report| report.competitor_name == name && report.quarters_remaining > 0)
+        {
+            report.quarters_remaining = DILIGENCE_DURATION_QUARTERS;
+        } else {
+            alert_message = Some(self.apply_diligence_alert_response(competitor_index));
+            let quoted_terms = self
+                .current_acquisition_terms(competitor_index)
+                .expect("competitor index checked before diligence terms quote");
+            self.diligence_reports
+                .retain(|report| report.competitor_name != name);
+            self.diligence_reports.push(DiligenceReport {
+                competitor_name: name.clone(),
+                quarters_remaining: DILIGENCE_DURATION_QUARTERS,
+                quoted_terms,
+            });
+        }
+        let alert_suffix = alert_message
+            .map(|message| format!(" {message}"))
+            .unwrap_or_else(|| {
+                " Existing diligence was extended without a new market signal.".to_string()
+            });
+        Ok(format!(
+            "Completed diligence on {name} for {}. Exact acquisition terms are available for {} quarter(s).{}",
+            money(cost),
+            DILIGENCE_DURATION_QUARTERS,
+            alert_suffix
+        ))
+    }
+
+    fn apply_acquire(&mut self, competitor_index: usize) -> Result<String, String> {
+        if self.acquisition_cooldown > 0 {
+            return Err(format!(
+                "Integration capacity is tied up for {} more quarter(s) before another acquisition.",
+                self.acquisition_cooldown
+            ));
+        }
+
+        if competitor_index >= self.competitors.len() {
+            return Err("No competitor has that number.".to_string());
+        }
+
+        if self.competitors.len() == 1 {
+            return Err(
+                "The market regulator will not approve the last independent rival's sale."
+                    .to_string(),
+            );
+        }
+
+        let had_diligence = self.has_diligence(competitor_index);
+        let public_estimate = (!had_diligence)
+            .then(|| self.public_acquisition_estimate(competitor_index))
+            .flatten();
+        let terms = self
+            .acquisition_terms(competitor_index)
+            .expect("competitor index checked before acquisition");
+        if !had_diligence && self.player.cash + 0.01 < terms.price {
+            return Err(format!(
+                "The undiligenced close priced at {}, but cash on hand is only {}. Diligence would reveal and freeze exact terms before financing.",
+                money(terms.price),
+                money(self.player.cash)
+            ));
+        }
+        self.require_cash(terms.price)?;
+        let rate_anchor_suffix = self.apply_acquisition_rate_anchor_shift(competitor_index);
+        let acquired = self.competitors.remove(competitor_index);
+        let acquired_name = acquired.name.clone();
+        let starting_customers = self.player.customers;
+        let starting_generation_capacity = self.player.generation_capacity_mwh;
+        let combined_reputation = weighted_average(
+            self.player.reputation,
+            starting_customers,
+            acquired.reputation,
+            terms.acquired_customers * 0.65,
+        )
+        .clamp(0.0, 100.0);
+        let combined_reliability = weighted_average(
+            self.player.reliability,
+            starting_generation_capacity,
+            acquired.reliability,
+            terms.acquired_generation_capacity_mwh * 0.70,
+        )
+        .clamp(0.35, 0.98);
+        let pre_close_integration_strain = self.integration_strain;
+        self.player.cash -= terms.price;
+        self.player.cash += terms.absorbed_cash;
+        self.player.debt += terms.assumed_debt;
+        // Integration losses keep roll-ups from being pure scale arbitrage.
+        self.player.customers += terms.acquired_customers;
+        self.player.generation_capacity_mwh += terms.acquired_generation_capacity_mwh;
+        self.player.distribution_capacity += terms.acquired_distribution_capacity;
+        self.player.asset_base += terms.acquired_asset_base;
+        self.player.reputation = combined_reputation;
+        self.player.reliability = combined_reliability;
+        self.player.reliability = (self.player.reliability - 0.035).clamp(0.35, 0.98);
+        self.player.reputation = (self.player.reputation - 1.5).clamp(0.0, 100.0);
+        self.acquisition_cooldown =
+            acquisition_integration_cooldown(starting_customers, terms.acquired_customers);
+        self.integration_strain = (self.integration_strain
+            + acquisition_integration_strain(starting_customers, terms.acquired_customers))
+        .clamp(0.0, 1.6);
+        let acquisition_stress_add = acquisition_covenant_stress_score(
+            &acquired,
+            &terms,
+            starting_customers,
+            pre_close_integration_strain,
+            !had_diligence,
+        );
+        self.acquisition_stress =
+            (self.acquisition_stress + acquisition_stress_add).clamp(0.0, 1.8);
+        self.diligence_reports
+            .retain(|report| report.competitor_name != acquired_name);
+        let execution_suffix = self.apply_merger_execution_outcome(
+            &acquired,
+            &terms,
+            starting_customers,
+            pre_close_integration_strain,
+        );
+        let diligence_suffix = if had_diligence {
+            String::new()
+        } else if let Some(public_estimate) = public_estimate {
+            format!(
+                " Closed without diligence; the public estimate centered on {} before hidden balance-sheet details resolved at close.",
+                money(public_estimate.price)
+            )
+        } else {
+            " Closed without diligence; hidden balance-sheet details resolved at close.".to_string()
+        };
+        let underwriting_suffix = acquisition_underwriting_suffix(acquisition_stress_add);
+        Ok(format!(
+            "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt). Integration will take {} quarter(s).",
+            money(terms.price),
+            money(terms.absorbed_cash),
+            money(terms.assumed_debt),
+            self.acquisition_cooldown
+        ) + &diligence_suffix
+            + &underwriting_suffix
+            + &execution_suffix
+            + &rate_anchor_suffix)
+    }
+
+    fn apply_adjust_rate(&mut self, delta_cents: f64) -> Result<String, String> {
+        if !delta_cents.is_finite() {
+            return Err("The rate change must be a finite number.".to_string());
+        }
+        if delta_cents > 0.0 && self.rate_frozen() {
+            return Err(
+                "The market-wide rate freeze blocks any rate increase right now.".to_string(),
+            );
+        }
+        let old = self.player.rate_cents;
+        let requested_rate = self.player.rate_cents + delta_cents;
+        if requested_rate <= 0.0 {
+            return Err("Rates must stay above 0.0c/kWh; use a positive tariff.".to_string());
+        }
+        let public_ceiling = public_rate_tolerance(&self.market) + MAX_PUBLIC_RATE_PREMIUM_CENTS;
+        if delta_cents > 0.0 && requested_rate > public_ceiling {
+            return Err(format!(
+                "A {:.1}c rate is beyond public tolerance. Keep rates at or below {:.1}c/kWh or raise gradually.",
+                requested_rate, public_ceiling
+            ));
+        }
+        if requested_rate > MAX_CREDIBLE_RATE_CENTS {
+            return Err(format!(
+                "A {:.1}c rate is not a credible tariff. Keep rates at or below {:.1}c and let market consequences do the rest.",
+                requested_rate, MAX_CREDIBLE_RATE_CENTS
+            ));
+        }
+        self.player.rate_cents = requested_rate;
+        let actual_delta = self.player.rate_cents - old;
+        if actual_delta > 0.0 {
+            self.player.reputation =
+                (self.player.reputation - actual_delta * 1.8).clamp(0.0, 100.0);
+            Ok(format!(
+                "Raised the rate from {:.1}c to {:.1}c per kWh.",
+                old, self.player.rate_cents
+            ))
+        } else if actual_delta < 0.0 {
+            self.player.reputation =
+                (self.player.reputation + (-actual_delta) * 0.9).clamp(0.0, 100.0);
+            Ok(format!(
+                "Cut the rate from {:.1}c to {:.1}c per kWh.",
+                old, self.player.rate_cents
+            ))
+        } else {
+            Ok(format!(
+                "The rate remains {:.1}c per kWh.",
+                self.player.rate_cents
+            ))
+        }
+    }
+
+    fn apply_hire_maintenance_manager(
+        &mut self,
+        target_reliability: f64,
+    ) -> Result<String, String> {
+        let target = validate_maintenance_manager_target(target_reliability)?;
+        self.maintenance_manager_target = Some(target);
+        Ok(format!(
+            "Hired a maintenance manager to maintain reliability near {:.0}%, spending up to {:.0}% of last quarter's profit.",
+            target * 100.0,
+            MAINTENANCE_MANAGER_PROFIT_SHARE * 100.0
+        ))
+    }
+
+    fn apply_fire_maintenance_manager(&mut self) -> Result<String, String> {
+        if self.maintenance_manager_target.take().is_some() {
+            Ok("Dismissed the maintenance manager.".to_string())
+        } else {
+            Ok("No maintenance manager was on staff.".to_string())
+        }
+    }
+
+    fn apply_hire_marketing_manager(&mut self, target_reputation: f64) -> Result<String, String> {
+        let target = validate_marketing_manager_target(target_reputation)?;
+        self.marketing_manager_target = Some(target);
+        Ok(format!(
+            "Hired a marketing manager to build reputation toward {:.0}, spending up to {:.0}% of last quarter's profit.",
+            target,
+            MARKETING_MANAGER_PROFIT_SHARE * 100.0
+        ))
+    }
+
+    fn apply_fire_marketing_manager(&mut self) -> Result<String, String> {
+        if self.marketing_manager_target.take().is_some() {
+            Ok("Dismissed the marketing manager.".to_string())
+        } else {
+            Ok("No marketing manager was on staff.".to_string())
+        }
+    }
+
+    fn apply_maintenance(&mut self, spend: f64) -> Result<String, String> {
+        let spend = positive_amount(spend, "maintenance spend")?;
+        let spend = spend.clamp(1_500.0, 20_000.0);
+        let gain = maintenance_reliability_gain(&self.player, spend);
+        let new_reliability = (self.player.reliability + gain).clamp(0.35, MAX_RELIABILITY);
+        let actual_gain = new_reliability - self.player.reliability;
+        if actual_gain < MIN_MAINTENANCE_RELIABILITY_GAIN {
+            return Err("Reliability is already at the 98% operating cap; maintenance would not improve service enough to justify spending.".to_string());
+        }
+        self.require_cash(spend)?;
+        self.player.cash -= spend;
+        self.player.reliability = new_reliability;
+        self.player.reputation = (self.player.reputation
+            + maintenance_reputation_gain(&self.player, spend))
+        .clamp(0.0, 100.0);
+        let regional_relief = self.reduce_regional_integration(spend / 140_000.0, "service work");
+        Ok(format!(
+            "Spent {} on reliability work; gained {:.1} reliability points.",
+            money(spend),
+            actual_gain * 100.0
+        ) + &regional_relief)
+    }
     pub fn advance_quarter(&mut self) -> QuarterReport {
         if let Some(outcome) = &self.outcome {
             let report = QuarterReport {
@@ -2736,9 +2779,24 @@ impl Game {
 
         self.competitors
             .iter()
-            .filter(|competitor| competitor.cash >= HOSTILE_TAKEOVER_RIVAL_CASH)
-            .max_by(|left, right| left.cash.total_cmp(&right.cash))
+            .filter(|competitor| {
+                self.rival_takeover_financing_capacity(competitor)
+                    >= HOSTILE_TAKEOVER_RIVAL_FINANCING_CAPACITY
+            })
+            .max_by(|left, right| {
+                self.rival_takeover_financing_capacity(left)
+                    .total_cmp(&self.rival_takeover_financing_capacity(right))
+            })
             .map(|competitor| competitor.name.clone())
+    }
+
+    fn rival_takeover_financing_capacity(&self, competitor: &Utility) -> f64 {
+        let macro_limit = self.macro_state.borrowing_limit_ratio();
+        let service_drag = (0.76 - competitor.reliability).clamp(0.0, 0.20) * 0.34;
+        let reputation_drag = ((48.0 - competitor.reputation) / 100.0).clamp(0.0, 0.18) * 0.36;
+        let limit = (macro_limit - service_drag - reputation_drag).clamp(0.36, macro_limit);
+        let borrowing_capacity = (competitor.asset_base * limit - competitor.debt).max(0.0);
+        competitor.cash.max(0.0) + borrowing_capacity * HOSTILE_TAKEOVER_RIVAL_DEBT_CAPACITY_WEIGHT
     }
 
     fn check_outcome(&mut self, finances: &FirmFinances) {

@@ -13,7 +13,8 @@ fn main() {
         "stress scan; seeds: {}; variance amplitude {:.2}; strategies: {}",
         options.seeds,
         variance.amplitude,
-        Strategy::all()
+        options
+            .strategies()
             .iter()
             .map(|strategy| strategy.name())
             .collect::<Vec<_>>()
@@ -21,12 +22,14 @@ fn main() {
     );
 
     let mut scans = Vec::new();
-    for strategy in Strategy::all() {
+    for strategy in options.strategies() {
         let scan = scan_strategy(options.seeds, variance, strategy);
         print_strategy_line(&scan.summary, strategy);
         scans.push(scan);
     }
 
+    println!();
+    print_defeat_mode_coverage(&scans);
     println!();
     print_cross_strategy_findings(&scans);
     println!();
@@ -36,6 +39,7 @@ fn main() {
 struct Options {
     seeds: u32,
     variance: f64,
+    strategy: Option<Strategy>,
 }
 
 impl Options {
@@ -43,6 +47,7 @@ impl Options {
         let mut args = std::env::args().skip(1);
         let mut seeds = 10_000;
         let mut variance = 1.0;
+        let mut strategy = None;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--seeds" => {
@@ -55,10 +60,43 @@ impl Options {
                         variance = value.clamp(0.0, 2.0);
                     }
                 }
+                "--strategy" => {
+                    if let Some(raw) = args.next() {
+                        strategy = parse_strategy(&raw);
+                        if strategy.is_none() {
+                            eprintln!("unknown strategy '{raw}'; scanning all strategies");
+                        }
+                    }
+                }
                 _ => {}
             }
         }
-        Self { seeds, variance }
+        Self {
+            seeds,
+            variance,
+            strategy,
+        }
+    }
+
+    fn strategies(&self) -> Vec<Strategy> {
+        self.strategy
+            .map(|strategy| vec![strategy])
+            .unwrap_or_else(|| Strategy::all().to_vec())
+    }
+}
+
+fn parse_strategy(raw: &str) -> Option<Strategy> {
+    match raw.to_ascii_lowercase().as_str() {
+        "naive" | "baseline" => Some(Strategy::Naive),
+        "organic" | "growth" => Some(Strategy::Organic),
+        "balanced" | "hybrid" => Some(Strategy::Balanced),
+        "regional" | "expansion" | "platform" => Some(Strategy::Regional),
+        "mna" | "ma" | "m&a" | "acquire" | "acquisition" | "expert" => Some(Strategy::Mna),
+        "raider" | "rollup" | "reckless" => Some(Strategy::Raider),
+        "landshark" | "optimizer" | "ev" => Some(Strategy::Landshark),
+        "costanza" | "opposite" | "contrarian" => Some(Strategy::Costanza),
+        "glonzo" | "random" | "chaos" => Some(Strategy::Glonzo),
+        _ => None,
     }
 }
 
@@ -74,6 +112,7 @@ struct Trace {
     strategy: Strategy,
     final_quarter: u32,
     outcome: String,
+    outcome_details: String,
     victory: bool,
     final_share: f64,
     final_cash: f64,
@@ -97,6 +136,7 @@ impl Trace {
             strategy,
             final_quarter: 0,
             outcome: "unfinished".to_string(),
+            outcome_details: String::new(),
             victory: false,
             final_share: 0.0,
             final_cash: 0.0,
@@ -130,6 +170,7 @@ impl Trace {
         self.max_acquisition_stress = self.max_acquisition_stress.max(game.acquisition_stress);
         if let Some(outcome) = &game.outcome {
             self.outcome = outcome.headline.clone();
+            self.outcome_details = outcome.details.clone();
             self.victory = outcome.kind == OutcomeKind::Victory;
         }
     }
@@ -169,6 +210,10 @@ fn print_strategy_line(summary: &StrategySummary, strategy: Strategy) {
 
 fn print_cross_strategy_findings(scans: &[StrategyScan]) {
     println!("cross-strategy seed findings");
+    if scans.len() < Strategy::all().len() {
+        println!("  focused strategy scan; cross-strategy seed comparisons skipped");
+        return;
+    }
     let rows = traces_by_seed(scans);
     let deliberate = [
         Strategy::Organic,
@@ -225,6 +270,44 @@ fn print_cross_strategy_findings(scans: &[StrategyScan]) {
         .take(12)
         .collect::<Vec<_>>();
     print_seed_rows("favorable openers (naive wins)", &easy_openers);
+}
+
+fn print_defeat_mode_coverage(scans: &[StrategyScan]) {
+    let traces = scans
+        .iter()
+        .flat_map(|scan| scan.traces.iter())
+        .collect::<Vec<_>>();
+    let total = traces.len();
+    let board = traces
+        .iter()
+        .filter(|trace| !trace.victory && trace.outcome.contains("Board"))
+        .count();
+    let receivership = traces
+        .iter()
+        .filter(|trace| !trace.victory && trace.outcome.contains("Receivership"))
+        .count();
+    let acquisition_stress_receivership = traces
+        .iter()
+        .filter(|trace| {
+            !trace.victory
+                && trace.outcome.contains("Receivership")
+                && trace.outcome_details.contains("strained acquisition")
+        })
+        .count();
+    let hostile_takeover = traces
+        .iter()
+        .filter(|trace| !trace.victory && trace.outcome.contains("Hostile Takeover"))
+        .count();
+    let market_access = traces
+        .iter()
+        .filter(|trace| !trace.victory && trace.outcome.contains("Market Access"))
+        .count();
+    println!("defeat-mode coverage across {total} games");
+    println!("  board review:            {board}");
+    println!("  receivership:            {receivership}");
+    println!("  market access:           {market_access}");
+    println!("  hostile takeover:        {hostile_takeover}");
+    println!("  acquisition stress recv: {acquisition_stress_receivership}");
 }
 
 fn print_edge_cases(scans: &[StrategyScan]) {

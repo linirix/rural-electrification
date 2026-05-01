@@ -45,6 +45,7 @@ rate down 1
 
 issue [amount]
 buyback [amount]
+dividend [amount]
 borrow [amount|max]
 repay [amount|max]
 diligence <rival-number>
@@ -72,6 +73,7 @@ load campaign1
 
 - `issue [amount]` has no fixed proceeds cap. Larger issues are possible, but they face steeper discounts, fees, dilution, reputation pressure, and equity-market fatigue.
 - `buyback [amount]` has no fixed command cap, but it cannot spend cash you do not have or retire the last public float. Material buybacks retire shares at a premium and reprice the remaining float.
+- `dividend [amount]` pays a company-wide dividend pro rata to all shareholders. Company cash falls by the full amount, while founder wealth receives only the founder-owned share.
 - `borrow [amount|max]` is floating-rate and limited by borrowing room, which depends on asset base, current debt, and credit conditions.
 - `repay [amount|max]` is limited by cash on hand and outstanding debt.
 - `diligence <number>` reveals exact acquisition terms for a rival for three quarters and freezes that target's acquisition quote during the diligence window, but it alerts the target and can trigger defensive financing, retention, rate, and capacity moves.
@@ -119,18 +121,19 @@ cargo run --bin playtest -- --strategy raider --seeds 500
 cargo run --bin playtest -- --strategy glonzo --seeds 500
 cargo run --bin playtest -- --all-strategies --seeds 500
 cargo run --bin playtest -- --sweep-starts --all-strategies --seeds 1000
+cargo run --bin stress_scan -- --strategy raider --seeds 2000
 ```
 
 Useful playtest flags:
 
-- `--strategy naive|organic|balanced|regional|mna|raider|glonzo|all`
+- `--strategy naive|organic|balanced|regional|mna|raider|landshark|costanza|glonzo|all`
 - `--all-strategies`
 - `--seeds <count>`
 - `--variance <amplitude>`
 - `--sweep-starts`
 - `--verbose`
 
-Playtest summaries include peak acquisition stress so reckless roll-up strategies can be evaluated separately from disciplined M&A. There is also a strategy regression test in `tests/strategy_balance.rs` that keeps the major automated strategies inside expected win-rate bands.
+Playtest summaries include peak acquisition stress so reckless roll-up strategies can be evaluated separately from disciplined M&A. `stress_scan` accepts `--strategy`, `--seeds`, and `--variance`, and adds cross-strategy edge-case and defeat-mode coverage output. There is also a strategy regression test in `tests/strategy_balance.rs` that keeps the major automated strategies inside expected win-rate bands.
 
 ## Project Layout
 

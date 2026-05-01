@@ -821,6 +821,22 @@ fn issue_single_word_runs_stock_issuance() {
 }
 
 #[test]
+fn dividend_command_pays_founder_pro_rata() {
+    let mut game = Game::with_seed(110);
+    let starting_cash = game.player.cash;
+    let amount = 3_000.0;
+    let expected_founder_payment = amount * game.player_ownership();
+
+    match handle_command(&mut game, "dividend 3000") {
+        CommandResult::Continue(message) => assert!(message.contains("Founder received")),
+        _ => panic!("dividend should apply"),
+    }
+
+    assert!((game.player.cash - (starting_cash - amount)).abs() < 0.01);
+    assert!((game.player_dividends_received - expected_founder_payment).abs() < 0.01);
+}
+
+#[test]
 fn invalid_money_amounts_are_rejected_without_defaulting() {
     let mut game = Game::with_seed(118);
     let starting_cash = game.player.cash;
@@ -1253,6 +1269,7 @@ fn financial_lines_show_break_even_and_interest_coverage() {
     assert!(joined.contains("Break-even"));
     assert!(joined.contains("Coverage"));
     assert!(joined.contains("Founder"));
+    assert!(joined.contains("/"));
     assert!(joined.contains("Founder value"));
 }
 
@@ -1267,6 +1284,21 @@ fn stock_preview_shows_founder_dilution_and_value() {
             assert!(joined.contains("Founder value"));
         }
         _ => panic!("preview issue should show founder economics"),
+    }
+}
+
+#[test]
+fn dividend_preview_shows_founder_cash_transfer() {
+    let mut game = Game::with_seed(120);
+
+    match handle_command(&mut game, "preview dividend 3000") {
+        CommandResult::Preview(lines) => {
+            let joined = lines.join("\n");
+            assert!(joined.contains("Founder dividends"));
+            assert!(joined.contains("founder receives"));
+            assert!(joined.contains("Stock price"));
+        }
+        _ => panic!("preview dividend should show founder economics"),
     }
 }
 

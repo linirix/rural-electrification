@@ -27,6 +27,56 @@ fn player_ownership_starts_as_founder_stake() {
 }
 
 #[test]
+fn dividends_pay_founder_pro_rata_without_creating_wealth() {
+    let mut game = Game::with_seed(2);
+    let starting_cash = game.player.cash;
+    let starting_price = game.player.stock_price;
+    let starting_wealth = game.player_wealth();
+    let starting_dividends = game.player_dividends_received;
+    let shares = game.player.shares;
+    let owned_shares = game.player_owned_shares;
+    let amount = 4_000.0;
+
+    game.apply_decision(Decision::DeclareDividend { amount })
+        .unwrap();
+
+    let dividend_per_share = amount / shares;
+    let founder_payment = dividend_per_share * owned_shares;
+    assert!((game.player.cash - (starting_cash - amount)).abs() < 0.01);
+    assert!((game.player.stock_price - (starting_price - dividend_per_share)).abs() < 0.01);
+    assert!((game.player_dividends_received - (starting_dividends + founder_payment)).abs() < 0.01);
+    assert!((game.player_wealth() - starting_wealth).abs() < 0.01);
+}
+
+#[test]
+fn dividends_reflect_diluted_founder_ownership() {
+    let mut game = Game::with_seed(3);
+    game.apply_decision(Decision::IssueStock { amount: 20_000.0 })
+        .unwrap();
+    let ownership = game.player_ownership();
+    let amount = 5_000.0;
+
+    game.apply_decision(Decision::DeclareDividend { amount })
+        .unwrap();
+
+    assert!(ownership < STARTING_PLAYER_OWNERSHIP);
+    assert!((game.player_dividends_received - amount * ownership).abs() < 0.01);
+}
+
+#[test]
+fn dividend_cannot_exceed_cash_available() {
+    let mut game = Game::with_seed(4);
+    game.player.cash = 1_000.0;
+    let starting_price = game.player.stock_price;
+    let result = game.apply_decision(Decision::DeclareDividend { amount: 2_000.0 });
+
+    assert!(result.is_err());
+    assert_eq!(game.player.cash, 1_000.0);
+    assert_eq!(game.player_dividends_received, 0.0);
+    assert_eq!(game.player.stock_price, starting_price);
+}
+
+#[test]
 fn fixed_initial_variance_preserves_baseline_start() {
     let game = Game::with_seed_and_initial_variance(1, InitialVariance::fixed());
 
@@ -1873,7 +1923,7 @@ fn depressed_leveraged_player_can_face_hostile_takeover() {
     game.player.cash = 15_000.0;
     game.player.shares = 2_000.0;
     game.player.stock_price = 45.0;
-    game.competitors[0].cash = HOSTILE_TAKEOVER_RIVAL_CASH + 20_000.0;
+    game.competitors[0].cash = HOSTILE_TAKEOVER_RIVAL_FINANCING_CAPACITY + 20_000.0;
     let bidder_name = game.competitors[0].name.clone();
     let finances = FirmFinances {
         revenue: 14_000.0,
@@ -1890,6 +1940,37 @@ fn depressed_leveraged_player_can_face_hostile_takeover() {
     assert_eq!(outcome.kind, OutcomeKind::Defeat);
     assert_eq!(outcome.headline, "Hostile Takeover");
     assert!(!outcome.can_continue);
+    assert!(outcome.details.contains(&bidder_name));
+}
+
+#[test]
+fn hostile_takeover_can_use_rival_financing_capacity_not_just_cash() {
+    let mut game = Game::with_seed(35);
+    game.quarter = HOSTILE_TAKEOVER_MIN_QUARTER + 1;
+    game.player.asset_base = 300_000.0;
+    game.player.debt = 270_000.0;
+    game.player.cash = 15_000.0;
+    game.player.shares = 2_000.0;
+    game.player.stock_price = 45.0;
+    game.competitors[0].cash = 25_000.0;
+    game.competitors[0].asset_base = 190_000.0;
+    game.competitors[0].debt = 30_000.0;
+    game.competitors[0].reliability = 0.90;
+    game.competitors[0].reputation = 70.0;
+    let bidder_name = game.competitors[0].name.clone();
+    let finances = FirmFinances {
+        revenue: 14_000.0,
+        operating_cost: 11_000.0,
+        interest: 1_000.0,
+        profit: 2_000.0,
+        served_mwh: 900.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().expect("expected takeover defeat");
+    assert_eq!(outcome.headline, "Hostile Takeover");
     assert!(outcome.details.contains(&bidder_name));
 }
 

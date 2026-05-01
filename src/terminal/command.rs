@@ -51,14 +51,13 @@ pub(super) fn handle_command(game: &mut Game, command: &str) -> CommandResult {
         "quit" | "exit" => CommandResult::Quit,
         "preview" | "quote" | "plan" => preview_command(game, &parts),
         "build" | "marketing" | "market" | "advertise" | "issue" | "stock" | "equity"
-        | "buyback" | "repurchase" | "debt" | "borrow" | "loan" | "repay" | "paydown" | "buy"
-        | "acquire" | "diligence" | "dilig" | "inspect" | "expand" | "adjacent" | "territory"
-        | "rate" | "maintenance" | "maint" | "maintain" | "reliability" | "hire" | "fire" => {
-            match parse_decision(game, &parts) {
-                Ok(decision) => apply(game, decision),
-                Err(message) => CommandResult::Continue(message),
-            }
-        }
+        | "buyback" | "repurchase" | "dividend" | "dividends" | "debt" | "borrow" | "loan"
+        | "repay" | "paydown" | "buy" | "acquire" | "diligence" | "dilig" | "inspect"
+        | "expand" | "adjacent" | "territory" | "rate" | "maintenance" | "maint" | "maintain"
+        | "reliability" | "hire" | "fire" => match parse_decision(game, &parts) {
+            Ok(decision) => apply(game, decision),
+            Err(message) => CommandResult::Continue(message),
+        },
         "competitors" | "rivals" => CommandResult::ShowRivals,
         "report" | "reports" | "result" | "results" | "events" => CommandResult::ShowReport,
         "board" | "goals" | "objectives" | "milestones" | "region" | "regional" => {
@@ -233,6 +232,10 @@ pub(super) fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, St
         "buyback" | "repurchase" => {
             let amount = money_amount(parts.get(1).copied(), 10_000.0, "buyback [amount]")?;
             Ok(Decision::BuyBackStock { amount })
+        }
+        "dividend" | "dividends" => {
+            let amount = money_amount(parts.get(1).copied(), 5_000.0, "dividend [amount]")?;
+            Ok(Decision::DeclareDividend { amount })
         }
         "debt" | "borrow" | "loan" => {
             if first == "debt" && matches!(parts.get(1).copied(), Some("repay" | "pay" | "down")) {

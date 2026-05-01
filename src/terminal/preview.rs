@@ -142,10 +142,9 @@ pub(super) fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
             }
             Ok(length)
         }
-        "marketing" | "market" | "advertise" | "issue" | "buyback" | "repurchase" | "expand"
-        | "adjacent" | "territory" | "maintenance" | "maint" | "maintain" | "reliability" => {
-            Ok(1 + optional_command_argument(parts.get(1).copied()))
-        }
+        "marketing" | "market" | "advertise" | "issue" | "buyback" | "repurchase" | "dividend"
+        | "dividends" | "expand" | "adjacent" | "territory" | "maintenance" | "maint"
+        | "maintain" | "reliability" => Ok(1 + optional_command_argument(parts.get(1).copied())),
         "repay" | "paydown" => Ok(1 + optional_command_argument(parts.get(1).copied())),
         "stock" | "equity" => match parts.get(1).copied() {
             Some("issue" | "sell" | "buyback" | "repurchase" | "buy") => {
@@ -232,6 +231,8 @@ pub(super) fn is_preview_action_start(value: &str) -> bool {
             | "equity"
             | "buyback"
             | "repurchase"
+            | "dividend"
+            | "dividends"
             | "debt"
             | "borrow"
             | "loan"
@@ -334,6 +335,20 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
             muted("Quote:"),
             styled(BOLD_YELLOW, money(*amount))
         )],
+        Decision::DeclareDividend { amount } => {
+            let founder_payment = if game.player.shares <= 0.0 {
+                0.0
+            } else {
+                amount / game.player.shares.max(1.0) * game.player_owned_shares.max(0.0)
+            };
+            vec![format!(
+                "{} pay {}; founder receives {} at current {:.1}% ownership, and stock reprices ex-dividend.",
+                muted("Quote:"),
+                styled(BOLD_YELLOW, money(*amount)),
+                styled(BOLD_GREEN, money(founder_payment)),
+                game.player_ownership() * 100.0
+            )]
+        }
         Decision::Borrow { amount } => vec![format!(
             "{} borrow {}; current room {} at {:.1}% floating.",
             muted("Quote:"),
@@ -754,6 +769,12 @@ pub(super) fn immediate_effect_lines(before: &Game, after: &Game) -> Vec<String>
         "Founder ownership",
         before.player_ownership(),
         after.player_ownership(),
+    );
+    push_money_delta(
+        &mut lines,
+        "Founder dividends",
+        before.player_dividends_received,
+        after.player_dividends_received,
     );
     push_money_delta(
         &mut lines,
