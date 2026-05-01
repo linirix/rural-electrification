@@ -296,6 +296,26 @@ fn stable_dashboard_panels_keep_fixed_heights() {
 }
 
 #[test]
+fn stable_dashboard_overflow_hint_highlights_command_word() {
+    let lines = stable_panel_lines(
+        vec![
+            "first".to_string(),
+            "second".to_string(),
+            "third".to_string(),
+        ],
+        2,
+        "rivals for full list",
+    );
+    let hint = lines.last().expect("overflow hint should be present");
+
+    assert_eq!(visible_width(hint), "rivals for full list".len());
+    if ansi_enabled() {
+        assert!(hint.contains(BOLD_CYAN));
+        assert!(hint.contains(DIM));
+    }
+}
+
+#[test]
 fn compact_commands_show_build_sizes_with_spaces() {
     let game = Game::with_seed(120);
     let commands = compact_command_lines(&game).join(" ");
@@ -359,10 +379,12 @@ fn start_screen_mentions_objectives_and_core_commands() {
     assert!(text.contains("reliable service"));
     assert!(text.contains("preview"));
     assert!(text.contains("next / n"));
+    assert!(text.contains("hire / fire"));
     assert!(text.contains("rivals / board"));
     assert!(text.contains("save / load"));
     assert!(text.contains("Press Return"));
     assert!(text.contains("Report -> Rivals -> Board -> Help"));
+    assert!(text.contains("opened by command"));
 }
 
 #[test]
@@ -378,30 +400,48 @@ fn blank_input_detection_accepts_return_and_spaces_only() {
 #[test]
 fn enter_cycles_through_dashboard_subscreens() {
     assert_eq!(
-        TerminalScreen::Start.next_on_enter(),
+        TerminalScreen::Start.next_on_enter(ScreenEntry::Cycle),
         TerminalScreen::Dashboard
     );
     assert_eq!(
-        TerminalScreen::Dashboard.next_on_enter(),
+        TerminalScreen::Dashboard.next_on_enter(ScreenEntry::Cycle),
         TerminalScreen::Report
     );
     assert_eq!(
-        TerminalScreen::Report.next_on_enter(),
+        TerminalScreen::Report.next_on_enter(ScreenEntry::Cycle),
         TerminalScreen::Rivals
     );
     assert_eq!(
-        TerminalScreen::Rivals.next_on_enter(),
+        TerminalScreen::Rivals.next_on_enter(ScreenEntry::Cycle),
         TerminalScreen::Board
     );
-    assert_eq!(TerminalScreen::Board.next_on_enter(), TerminalScreen::Help);
     assert_eq!(
-        TerminalScreen::Help.next_on_enter(),
+        TerminalScreen::Board.next_on_enter(ScreenEntry::Cycle),
+        TerminalScreen::Help
+    );
+    assert_eq!(
+        TerminalScreen::Help.next_on_enter(ScreenEntry::Cycle),
         TerminalScreen::Dashboard
     );
     assert_eq!(
-        TerminalScreen::Preview.next_on_enter(),
+        TerminalScreen::Preview.next_on_enter(ScreenEntry::Cycle),
         TerminalScreen::Dashboard
     );
+}
+
+#[test]
+fn enter_returns_from_command_opened_subscreens() {
+    for screen in [
+        TerminalScreen::Report,
+        TerminalScreen::Rivals,
+        TerminalScreen::Board,
+        TerminalScreen::Help,
+    ] {
+        assert_eq!(
+            screen.next_on_enter(ScreenEntry::DirectCommand),
+            TerminalScreen::Dashboard
+        );
+    }
 }
 
 #[test]
@@ -704,6 +744,29 @@ fn maint_alias_runs_maintenance() {
     }
     assert!(game.player.cash < starting_cash);
     assert!(game.player.reliability > starting_reliability);
+}
+
+#[test]
+fn hire_and_fire_manager_commands_update_targets() {
+    let mut game = Game::with_seed(104);
+
+    match handle_command(&mut game, "hire maintenance 98%") {
+        CommandResult::Continue(message) => assert!(message.contains("maintenance manager")),
+        _ => panic!("hire maintenance should apply"),
+    }
+    assert!((game.maintenance_manager_target.unwrap() - 0.98).abs() < 0.0001);
+
+    match handle_command(&mut game, "hire marketing") {
+        CommandResult::Continue(message) => assert!(message.contains("marketing manager")),
+        _ => panic!("hire marketing should apply"),
+    }
+    assert_eq!(game.marketing_manager_target, Some(90.0));
+
+    match handle_command(&mut game, "fire maintenance") {
+        CommandResult::Continue(message) => assert!(message.contains("Dismissed")),
+        _ => panic!("fire maintenance should apply"),
+    }
+    assert_eq!(game.maintenance_manager_target, None);
 }
 
 #[test]
@@ -1011,7 +1074,9 @@ fn scorecard_uses_regional_review_after_continuation() {
     assert!(joined.contains("82% target"));
     assert!(joined.contains("90% limit"));
     assert!(joined.contains("Territories"));
+    assert!(joined.contains("50%"));
     assert!(joined.contains("2 needed"));
+    assert!(!joined.contains("Territories 100% / 2 needed"));
     assert!(!joined.contains("Rate support"));
     assert!(!joined.contains("review complete"));
 }
@@ -1156,6 +1221,31 @@ fn stock_preview_shows_founder_dilution_and_value() {
             assert!(joined.contains("Founder value"));
         }
         _ => panic!("preview issue should show founder economics"),
+    }
+}
+
+#[test]
+fn manager_preview_describes_profit_budget_and_target() {
+    let mut game = Game::with_seed(119);
+
+    match handle_command(&mut game, "preview hire maintenance 95%") {
+        CommandResult::Preview(lines) => {
+            let joined = lines.join("\n");
+            assert!(joined.contains("maintenance manager"));
+            assert!(joined.contains("50%"));
+            assert!(joined.contains("95%"));
+        }
+        _ => panic!("preview hire maintenance should show manager economics"),
+    }
+
+    match handle_command(&mut game, "preview hire marketing 90") {
+        CommandResult::Preview(lines) => {
+            let joined = lines.join("\n");
+            assert!(joined.contains("marketing manager"));
+            assert!(joined.contains("25%"));
+            assert!(joined.contains("90"));
+        }
+        _ => panic!("preview hire marketing should show manager economics"),
     }
 }
 

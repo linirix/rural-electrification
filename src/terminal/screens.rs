@@ -62,6 +62,7 @@ pub(super) fn start_screen_command_lines(game: &Game) -> Vec<String> {
             ),
         ),
         compact_action_line("marketing / maint", "growth; reliability"),
+        compact_action_line("hire / fire", "automate marketing or upkeep"),
         compact_action_line("capital", "debt, equity, buybacks"),
         compact_action_line("rivals / board", "competitors; objectives"),
         compact_action_line("save / load", "keep long campaigns"),
@@ -71,8 +72,9 @@ pub(super) fn start_screen_command_lines(game: &Game) -> Vec<String> {
 pub(super) fn start_screen_begin_lines() -> Vec<String> {
     vec![
         "Press Return to open the main dashboard.".to_string(),
-        "After that, Return cycles: Dashboard -> Report -> Rivals -> Board -> Help.".to_string(),
-        "One more Return brings the cycle back to the dashboard.".to_string(),
+        "From the dashboard, Return cycles: Report -> Rivals -> Board -> Help -> Dashboard."
+            .to_string(),
+        "From a screen opened by command, Return goes back to the dashboard.".to_string(),
         "Type help at any time for the full command reference.".to_string(),
     ]
 }
@@ -86,6 +88,9 @@ pub(super) fn print_help() {
             "build lines [customers]".to_string(),
             "marketing [amount]".to_string(),
             "maint [amount]       maintenance".to_string(),
+            "hire maint 95%       auto service work".to_string(),
+            "hire marketing 90    auto reputation work".to_string(),
+            "fire maint/marketing dismiss manager".to_string(),
             "expand               adjacent territory".to_string(),
             "rate 10.0            set target".to_string(),
             "rate up|down [cents] adjust rate".to_string(),
@@ -112,7 +117,7 @@ pub(super) fn print_help() {
             "region         regional mandate".to_string(),
             "report         last quarter detail".to_string(),
             "preview/quote  inspect command".to_string(),
-            "Return         next screen in cycle".to_string(),
+            "Return         cycle screens / return".to_string(),
             "next / n / end finish quarter".to_string(),
             "continue       post-review play".to_string(),
             "save [name]    write save file".to_string(),
@@ -276,7 +281,7 @@ pub(super) fn stable_panel_lines(
     }
     if lines.len() > height {
         lines.truncate(height.saturating_sub(1));
-        lines.push(muted(overflow_note));
+        lines.push(command_hint_line(overflow_note));
     }
     while lines.len() < height {
         lines.push(String::new());
@@ -350,7 +355,11 @@ pub(super) fn last_quarter_lines(game: &Game) -> Vec<String> {
     }
 
     if lines.len() < 6 {
-        lines.push(format!("{} report for full detail", muted("More")));
+        lines.push(format!(
+            "{} {}",
+            muted("More"),
+            command_hint_line("report for full detail")
+        ));
     }
 
     lines
@@ -458,7 +467,7 @@ pub(super) fn compact_command_lines(game: &Game) -> Vec<String> {
         compact_action_line(
             "operate",
             format!(
-                "rate {:.1} | marketing 4000 | maint 6000",
+                "rate {:.1} | marketing/maint | hire",
                 game.market.standard_rate_cents
             ),
         ),
@@ -619,10 +628,13 @@ pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {
     ];
 
     if review_targets.regional {
+        let expansion_progress = (game.adjacent_expansions as f64
+            / REGIONAL_MANDATE_EXPANSION_TARGET.max(1) as f64)
+            .clamp(0.0, 1.0);
         lines.push(score_line(
             "Territories",
-            game.adjacent_expansions as f64,
-            REGIONAL_MANDATE_EXPANSION_TARGET as f64,
+            expansion_progress,
+            1.0,
             expansion_tone(game.adjacent_expansions),
             format!("{} needed", REGIONAL_MANDATE_EXPANSION_TARGET),
             if game.adjacent_expansions >= REGIONAL_MANDATE_EXPANSION_TARGET {
@@ -752,6 +764,10 @@ fn ownership_tone(ownership: f64) -> &'static str {
     } else {
         GREEN
     }
+}
+
+fn manager_tone(active: bool) -> &'static str {
+    if active { GREEN } else { DIM }
 }
 
 fn format_coverage(coverage: f64) -> String {
@@ -1373,6 +1389,15 @@ pub(super) fn operation_lines(game: &Game) -> Vec<String> {
         "generation"
     };
 
+    let maintenance_manager = game
+        .maintenance_manager_target
+        .map(|target| format!("maint {:.0}%", target * 100.0))
+        .unwrap_or_else(|| "maint off".to_string());
+    let marketing_manager = game
+        .marketing_manager_target
+        .map(|target| format!("market {:.0}", target))
+        .unwrap_or_else(|| "market off".to_string());
+
     vec![
         format!(
             "{} {} / {}   {} {}",
@@ -1428,6 +1453,18 @@ pub(super) fn operation_lines(game: &Game) -> Vec<String> {
             styled(
                 reputation_tone(game.player.reputation),
                 format!("{:.0}", game.player.reputation)
+            )
+        ),
+        format!(
+            "{} {}   {}",
+            muted("Managers"),
+            styled(
+                manager_tone(game.maintenance_manager_target.is_some()),
+                maintenance_manager
+            ),
+            styled(
+                manager_tone(game.marketing_manager_target.is_some()),
+                marketing_manager
             )
         ),
     ]
@@ -1780,9 +1817,9 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
     lines.push(action_line(
         "marketing/maint",
         if game.regional_integration > 0.12 {
-            "marketing 4000 and maint 6000 also work down regional integration"
+            "manual spend or hire managers; both work down regional integration"
         } else {
-            "marketing 4000 for demand; maint 6000 for reliability"
+            "marketing 4000, maint 6000, or hire maint/marketing"
         },
     ));
     if should_show_adjacent_expansion(game) {

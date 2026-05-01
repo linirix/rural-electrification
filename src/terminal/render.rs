@@ -90,6 +90,13 @@ pub(super) fn muted(value: impl std::fmt::Display) -> String {
     styled(DIM, value)
 }
 
+pub(super) fn command_hint_line(value: &str) -> String {
+    let Some((command, detail)) = value.split_once(' ') else {
+        return styled(BOLD_CYAN, value);
+    };
+    format!("{} {}", styled(BOLD_CYAN, command), muted(detail))
+}
+
 pub(super) fn ansi(style: &'static str) -> &'static str {
     if ansi_enabled() { style } else { "" }
 }

@@ -104,6 +104,23 @@ fn legacy_save_without_owner_fields_restores_founder_stake() {
     assert_eq!(loaded.player_dividends_received, 0.0);
 }
 
+fn prior_profit_report(profit: f64) -> QuarterReport {
+    QuarterReport {
+        label: "Prior Q".to_string(),
+        revenue: 20_000.0,
+        operating_cost: 12_000.0,
+        interest: 1_000.0,
+        profit,
+        new_customers: 0.0,
+        lost_customers: 0.0,
+        lost_customer_rate: 0.0,
+        market_share: 0.30,
+        prior_market_share: 0.29,
+        attributions: Vec::new(),
+        events: Vec::new(),
+    }
+}
+
 #[test]
 fn opening_competitor_names_are_drawn_from_pool_without_duplicates() {
     let game = Game::with_seed(7);
@@ -2535,6 +2552,113 @@ fn maintenance_reports_actual_capped_reliability_gain() {
     let actual_gain_points = (game.player.reliability - starting_reliability) * 100.0;
     assert_eq!(game.player.reliability, MAX_RELIABILITY);
     assert!(message.contains(&format!("{actual_gain_points:.1} reliability points")));
+}
+
+#[test]
+fn maintenance_manager_spends_last_profit_budget_toward_target() {
+    let mut game = Game::with_seed(75);
+    game.player.cash = 60_000.0;
+    game.player.reliability = 0.80;
+    game.last_report = Some(prior_profit_report(8_000.0));
+    game.apply_decision(Decision::HireMaintenanceManager {
+        target_reliability: 0.92,
+    })
+    .unwrap();
+
+    let starting_cash = game.player.cash;
+    let starting_reliability = game.player.reliability;
+    let mut events = Vec::new();
+    game.apply_operating_managers(&mut events);
+
+    let spent = starting_cash - game.player.cash;
+    assert!(spent > 0.0);
+    assert!(spent <= 4_000.01);
+    assert!(game.player.reliability > starting_reliability);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("Maintenance manager spent"))
+    );
+}
+
+#[test]
+fn marketing_manager_spends_last_profit_budget_until_reputation_target() {
+    let mut game = Game::with_seed(76);
+    game.player.cash = 60_000.0;
+    game.player.reputation = 80.0;
+    game.last_report = Some(prior_profit_report(8_000.0));
+    game.apply_decision(Decision::HireMarketingManager {
+        target_reputation: 90.0,
+    })
+    .unwrap();
+
+    let starting_cash = game.player.cash;
+    let starting_reputation = game.player.reputation;
+    let mut events = Vec::new();
+    game.apply_operating_managers(&mut events);
+
+    let spent = starting_cash - game.player.cash;
+    assert!(spent > 0.0);
+    assert!(spent <= 2_000.01);
+    assert!(game.player.reputation > starting_reputation);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("Marketing manager spent"))
+    );
+}
+
+#[test]
+fn quarter_report_profit_includes_manager_spending() {
+    let mut game = Game::with_seed(78);
+    game.player.cash = 80_000.0;
+    game.player.reliability = 0.80;
+    game.last_report = Some(prior_profit_report(8_000.0));
+    game.apply_decision(Decision::HireMaintenanceManager {
+        target_reliability: 0.92,
+    })
+    .unwrap();
+
+    let starting_cash = game.player.cash;
+    let report = game.advance_quarter();
+    let cash_delta = game.player.cash - starting_cash;
+
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| event.contains("Maintenance manager spent"))
+    );
+    assert!(
+        (report.profit - cash_delta).abs() < 0.01,
+        "reported profit {} should match cash delta {} after manager expense",
+        report.profit,
+        cash_delta
+    );
+}
+
+#[test]
+fn operating_managers_do_not_spend_after_unprofitable_quarter() {
+    let mut game = Game::with_seed(77);
+    game.player.cash = 60_000.0;
+    game.player.reliability = 0.80;
+    game.player.reputation = 70.0;
+    game.last_report = Some(prior_profit_report(-2_000.0));
+    game.apply_decision(Decision::HireMaintenanceManager {
+        target_reliability: 0.95,
+    })
+    .unwrap();
+    game.apply_decision(Decision::HireMarketingManager {
+        target_reputation: 90.0,
+    })
+    .unwrap();
+
+    let starting_cash = game.player.cash;
+    let mut events = Vec::new();
+    game.apply_operating_managers(&mut events);
+
+    assert_eq!(game.player.cash, starting_cash);
+    assert!(events.is_empty());
 }
 
 #[test]

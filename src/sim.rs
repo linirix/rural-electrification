@@ -66,6 +66,11 @@ const ACQUISITION_RATE_ANCHOR_TOLERANCE_MULTIPLIER: f64 = 0.70;
 const ACQUISITION_RATE_ANCHOR_MAX_LIFT_CENTS: f64 = 0.45;
 const STARTING_PLAYER_OWNERSHIP: f64 = 0.32;
 const MIN_PUBLIC_SHARES_AFTER_BUYBACK: f64 = 500.0;
+pub const DEFAULT_MAINTENANCE_MANAGER_TARGET: f64 = 0.95;
+pub const DEFAULT_MARKETING_MANAGER_TARGET: f64 = 90.0;
+pub const MAINTENANCE_MANAGER_PROFIT_SHARE: f64 = 0.50;
+pub const MARKETING_MANAGER_PROFIT_SHARE: f64 = 0.25;
+const MIN_MANAGER_SPEND: f64 = 100.0;
 pub const REVIEW_MIN_RATE_SUPPORT_RATIO: f64 = 0.72;
 pub const REVIEW_MIN_INTEREST_COVERAGE: f64 = 1.0;
 pub const REVIEW_MIN_RELIABILITY: f64 = 0.72;
@@ -90,8 +95,9 @@ use competitors::draw_competitor_name;
 use competitors::{COMPETITOR_NAME_POOL, StartupEntryReason};
 use economics::{
     bounded_rate_target, break_even_rate_cents, churn_for_market_with_floor, defensive_rate_floor,
-    high_rate_excess, maintenance_reliability_gain, maintenance_reputation_gain, positive_amount,
-    settle_utility, weighted_average, weighted_rate,
+    high_rate_excess, maintenance_reliability_gain, maintenance_reputation_gain,
+    maintenance_spend_for_reliability_target, positive_amount, settle_utility, weighted_average,
+    weighted_rate,
 };
 #[cfg(test)]
 use economics::{churn_rate_for, churn_rate_for_market};
@@ -133,6 +139,10 @@ pub struct Game {
     pub player_owned_shares: f64,
     #[serde(default)]
     pub player_dividends_received: f64,
+    #[serde(default)]
+    pub maintenance_manager_target: Option<f64>,
+    #[serde(default)]
+    pub marketing_manager_target: Option<f64>,
     rng: Rng,
 }
 
@@ -273,6 +283,10 @@ pub enum Decision {
     EnterAdjacentMarket,
     AdjustRate { delta_cents: f64 },
     Maintenance { spend: f64 },
+    HireMaintenanceManager { target_reliability: f64 },
+    FireMaintenanceManager,
+    HireMarketingManager { target_reputation: f64 },
+    FireMarketingManager,
 }
 
 /// Result of one processed quarter, suitable for terminal display or automated playtests.
@@ -491,6 +505,8 @@ impl Game {
             outcome: None,
             player_owned_shares,
             player_dividends_received: 0.0,
+            maintenance_manager_target: None,
+            marketing_manager_target: None,
             rng,
         }
     }
@@ -527,6 +543,12 @@ impl Game {
         if !self.player_dividends_received.is_finite() || self.player_dividends_received < 0.0 {
             self.player_dividends_received = 0.0;
         }
+        self.maintenance_manager_target = self
+            .maintenance_manager_target
+            .and_then(|target| validate_maintenance_manager_target(target).ok());
+        self.marketing_manager_target = self
+            .marketing_manager_target
+            .and_then(|target| validate_marketing_manager_target(target).ok());
     }
 
     pub fn apply_decision(&mut self, decision: Decision) -> Result<String, String> {
@@ -995,6 +1017,38 @@ impl Game {
                     ))
                 }
             }
+            Decision::HireMaintenanceManager { target_reliability } => {
+                let target = validate_maintenance_manager_target(target_reliability)?;
+                self.maintenance_manager_target = Some(target);
+                Ok(format!(
+                    "Hired a maintenance manager to maintain reliability near {:.0}%, spending up to {:.0}% of last quarter's profit.",
+                    target * 100.0,
+                    MAINTENANCE_MANAGER_PROFIT_SHARE * 100.0
+                ))
+            }
+            Decision::FireMaintenanceManager => {
+                if self.maintenance_manager_target.take().is_some() {
+                    Ok("Dismissed the maintenance manager.".to_string())
+                } else {
+                    Ok("No maintenance manager was on staff.".to_string())
+                }
+            }
+            Decision::HireMarketingManager { target_reputation } => {
+                let target = validate_marketing_manager_target(target_reputation)?;
+                self.marketing_manager_target = Some(target);
+                Ok(format!(
+                    "Hired a marketing manager to build reputation toward {:.0}, spending up to {:.0}% of last quarter's profit.",
+                    target,
+                    MARKETING_MANAGER_PROFIT_SHARE * 100.0
+                ))
+            }
+            Decision::FireMarketingManager => {
+                if self.marketing_manager_target.take().is_some() {
+                    Ok("Dismissed the marketing manager.".to_string())
+                } else {
+                    Ok("No marketing manager was on staff.".to_string())
+                }
+            }
             Decision::Maintenance { spend } => {
                 let spend = positive_amount(spend, "maintenance spend")?;
                 let spend = spend.clamp(1_500.0, 20_000.0);
@@ -1066,6 +1120,7 @@ impl Game {
         self.competitor_plans(&mut events);
         self.apply_integration_strain(&mut events);
         self.apply_regional_integration_strain(&mut events);
+        let manager_spend = self.apply_operating_managers(&mut events);
 
         self.player.marketing_momentum *= 0.55;
         self.equity_market_fatigue *= 0.55;
@@ -1082,7 +1137,7 @@ impl Game {
         self.allocate_new_customers(&mut events);
 
         let cost_multiplier = self.cost_shock_multiplier();
-        let player_finances = settle_utility(
+        let mut player_finances = settle_utility(
             &mut self.player,
             &self.market,
             &self.macro_state,
@@ -1090,6 +1145,10 @@ impl Game {
             true,
             &mut events,
         );
+        if manager_spend > 0.0 {
+            player_finances.operating_cost += manager_spend;
+            player_finances.profit -= manager_spend;
+        }
         self.apply_below_cost_pricing_pressure(&player_finances, &mut events);
         let mut system_demanded_mwh = demanded_mwh_from_finances(&player_finances);
         let mut system_unmet_mwh = unmet_mwh_from_finances(&player_finances);
@@ -2163,6 +2222,89 @@ impl Game {
         }
     }
 
+    fn apply_operating_managers(&mut self, events: &mut Vec<String>) -> f64 {
+        self.apply_maintenance_manager(events) + self.apply_marketing_manager(events)
+    }
+
+    fn manager_budget(&self, profit_share: f64) -> f64 {
+        let Some(report) = &self.last_report else {
+            return 0.0;
+        };
+        (report.profit.max(0.0) * profit_share).min(self.player.cash.max(0.0))
+    }
+
+    fn apply_maintenance_manager(&mut self, events: &mut Vec<String>) -> f64 {
+        let Some(target) = self.maintenance_manager_target else {
+            return 0.0;
+        };
+        if self.player.reliability >= target - MIN_MAINTENANCE_RELIABILITY_GAIN {
+            return 0.0;
+        }
+
+        let budget = self.manager_budget(MAINTENANCE_MANAGER_PROFIT_SHARE);
+        if budget < MIN_MANAGER_SPEND {
+            return 0.0;
+        }
+        let required = maintenance_spend_for_reliability_target(&self.player, target);
+        let spend = required.min(budget).min(self.player.cash.max(0.0));
+        if spend < MIN_MANAGER_SPEND {
+            return 0.0;
+        }
+
+        let gain = maintenance_reliability_gain(&self.player, spend);
+        let new_reliability = (self.player.reliability + gain).clamp(0.35, MAX_RELIABILITY);
+        let actual_gain = new_reliability - self.player.reliability;
+        if actual_gain < MIN_MAINTENANCE_RELIABILITY_GAIN {
+            return 0.0;
+        }
+
+        self.player.cash -= spend;
+        self.player.reliability = new_reliability;
+        self.player.reputation = (self.player.reputation
+            + maintenance_reputation_gain(&self.player, spend))
+        .clamp(0.0, 100.0);
+        let regional_relief = self.reduce_regional_integration(spend / 140_000.0, "service work");
+        events.push(format!(
+            "Maintenance manager spent {} toward the {:.0}% reliability target; reliability rose by {:.1} points to {:.0}%.",
+            money(spend),
+            target * 100.0,
+            actual_gain * 100.0,
+            self.player.reliability * 100.0
+        ) + &regional_relief);
+        spend
+    }
+
+    fn apply_marketing_manager(&mut self, events: &mut Vec<String>) -> f64 {
+        let Some(target) = self.marketing_manager_target else {
+            return 0.0;
+        };
+        if self.player.reputation >= target - 0.05 {
+            return 0.0;
+        }
+
+        let budget = self.manager_budget(MARKETING_MANAGER_PROFIT_SHARE);
+        if budget < MIN_MANAGER_SPEND {
+            return 0.0;
+        }
+        let needed = ((target - self.player.reputation).max(0.0) * 4_000.0).max(0.0);
+        let spend = needed.min(budget).min(self.player.cash.max(0.0));
+        if spend < MIN_MANAGER_SPEND {
+            return 0.0;
+        }
+
+        self.player.cash -= spend;
+        self.player.marketing_momentum += (spend / 5_000.0) * 0.13;
+        self.player.reputation = (self.player.reputation + spend / 4_000.0).clamp(0.0, 100.0);
+        let regional_relief = self.reduce_regional_integration(spend / 160_000.0, "marketing");
+        events.push(format!(
+            "Marketing manager spent {} toward the {:.0} reputation target; reputation is now {:.0}.",
+            money(spend),
+            target,
+            self.player.reputation
+        ) + &regional_relief);
+        spend
+    }
+
     fn apply_acquisition_stress_pressure(
         &mut self,
         finances: &FirmFinances,
@@ -2755,6 +2897,29 @@ fn acquisition_integration_strain(starting_customers: f64, acquired_customers: f
     let post_customers = (starting_customers + acquired_customers).max(1.0);
     let acquired_share = (acquired_customers / post_customers).clamp(0.0, 1.0);
     acquired_share * 1.35
+}
+
+fn validate_maintenance_manager_target(target: f64) -> Result<f64, String> {
+    if !target.is_finite() {
+        return Err("Maintenance manager target must be finite.".to_string());
+    }
+    if !(0.35..=MAX_RELIABILITY).contains(&target) {
+        return Err(format!(
+            "Maintenance manager target must be between 35% and {:.0}%.",
+            MAX_RELIABILITY * 100.0
+        ));
+    }
+    Ok(target)
+}
+
+fn validate_marketing_manager_target(target: f64) -> Result<f64, String> {
+    if !target.is_finite() {
+        return Err("Marketing manager target must be finite.".to_string());
+    }
+    if !(0.0..=100.0).contains(&target) {
+        return Err("Marketing manager target must be between 0 and 100.".to_string());
+    }
+    Ok(target)
 }
 
 #[derive(Clone, Copy, Debug)]

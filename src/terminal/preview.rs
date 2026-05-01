@@ -169,6 +169,20 @@ pub(super) fn preview_segment_len(parts: &[&str]) -> Result<usize, String> {
         "buy" | "acquire" | "diligence" | "dilig" | "inspect" => {
             Ok(if parts.get(1).is_some() { 2 } else { 1 })
         }
+        "hire" => {
+            let mut length = 1;
+            if parts.get(1).is_some() {
+                length = 2;
+            }
+            if parts
+                .get(2)
+                .is_some_and(|value| !is_preview_action_start(value))
+            {
+                length = 3;
+            }
+            Ok(length)
+        }
+        "fire" => Ok(if parts.get(1).is_some() { 2 } else { 1 }),
         "rate" => match parts.get(1).copied() {
             Some("up" | "down" | "+" | "-") => {
                 Ok(2 + optional_rate_argument(parts.get(2).copied()))
@@ -236,6 +250,8 @@ pub(super) fn is_preview_action_start(value: &str) -> bool {
             | "maint"
             | "maintain"
             | "reliability"
+            | "hire"
+            | "fire"
     )
 }
 
@@ -495,6 +511,26 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
             }
             lines
         }
+        Decision::HireMaintenanceManager { target_reliability } => vec![format!(
+            "{} maintenance manager targets {:.0}% reliability, spending up to {:.0}% of last quarter's profit when service falls short.",
+            muted("Quote:"),
+            target_reliability * 100.0,
+            MAINTENANCE_MANAGER_PROFIT_SHARE * 100.0
+        )],
+        Decision::FireMaintenanceManager => vec![format!(
+            "{} dismiss the maintenance manager; manual maintenance commands still work.",
+            muted("Quote:")
+        )],
+        Decision::HireMarketingManager { target_reputation } => vec![format!(
+            "{} marketing manager targets {:.0} reputation, spending up to {:.0}% of last quarter's profit while reputation is below target.",
+            muted("Quote:"),
+            target_reputation,
+            MARKETING_MANAGER_PROFIT_SHARE * 100.0
+        )],
+        Decision::FireMarketingManager => vec![format!(
+            "{} dismiss the marketing manager; manual marketing commands still work.",
+            muted("Quote:")
+        )],
         Decision::Maintenance { spend } => {
             if game.player.reliability >= 0.9795 {
                 vec![format!(

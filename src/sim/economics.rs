@@ -1,7 +1,7 @@
 use super::{
     DISTRIBUTION_PROJECT_CAPACITY, DISTRIBUTION_PROJECT_COST, FirmFinances,
     GENERATION_PROJECT_CAPACITY_MWH, GENERATION_PROJECT_COST, MAINTENANCE_REFERENCE_ASSET_BASE,
-    MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH,
+    MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH, MAX_RELIABILITY,
     MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, MacroEnvironment, Market,
     Utility,
 };
@@ -14,6 +14,16 @@ pub(super) fn maintenance_reliability_gain(utility: &Utility, spend: f64) -> f64
     (spend / 22_000.0)
         * (1.05_f64 - utility.reliability).max(0.05)
         * maintenance_asset_scale(utility)
+}
+
+pub(super) fn maintenance_spend_for_reliability_target(utility: &Utility, target: f64) -> f64 {
+    let target = target.clamp(0.35, MAX_RELIABILITY);
+    if target <= utility.reliability {
+        return 0.0;
+    }
+    let response =
+        ((1.05_f64 - utility.reliability).max(0.05) * maintenance_asset_scale(utility)).max(0.001);
+    ((target - utility.reliability) * 22_000.0 / response).max(0.0)
 }
 
 pub(super) fn maintenance_reputation_gain(utility: &Utility, spend: f64) -> f64 {

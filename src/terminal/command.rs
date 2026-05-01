@@ -53,7 +53,7 @@ pub(super) fn handle_command(game: &mut Game, command: &str) -> CommandResult {
         "build" | "marketing" | "market" | "advertise" | "issue" | "stock" | "equity"
         | "buyback" | "repurchase" | "debt" | "borrow" | "loan" | "repay" | "paydown" | "buy"
         | "acquire" | "diligence" | "dilig" | "inspect" | "expand" | "adjacent" | "territory"
-        | "rate" | "maintenance" | "maint" | "maintain" | "reliability" => {
+        | "rate" | "maintenance" | "maint" | "maintain" | "reliability" | "hire" | "fire" => {
             match parse_decision(game, &parts) {
                 Ok(decision) => apply(game, decision),
                 Err(message) => CommandResult::Continue(message),
@@ -287,6 +287,31 @@ pub(super) fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, St
             let spend = money_amount(parts.get(1).copied(), 4_500.0, "maintenance [amount]")?;
             Ok(Decision::Maintenance { spend })
         }
+        "hire" => match parts.get(1).copied() {
+            Some("maintenance" | "maint" | "reliability") => {
+                let target = manager_reliability_target(parts.get(2).copied())?;
+                Ok(Decision::HireMaintenanceManager {
+                    target_reliability: target,
+                })
+            }
+            Some("marketing" | "market" | "advertise" | "reputation") => {
+                let target = manager_reputation_target(parts.get(2).copied())?;
+                Ok(Decision::HireMarketingManager {
+                    target_reputation: target,
+                })
+            }
+            _ => Err(
+                "Hire which manager? Use 'hire maintenance [target%]' or 'hire marketing [target]'."
+                    .to_string(),
+            ),
+        },
+        "fire" => match parts.get(1).copied() {
+            Some("maintenance" | "maint" | "reliability") => Ok(Decision::FireMaintenanceManager),
+            Some("marketing" | "market" | "advertise" | "reputation") => {
+                Ok(Decision::FireMarketingManager)
+            }
+            _ => Err("Fire which manager? Use 'fire maintenance' or 'fire marketing'.".to_string()),
+        },
         _ => Err(format!("Unknown command '{first}'. Type 'help'.")),
     }
 }
@@ -327,6 +352,50 @@ pub(super) fn optional_number(value: Option<&str>) -> Result<Option<f64>, ()> {
     } else {
         Err(())
     }
+}
+
+fn manager_reliability_target(value: Option<&str>) -> Result<f64, String> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_MAINTENANCE_MANAGER_TARGET);
+    };
+    let trimmed = value.trim();
+    let has_percent = trimmed.ends_with('%');
+    let number = trimmed
+        .trim_end_matches('%')
+        .parse::<f64>()
+        .map_err(|_| "Use 'hire maintenance 95%' or 'hire maintenance'.".to_string())?;
+    let target = if has_percent || number > 1.0 {
+        number / 100.0
+    } else {
+        number
+    };
+    if !(0.35..=0.98).contains(&target) {
+        return Err("Maintenance manager target must be between 35% and 98%.".to_string());
+    }
+    Ok(target)
+}
+
+fn manager_reputation_target(value: Option<&str>) -> Result<f64, String> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_MARKETING_MANAGER_TARGET);
+    };
+    let trimmed = value.trim();
+    let has_percent = trimmed.ends_with('%');
+    let number = trimmed
+        .trim_end_matches('%')
+        .parse::<f64>()
+        .map_err(|_| "Use 'hire marketing 90' or 'hire marketing 90%'.".to_string())?;
+    let target = if has_percent {
+        number
+    } else if number <= 1.0 {
+        number * 100.0
+    } else {
+        number
+    };
+    if !(0.0..=100.0).contains(&target) {
+        return Err("Marketing manager target must be between 0 and 100.".to_string());
+    }
+    Ok(target)
 }
 
 pub(super) fn parse_rate_delta(parts: &[&str], current_rate: f64) -> Result<Option<f64>, String> {

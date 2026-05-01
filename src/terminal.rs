@@ -8,15 +8,17 @@ use crate::sim::ActiveShock;
 use crate::sim::{
     ACQUISITION_STRESS_NOTICE, ACQUISITION_STRESS_STRAINED,
     ADJACENT_EXPANSION_ADDRESSABLE_CUSTOMERS, ADJACENT_EXPANSION_INITIAL_CUSTOMERS,
-    AcquisitionTerms, DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH,
-    Game, MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH,
-    MAX_PUBLIC_RATE_PREMIUM_CENTS, MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH,
-    Outcome, OutcomeKind, QuarterReport, REGIONAL_MANDATE_EXPANSION_TARGET,
-    REGIONAL_MANDATE_LEVERAGE_LIMIT, REGIONAL_MANDATE_QUARTER, REGIONAL_MANDATE_RELIABILITY_TARGET,
-    REGIONAL_MANDATE_SHARE_TARGET, REVIEW_MIN_INTEREST_COVERAGE, REVIEW_MIN_RATE_SUPPORT_RATIO,
-    REVIEW_MIN_RELIABILITY, ShockKind, Utility, distribution_project_cost,
-    distribution_project_duration, generation_project_cost, generation_project_duration,
-    generation_reliability_after_new_capacity, money, public_rate_tolerance,
+    AcquisitionTerms, DEFAULT_MAINTENANCE_MANAGER_TARGET, DEFAULT_MARKETING_MANAGER_TARGET,
+    DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
+    MAINTENANCE_MANAGER_PROFIT_SHARE, MARKETING_MANAGER_PROFIT_SHARE,
+    MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH, MAX_PUBLIC_RATE_PREMIUM_CENTS,
+    MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, Outcome, OutcomeKind,
+    QuarterReport, REGIONAL_MANDATE_EXPANSION_TARGET, REGIONAL_MANDATE_LEVERAGE_LIMIT,
+    REGIONAL_MANDATE_QUARTER, REGIONAL_MANDATE_RELIABILITY_TARGET, REGIONAL_MANDATE_SHARE_TARGET,
+    REVIEW_MIN_INTEREST_COVERAGE, REVIEW_MIN_RATE_SUPPORT_RATIO, REVIEW_MIN_RELIABILITY, ShockKind,
+    Utility, distribution_project_cost, distribution_project_duration, generation_project_cost,
+    generation_project_duration, generation_reliability_after_new_capacity, money,
+    public_rate_tolerance,
 };
 
 mod command;
@@ -122,6 +124,7 @@ fn acquisition_integration_burden_tone(value: f64) -> &'static str {
 pub fn run() -> io::Result<()> {
     let mut game = Game::new();
     let mut current_screen = TerminalScreen::Start;
+    let mut screen_entry = ScreenEntry::Cycle;
 
     clear_screen();
     print_start_screen(&game);
@@ -136,7 +139,8 @@ pub fn run() -> io::Result<()> {
         }
 
         if is_blank_input(&line) {
-            current_screen = current_screen.next_on_enter();
+            current_screen = current_screen.next_on_enter(screen_entry);
+            screen_entry = ScreenEntry::Cycle;
             render_terminal_screen(&game, current_screen);
             continue;
         }
@@ -151,6 +155,7 @@ pub fn run() -> io::Result<()> {
                 clear_screen();
                 print_status(&game);
                 current_screen = TerminalScreen::Dashboard;
+                screen_entry = ScreenEntry::Cycle;
                 if !message.is_empty() {
                     print_notice(&message);
                 }
@@ -160,6 +165,7 @@ pub fn run() -> io::Result<()> {
                 debug_assert!(!report.label.is_empty());
                 print_status(&game);
                 current_screen = TerminalScreen::Dashboard;
+                screen_entry = ScreenEntry::Cycle;
                 if let Some(outcome) = &game.outcome {
                     print_outcome(outcome);
                     if !outcome.can_continue {
@@ -171,26 +177,31 @@ pub fn run() -> io::Result<()> {
                 clear_screen();
                 print_status(&game);
                 current_screen = TerminalScreen::Dashboard;
+                screen_entry = ScreenEntry::Cycle;
             }
             CommandResult::ShowHelp => {
                 clear_screen();
                 print_help();
                 current_screen = TerminalScreen::Help;
+                screen_entry = ScreenEntry::DirectCommand;
             }
             CommandResult::ShowRivals => {
                 clear_screen();
                 print_competitors(&game);
                 current_screen = TerminalScreen::Rivals;
+                screen_entry = ScreenEntry::DirectCommand;
             }
             CommandResult::ShowBoard => {
                 clear_screen();
                 print_board(&game);
                 current_screen = TerminalScreen::Board;
+                screen_entry = ScreenEntry::DirectCommand;
             }
             CommandResult::ShowReport => {
                 clear_screen();
                 print_last_report(&game);
                 current_screen = TerminalScreen::Report;
+                screen_entry = ScreenEntry::DirectCommand;
             }
             CommandResult::Preview(lines) => {
                 clear_screen();
@@ -198,12 +209,19 @@ pub fn run() -> io::Result<()> {
                 println!();
                 print_box("Command Preview", &lines);
                 current_screen = TerminalScreen::Preview;
+                screen_entry = ScreenEntry::DirectCommand;
             }
             CommandResult::Quit => break,
         }
     }
 
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScreenEntry {
+    Cycle,
+    DirectCommand,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -218,14 +236,19 @@ enum TerminalScreen {
 }
 
 impl TerminalScreen {
-    fn next_on_enter(self) -> Self {
-        match self {
-            Self::Start => Self::Dashboard,
-            Self::Dashboard => Self::Report,
-            Self::Report => Self::Rivals,
-            Self::Rivals => Self::Board,
-            Self::Board => Self::Help,
-            Self::Help | Self::Preview => Self::Dashboard,
+    fn next_on_enter(self, entry: ScreenEntry) -> Self {
+        match (self, entry) {
+            (
+                Self::Report | Self::Rivals | Self::Board | Self::Help,
+                ScreenEntry::DirectCommand,
+            ) => Self::Dashboard,
+            (Self::Preview, _) => Self::Dashboard,
+            (Self::Start, _) => Self::Dashboard,
+            (Self::Dashboard, _) => Self::Report,
+            (Self::Report, ScreenEntry::Cycle) => Self::Rivals,
+            (Self::Rivals, ScreenEntry::Cycle) => Self::Board,
+            (Self::Board, ScreenEntry::Cycle) => Self::Help,
+            (Self::Help, ScreenEntry::Cycle) => Self::Dashboard,
         }
     }
 }
