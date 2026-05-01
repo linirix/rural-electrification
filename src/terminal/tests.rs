@@ -794,6 +794,15 @@ fn hire_and_fire_manager_commands_update_targets() {
         _ => panic!("fire maintenance should apply"),
     }
     assert_eq!(game.maintenance_manager_target, None);
+
+    match handle_command(&mut game, "hire maintenance") {
+        CommandResult::Continue(message) => assert!(message.contains("maintenance manager")),
+        _ => panic!("hire maintenance should apply default target"),
+    }
+    assert!(
+        (game.maintenance_manager_target.unwrap() - DEFAULT_MAINTENANCE_MANAGER_TARGET).abs()
+            < 0.0001
+    );
 }
 
 #[test]

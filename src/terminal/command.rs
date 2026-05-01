@@ -363,7 +363,7 @@ fn manager_reliability_target(value: Option<&str>) -> Result<f64, String> {
     let number = trimmed
         .trim_end_matches('%')
         .parse::<f64>()
-        .map_err(|_| "Use 'hire maintenance 95%' or 'hire maintenance'.".to_string())?;
+        .map_err(|_| "Use 'hire maintenance 85%' or 'hire maintenance'.".to_string())?;
     let target = if has_percent || number > 1.0 {
         number / 100.0
     } else {

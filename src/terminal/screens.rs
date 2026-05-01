@@ -88,7 +88,7 @@ pub(super) fn print_help() {
             "build lines [customers]".to_string(),
             "marketing [amount]".to_string(),
             "maint [amount]       maintenance".to_string(),
-            "hire maint 95%       auto service work".to_string(),
+            "hire maint 85%       auto service work".to_string(),
             "hire marketing 90    auto reputation work".to_string(),
             "fire maint/marketing dismiss manager".to_string(),
             "expand               adjacent territory".to_string(),
