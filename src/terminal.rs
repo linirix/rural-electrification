@@ -33,7 +33,7 @@ use command::handle_command;
 use render::{clear_screen, print_box};
 use screens::{
     print_board, print_competitors, print_help, print_last_report, print_notice, print_outcome,
-    print_start_screen, print_status,
+    print_quit_summary, print_start_screen, print_status,
 };
 
 const MIN_SCREEN_WIDTH: usize = 88;
@@ -211,7 +211,10 @@ pub fn run() -> io::Result<()> {
                 current_screen = TerminalScreen::Preview;
                 screen_entry = ScreenEntry::DirectCommand;
             }
-            CommandResult::Quit => break,
+            CommandResult::Quit => {
+                print_quit_summary(&game);
+                break;
+            }
         }
     }
 

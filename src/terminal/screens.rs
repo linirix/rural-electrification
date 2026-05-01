@@ -407,9 +407,11 @@ fn report_margin(report: &QuarterReport) -> f64 {
 
 pub(super) fn milestone_snapshot_lines(game: &Game) -> Vec<String> {
     let next = next_board_target(game);
-    let coverage = game
-        .player_last_interest_coverage()
-        .unwrap_or(f64::INFINITY);
+    let coverage = game.player_last_interest_coverage();
+    let (coverage_tone, coverage_label) = match coverage {
+        Some(coverage) => (coverage_tone(coverage), format_coverage(coverage)),
+        None => (DIM, "no completed quarter yet".to_string()),
+    };
     vec![
         format!(
             "{} {}   {} {}",
@@ -435,7 +437,7 @@ pub(super) fn milestone_snapshot_lines(game: &Game) -> Vec<String> {
                 format!("{:.0}%", game.player_rate_support_ratio() * 100.0)
             ),
             muted("Coverage"),
-            styled(coverage_tone(coverage), format_coverage(coverage))
+            styled(coverage_tone, coverage_label)
         ),
         format!(
             "{} {}   {} {}",
@@ -553,6 +555,38 @@ pub(super) fn print_outcome(outcome: &Outcome) {
 
     println!();
     print_box("Outcome", &lines);
+}
+
+pub(super) fn print_quit_summary(game: &Game) {
+    println!();
+    println!("{}", quit_summary_line(game));
+}
+
+pub(super) fn quit_summary_line(game: &Game) -> String {
+    let outcome = game
+        .outcome
+        .as_ref()
+        .map(|outcome| outcome.headline.as_str())
+        .unwrap_or("in progress");
+    format!(
+        "{} {} | {} {:.0}% | {} {:.0} | {} {:.0}% | {} {:.0}% | {} {} | {} {:.1}% | {} {}",
+        styled(BOLD_CYAN, "Summary:"),
+        styled(BOLD, outcome),
+        muted("share"),
+        game.market_share() * 100.0,
+        muted("customers"),
+        game.player.customers,
+        muted("reliability"),
+        game.player.reliability * 100.0,
+        muted("debt/assets"),
+        game.player.debt_to_assets() * 100.0,
+        muted("cash"),
+        styled(cash_tone(game.player.cash), money(game.player.cash)),
+        muted("founder"),
+        game.player_ownership() * 100.0,
+        muted("personal wealth"),
+        styled(BOLD_GREEN, money(game.player_wealth()))
+    )
 }
 
 pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {

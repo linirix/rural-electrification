@@ -250,6 +250,33 @@ fn report_command_shows_last_quarter_screen() {
 }
 
 #[test]
+fn quit_summary_line_includes_game_state_and_personal_wealth() {
+    let mut game = Game::with_seed(121);
+    game.advance_quarter();
+    let line = quit_summary_line(&game);
+
+    assert!(line.contains("Summary"));
+    assert!(line.contains("share"));
+    assert!(line.contains("customers"));
+    assert!(line.contains("personal wealth"));
+    assert!(line.contains(&money(game.player_wealth())));
+    assert_eq!(
+        visible_width(&line),
+        format!(
+            "Summary: in progress | share {:.0}% | customers {:.0} | reliability {:.0}% | debt/assets {:.0}% | cash {} | founder {:.1}% | personal wealth {}",
+            game.market_share() * 100.0,
+            game.player.customers,
+            game.player.reliability * 100.0,
+            game.player.debt_to_assets() * 100.0,
+            money(game.player.cash),
+            game.player_ownership() * 100.0,
+            money(game.player_wealth())
+        )
+        .len()
+    );
+}
+
+#[test]
 fn stable_dashboard_panels_keep_fixed_heights() {
     let mut game = Game::with_seed(120);
     assert_eq!(
@@ -1057,6 +1084,16 @@ fn scorecard_uses_y5_review_before_formal_review() {
     assert!(joined.contains("95% limit"));
     assert!(joined.contains("Rate support"));
     assert!(!joined.contains("Territories"));
+}
+
+#[test]
+fn initial_milestone_snapshot_waits_for_completed_quarter_before_coverage() {
+    let game = Game::with_seed(153);
+    let joined = milestone_snapshot_lines(&game).join(" ");
+
+    assert!(joined.contains("Coverage"));
+    assert!(joined.contains("no completed quarter yet"));
+    assert!(!joined.contains("no debt"));
 }
 
 #[test]
