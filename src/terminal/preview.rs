@@ -713,6 +713,18 @@ pub(super) fn immediate_effect_lines(before: &Game, after: &Game) -> Vec<String>
         before.player.shares,
         after.player.shares,
     );
+    push_percent_delta(
+        &mut lines,
+        "Founder ownership",
+        before.player_ownership(),
+        after.player_ownership(),
+    );
+    push_money_delta(
+        &mut lines,
+        "Founder value",
+        before.player_wealth(),
+        after.player_wealth(),
+    );
     push_stock_delta(
         &mut lines,
         "Stock price",

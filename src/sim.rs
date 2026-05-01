@@ -64,6 +64,8 @@ const MIN_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = -1.25;
 const MAX_RATE_TOLERANCE_ADJUSTMENT_CENTS: f64 = 1.35;
 const ACQUISITION_RATE_ANCHOR_TOLERANCE_MULTIPLIER: f64 = 0.70;
 const ACQUISITION_RATE_ANCHOR_MAX_LIFT_CENTS: f64 = 0.45;
+const STARTING_PLAYER_OWNERSHIP: f64 = 0.32;
+const MIN_PUBLIC_SHARES_AFTER_BUYBACK: f64 = 500.0;
 pub const REVIEW_MIN_RATE_SUPPORT_RATIO: f64 = 0.72;
 pub const REVIEW_MIN_INTEREST_COVERAGE: f64 = 1.0;
 pub const REVIEW_MIN_RELIABILITY: f64 = 0.72;
@@ -127,6 +129,10 @@ pub struct Game {
     pub diligence_reports: Vec<DiligenceReport>,
     pub last_report: Option<QuarterReport>,
     pub outcome: Option<Outcome>,
+    #[serde(default)]
+    pub player_owned_shares: f64,
+    #[serde(default)]
+    pub player_dividends_received: f64,
     rng: Rng,
 }
 
@@ -382,36 +388,40 @@ impl Game {
             rate_tolerance_adjustment_cents: 0.0,
         };
 
+        let macro_state = MacroEnvironment {
+            annual_base_rate: varied_abs(&mut rng, BASE_ANNUAL_RATE, 0.006, initial_variance)
+                .clamp(0.038, 0.070),
+            credit_spread: varied_abs(&mut rng, BASE_CREDIT_SPREAD, 0.005, initial_variance)
+                .clamp(0.008, 0.032),
+            demand_index: varied_abs(&mut rng, 0.0, 0.12, initial_variance).clamp(-0.22, 0.22),
+            cost_pressure: varied_abs(&mut rng, 0.0, 0.008, initial_variance).clamp(-0.014, 0.018),
+        };
+
+        let player = starting_utility(
+            "Metro Consolidated",
+            34_000.0,
+            20_000.0,
+            2_000.0,
+            24.0,
+            160.0,
+            72.0,
+            275.0,
+            10.5,
+            55.0,
+            0.82,
+            0.08,
+            78_000.0,
+            initial_variance,
+            &mut rng,
+        );
+        let player_owned_shares = player.shares * STARTING_PLAYER_OWNERSHIP;
+
         Self {
             quarter: 0,
             campaign_quarters: DEFAULT_CAMPAIGN_QUARTERS,
             market,
-            macro_state: MacroEnvironment {
-                annual_base_rate: varied_abs(&mut rng, BASE_ANNUAL_RATE, 0.006, initial_variance)
-                    .clamp(0.038, 0.070),
-                credit_spread: varied_abs(&mut rng, BASE_CREDIT_SPREAD, 0.005, initial_variance)
-                    .clamp(0.008, 0.032),
-                demand_index: varied_abs(&mut rng, 0.0, 0.12, initial_variance).clamp(-0.22, 0.22),
-                cost_pressure: varied_abs(&mut rng, 0.0, 0.008, initial_variance)
-                    .clamp(-0.014, 0.018),
-            },
-            player: starting_utility(
-                "Metro Consolidated",
-                34_000.0,
-                20_000.0,
-                2_000.0,
-                24.0,
-                160.0,
-                72.0,
-                275.0,
-                10.5,
-                55.0,
-                0.82,
-                0.08,
-                78_000.0,
-                initial_variance,
-                &mut rng,
-            ),
+            macro_state,
+            player,
             competitors: vec![
                 starting_utility(
                     &first_competitor_name,
@@ -479,6 +489,8 @@ impl Game {
             diligence_reports: Vec::new(),
             last_report: None,
             outcome: None,
+            player_owned_shares,
+            player_dividends_received: 0.0,
             rng,
         }
     }
@@ -487,6 +499,34 @@ impl Game {
         let year = self.quarter / 4 + 1;
         let quarter = self.quarter % 4 + 1;
         format!("Year {year} Q{quarter}")
+    }
+
+    pub fn player_ownership(&self) -> f64 {
+        if self.player.shares <= 0.0 {
+            0.0
+        } else {
+            (self.player_owned_shares / self.player.shares).clamp(0.0, 1.0)
+        }
+    }
+
+    pub fn player_equity_value(&self) -> f64 {
+        self.player_owned_shares.max(0.0) * self.player.stock_price.max(0.0)
+    }
+
+    pub fn player_wealth(&self) -> f64 {
+        self.player_equity_value() + self.player_dividends_received.max(0.0)
+    }
+
+    pub fn normalize_after_load(&mut self) {
+        if self.player_owned_shares <= 0.0 && self.player.shares > 0.0 {
+            self.player_owned_shares = self.player.shares * STARTING_PLAYER_OWNERSHIP;
+        }
+        if !self.player_owned_shares.is_finite() {
+            self.player_owned_shares = 0.0;
+        }
+        if !self.player_dividends_received.is_finite() || self.player_dividends_received < 0.0 {
+            self.player_dividends_received = 0.0;
+        }
     }
 
     pub fn apply_decision(&mut self, decision: Decision) -> Result<String, String> {
@@ -639,7 +679,10 @@ impl Game {
                 ))
             }
             Decision::BuyBackStock { amount } => {
-                if self.player.shares <= 500.0 {
+                let buyback_share_floor = self
+                    .player_owned_shares
+                    .max(MIN_PUBLIC_SHARES_AFTER_BUYBACK);
+                if self.player.shares <= buyback_share_floor {
                     return Err(
                         "The company has too few public shares to buy back more.".to_string()
                     );
@@ -665,7 +708,7 @@ impl Game {
                     .clamp(-0.18, 0.30);
                 let repurchase_price =
                     (self.player.stock_price * (1.0 + repurchase_premium)).max(MIN_STOCK_PRICE);
-                let max_shares = (self.player.shares - 500.0).max(0.0);
+                let max_shares = (self.player.shares - buyback_share_floor).max(0.0);
                 let shares_bought = (amount / repurchase_price).min(max_shares);
                 if shares_bought < 1.0 {
                     return Err(
@@ -2650,7 +2693,7 @@ impl Game {
                             self.player.debt,
                             sustainability.interest_coverage
                         )
-                    ),
+                    ) + &owner_return_summary(self),
                     can_continue: true,
                 });
             } else {
@@ -2681,7 +2724,7 @@ impl Game {
                         "By Year 10 Metro held {:.0}% share across {} adjacent territories while keeping reliability and leverage inside the regional mandate.",
                         self.market_share() * 100.0,
                         self.adjacent_expansions
-                    ),
+                    ) + &owner_return_summary(self),
                     can_continue: true,
                 });
             } else {
@@ -2738,6 +2781,14 @@ fn review_interest_coverage_summary(debt: f64, coverage: f64) -> String {
     } else {
         format!("{coverage:.1}x interest coverage")
     }
+}
+
+fn owner_return_summary(game: &Game) -> String {
+    format!(
+        " Founder ownership is {:.1}%, worth {} at the closing stock price.",
+        game.player_ownership() * 100.0,
+        money(game.player_wealth())
+    )
 }
 
 fn year_five_review_failure_details(

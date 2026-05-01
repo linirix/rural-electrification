@@ -1141,6 +1141,22 @@ fn financial_lines_show_break_even_and_interest_coverage() {
 
     assert!(joined.contains("Break-even"));
     assert!(joined.contains("Coverage"));
+    assert!(joined.contains("Founder"));
+    assert!(joined.contains("Founder value"));
+}
+
+#[test]
+fn stock_preview_shows_founder_dilution_and_value() {
+    let mut game = Game::with_seed(118);
+
+    match handle_command(&mut game, "preview issue 20000") {
+        CommandResult::Preview(lines) => {
+            let joined = lines.join("\n");
+            assert!(joined.contains("Founder ownership"));
+            assert!(joined.contains("Founder value"));
+        }
+        _ => panic!("preview issue should show founder economics"),
+    }
 }
 
 #[test]

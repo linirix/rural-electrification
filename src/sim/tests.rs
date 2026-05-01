@@ -17,6 +17,16 @@ fn stock_issuance_raises_cash_and_dilutes_shares() {
 }
 
 #[test]
+fn player_ownership_starts_as_founder_stake() {
+    let game = Game::with_seed(1);
+
+    assert!((game.player_ownership() - 0.32).abs() < 0.0001);
+    assert!(
+        (game.player_wealth() - game.player_owned_shares * game.player.stock_price).abs() < 0.01
+    );
+}
+
+#[test]
 fn fixed_initial_variance_preserves_baseline_start() {
     let game = Game::with_seed_and_initial_variance(1, InitialVariance::fixed());
 
@@ -77,6 +87,21 @@ fn serialized_game_round_trip_preserves_next_quarter() {
         assert!((loaded_competitor.customers - original_competitor.customers).abs() < 0.000001);
         assert!((loaded_competitor.cash - original_competitor.cash).abs() < 0.01);
     }
+}
+
+#[test]
+fn legacy_save_without_owner_fields_restores_founder_stake() {
+    let original = Game::with_seed(91);
+    let mut value = serde_json::to_value(&original).unwrap();
+    let object = value.as_object_mut().unwrap();
+    object.remove("player_owned_shares");
+    object.remove("player_dividends_received");
+
+    let mut loaded: Game = serde_json::from_value(value).unwrap();
+    loaded.normalize_after_load();
+
+    assert!((loaded.player_ownership() - 0.32).abs() < 0.0001);
+    assert_eq!(loaded.player_dividends_received, 0.0);
 }
 
 #[test]
@@ -400,6 +425,20 @@ fn stock_issuance_uses_pre_and_post_money_valuation() {
 }
 
 #[test]
+fn stock_issuance_dilutes_player_ownership_without_extra_penalty() {
+    let mut game = Game::with_seed(14);
+    let starting_owned_shares = game.player_owned_shares;
+    let starting_ownership = game.player_ownership();
+
+    game.apply_decision(Decision::IssueStock { amount: 45_000.0 })
+        .unwrap();
+
+    assert!((game.player_owned_shares - starting_owned_shares).abs() < 0.001);
+    assert!(game.player_ownership() < starting_ownership);
+    assert!(game.player_wealth().is_finite());
+}
+
+#[test]
 fn repeated_large_stock_issues_hit_market_fatigue() {
     let mut game = Game::with_seed(14);
 
@@ -566,6 +605,8 @@ fn stock_buyback_reduces_cash_and_share_count() {
     let starting_cash = game.player.cash;
     let starting_shares = game.player.shares;
     let starting_debt = game.player.debt;
+    let starting_owned_shares = game.player_owned_shares;
+    let starting_ownership = game.player_ownership();
 
     game.apply_decision(Decision::BuyBackStock { amount: 10_000.0 })
         .unwrap();
@@ -574,6 +615,21 @@ fn stock_buyback_reduces_cash_and_share_count() {
     assert!(game.player.shares < starting_shares);
     assert_eq!(game.player.debt, starting_debt);
     assert!(game.player.stock_price >= MIN_STOCK_PRICE);
+    assert!((game.player_owned_shares - starting_owned_shares).abs() < 0.001);
+    assert!(game.player_ownership() > starting_ownership);
+}
+
+#[test]
+fn stock_buyback_cannot_retire_below_founder_stake() {
+    let mut game = Game::with_seed(15);
+    game.player.cash = 500_000.0;
+
+    game.apply_decision(Decision::BuyBackStock { amount: 450_000.0 })
+        .unwrap();
+
+    assert!(game.player.shares + 0.001 >= game.player_owned_shares);
+    assert!(game.player_ownership() <= 1.0);
+    assert!(game.player_wealth() <= game.player.market_cap() + 0.01);
 }
 
 #[test]

@@ -109,8 +109,9 @@ pub(super) fn load_game_from_dir(raw_name: &str, root: &Path) -> Result<(Game, S
     let path = save_file_path(root, raw_name)?;
     let json = fs::read_to_string(&path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-    let game = serde_json::from_str::<Game>(&json)
+    let mut game = serde_json::from_str::<Game>(&json)
         .map_err(|error| format!("could not parse {}: {error}", path.display()))?;
+    game.normalize_after_load();
     Ok((game, format!("Loaded game from {}.", path.display())))
 }
 

@@ -744,6 +744,16 @@ fn coverage_tone(coverage: f64) -> &'static str {
     }
 }
 
+fn ownership_tone(ownership: f64) -> &'static str {
+    if ownership < 0.18 {
+        RED
+    } else if ownership < 0.26 {
+        YELLOW
+    } else {
+        GREEN
+    }
+}
+
 fn format_coverage(coverage: f64) -> String {
     if coverage.is_infinite() {
         "no debt".to_string()
@@ -1268,11 +1278,23 @@ pub(super) fn financial_lines(game: &Game) -> Vec<String> {
             )
         ),
         format!(
-            "{} {}   {} {}",
+            "{} {}   {} {}   {} {}",
             muted("Stock"),
             styled(BOLD_CYAN, format!("${:.2}", game.player.stock_price)),
             muted("Market cap"),
-            styled(BOLD, money(game.player.market_cap()))
+            styled(BOLD, money(game.player.market_cap())),
+            muted("Founder"),
+            styled(
+                ownership_tone(game.player_ownership()),
+                format!("{:.1}%", game.player_ownership() * 100.0)
+            )
+        ),
+        format!(
+            "{} {}   {} {}",
+            muted("Founder value"),
+            styled(BOLD_GREEN, money(game.player_wealth())),
+            muted("Dividends"),
+            styled(GREEN, money(game.player_dividends_received))
         ),
     ];
 
