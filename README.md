@@ -165,7 +165,9 @@ The package includes:
 GitHub Actions are configured for:
 
 - `CI`: format, clippy, release tests, and a 500-seed all-strategy smoke run on pushes and pull requests.
-- `Release`: package and smoke-test macOS/Linux tarballs on `v*` tags or manual dispatch.
+- `Release`: package and smoke-test macOS, Linux, and Windows tarballs on `v*` tags or manual dispatch.
+
+On a `v*` tag push, the release workflow also creates or updates the matching GitHub Release and uploads all platform tarballs as release assets.
 
 Suggested first release flow:
 

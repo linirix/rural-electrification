@@ -16,9 +16,25 @@ mkdir -p "$STAGE_DIR/bin"
 
 cargo build --release --locked --bins
 
-cp "$ROOT/target/release/electrification" "$STAGE_DIR/bin/"
-cp "$ROOT/target/release/playtest" "$STAGE_DIR/bin/"
-cp "$ROOT/target/release/stress_scan" "$STAGE_DIR/bin/"
+BIN_DIR="$ROOT/target/release"
+EXE_SUFFIX=""
+if [[ -f "$BIN_DIR/electrification.exe" ]]; then
+    EXE_SUFFIX=".exe"
+fi
+
+copy_binary() {
+    local name="$1"
+    local source="$BIN_DIR/${name}${EXE_SUFFIX}"
+    if [[ ! -f "$source" ]]; then
+        printf 'missing release binary: %s\n' "$source" >&2
+        exit 1
+    fi
+    cp "$source" "$STAGE_DIR/bin/"
+}
+
+copy_binary electrification
+copy_binary playtest
+copy_binary stress_scan
 cp "$ROOT/README.md" "$STAGE_DIR/"
 cp "$ROOT/PLAYTEST_SEEDS.md" "$STAGE_DIR/"
 cp "$ROOT/Cargo.lock" "$STAGE_DIR/"
@@ -27,10 +43,19 @@ cp "$ROOT/Cargo.lock" "$STAGE_DIR/"
     printf 'Electrification %s\n' "$VERSION"
     printf 'Target: %s\n' "$HOST"
     printf '\nRun the game:\n'
-    printf '  ./bin/electrification\n'
+    if [[ -n "$EXE_SUFFIX" ]]; then
+        printf '  .\\bin\\electrification.exe\n'
+    else
+        printf '  ./bin/electrification\n'
+    fi
     printf '\nDeveloper balance tools included:\n'
-    printf '  ./bin/playtest --all-strategies --seeds 500\n'
-    printf '  ./bin/stress_scan --seeds 10000\n'
+    if [[ -n "$EXE_SUFFIX" ]]; then
+        printf '  .\\bin\\playtest.exe --all-strategies --seeds 500\n'
+        printf '  .\\bin\\stress_scan.exe --seeds 10000\n'
+    else
+        printf '  ./bin/playtest --all-strategies --seeds 500\n'
+        printf '  ./bin/stress_scan --seeds 10000\n'
+    fi
 } > "$STAGE_DIR/RELEASE.txt"
 
 tar -C "$DIST_DIR" -czf "$ARCHIVE" "$PACKAGE_NAME"

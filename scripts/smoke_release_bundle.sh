@@ -26,12 +26,17 @@ else
     PACKAGE_DIR="$(printf '%s\n' "$PACKAGE_DIR" | sed -n '1p')"
 fi
 
-GAME_BIN="$PACKAGE_DIR/bin/electrification"
-PLAYTEST_BIN="$PACKAGE_DIR/bin/playtest"
-STRESS_BIN="$PACKAGE_DIR/bin/stress_scan"
+EXE_SUFFIX=""
+if [[ -f "$PACKAGE_DIR/bin/electrification.exe" ]]; then
+    EXE_SUFFIX=".exe"
+fi
+
+GAME_BIN="$PACKAGE_DIR/bin/electrification${EXE_SUFFIX}"
+PLAYTEST_BIN="$PACKAGE_DIR/bin/playtest${EXE_SUFFIX}"
+STRESS_BIN="$PACKAGE_DIR/bin/stress_scan${EXE_SUFFIX}"
 
 for binary in "$GAME_BIN" "$PLAYTEST_BIN" "$STRESS_BIN"; do
-    if [[ ! -x "$binary" ]]; then
+    if [[ ! -f "$binary" ]]; then
         printf 'missing executable: %s\n' "$binary" >&2
         exit 1
     fi
