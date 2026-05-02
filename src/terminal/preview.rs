@@ -460,10 +460,7 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                         }
                         lines.push(acquisition_funding_preview_line(game, &terms, false));
                     }
-                    lines.push(public_acquisition_underwriting_line(
-                        game,
-                        *competitor_index,
-                    ));
+                    lines.push(public_acquisition_financing_line(game, *competitor_index));
                     lines
                 }
             } else {
@@ -587,10 +584,10 @@ fn acquisition_risk_line(
     };
 
     format!(
-        "{} {} integration risk; underwriting {}, deal size {:.0}% of post-close customers, post debt/assets {:.0}%, target reliability {:.0}%.",
+        "{} {} integration risk; financing risk {}, deal size {:.0}% of post-close customers, post debt/assets {:.0}%, target reliability {:.0}%.",
         styled(tone, "Risk:"),
         styled(tone, label),
-        styled(underwriting_tone(stress_score), stress_label),
+        styled(financing_tone(stress_score), stress_label),
         deal_share * 100.0,
         terms.post_debt_to_assets * 100.0,
         competitor.reliability * 100.0
@@ -685,19 +682,19 @@ fn acquisition_rate_anchor_preview_line(game: &Game, competitor_index: usize) ->
     ))
 }
 
-fn public_acquisition_underwriting_line(game: &Game, competitor_index: usize) -> String {
+fn public_acquisition_financing_line(game: &Game, competitor_index: usize) -> String {
     let stress_score = game
         .acquisition_stress_score(competitor_index)
         .unwrap_or(0.0);
     let label = Game::acquisition_stress_label(stress_score);
     format!(
-        "{} public file leaves lender posture {}; watch service quality, liquidity buffer, and leverage before closing without diligence.",
-        styled(underwriting_tone(stress_score), "Underwriting:"),
-        styled(underwriting_tone(stress_score), label)
+        "{} public estimate looks {}; watch service quality, liquidity buffer, and leverage before closing without diligence.",
+        styled(financing_tone(stress_score), "Financing:"),
+        styled(financing_tone(stress_score), label)
     )
 }
 
-fn underwriting_tone(score: f64) -> &'static str {
+fn financing_tone(score: f64) -> &'static str {
     match Game::acquisition_stress_label(score) {
         "distressed" => BOLD_RED,
         "strained" => BOLD_YELLOW,

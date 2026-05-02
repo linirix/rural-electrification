@@ -718,8 +718,8 @@ impl Game {
                 fee_rate * 100.0
             ));
         }
-        let underwriting_cost = amount * fee_rate;
-        let net_proceeds = amount - underwriting_cost;
+        let issuance_fee = amount * fee_rate;
+        let net_proceeds = amount - issuance_fee;
         let transaction_pre_money = issue_price * old_shares;
         let post_money_market_cap =
             (transaction_pre_money + net_proceeds).max((old_shares + new_shares) * MIN_STOCK_PRICE);
@@ -1015,7 +1015,7 @@ impl Game {
         } else {
             " Closed without diligence; hidden balance-sheet details resolved at close.".to_string()
         };
-        let underwriting_suffix = acquisition_underwriting_suffix(acquisition_stress_add);
+        let financing_suffix = acquisition_financing_suffix(acquisition_stress_add);
         Ok(format!(
             "Acquired {acquired_name} for {} (net of {} absorbed cash, plus {} assumed debt). Integration will take {} quarter(s).",
             money(terms.price),
@@ -1023,7 +1023,7 @@ impl Game {
             money(terms.assumed_debt),
             self.acquisition_cooldown
         ) + &diligence_suffix
-            + &underwriting_suffix
+            + &financing_suffix
             + &execution_suffix
             + &rate_anchor_suffix)
     }
@@ -3317,15 +3317,15 @@ fn acquisition_covenant_stress_score(
         .clamp(0.0, 1.20)
 }
 
-fn acquisition_underwriting_suffix(score: f64) -> String {
+fn acquisition_financing_suffix(score: f64) -> String {
     if score >= ACQUISITION_STRESS_DISTRESSED {
-        " Underwriters flagged the close as distressed; lenders may force a reckoning if losses follow."
+        " Lenders view the close as distressed; losses could force a financing reckoning."
             .to_string()
     } else if score >= ACQUISITION_STRESS_STRAINED {
-        " Underwriters called the close strained; lender patience is thinner until integration proves out."
+        " Lenders view the close as strained; patience is thinner until integration proves out."
             .to_string()
     } else if score >= ACQUISITION_STRESS_NOTICE {
-        " Underwriters sounded guarded about the integration plan.".to_string()
+        " Financing signals are guarded until the integration plan proves out.".to_string()
     } else {
         String::new()
     }

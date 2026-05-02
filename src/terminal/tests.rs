@@ -812,7 +812,7 @@ fn rival_detail_includes_acquisition_economics() {
             .any(|line| line.contains("post-close reliability"))
     );
     assert!(lines.iter().any(|line| line.contains("integration burden")));
-    assert!(!lines.iter().any(|line| line.contains("underwriting")));
+    assert!(!lines.iter().any(|line| line.contains("Financing:")));
 }
 
 #[test]
@@ -835,7 +835,7 @@ fn rival_detail_hides_exact_deal_terms_before_diligence() {
     );
     assert!(!lines.iter().any(|line| line.contains("buy estimate")));
     assert!(!lines.iter().any(|line| line.contains("terms")));
-    assert!(!lines.iter().any(|line| line.contains("underwriting")));
+    assert!(!lines.iter().any(|line| line.contains("Financing:")));
     assert!(!lines.iter().any(|line| line.contains("post debt/assets")));
     assert!(!lines.iter().any(|line| line.contains("reliability")));
     assert!(!lines.iter().any(|line| line.contains("headroom")));
@@ -891,7 +891,7 @@ fn acquisition_preview_without_diligence_shows_public_range() {
             assert!(lines.iter().any(|line| line.contains("public estimate")));
             assert!(lines.iter().any(|line| line.contains("close risk")));
             assert!(lines.iter().any(|line| line.contains("diligence reveals")));
-            assert!(lines.iter().any(|line| line.contains("Underwriting")));
+            assert!(lines.iter().any(|line| line.contains("Financing")));
             assert!(lines.iter().any(|line| line.contains("service quality")));
             assert!(lines.iter().any(|line| line.contains("liquidity buffer")));
             assert!(lines.iter().any(|line| line.contains("est leverage")));
@@ -934,7 +934,7 @@ fn acquisition_preview_with_diligence_shows_integration_risk() {
     match handle_command(&mut game, "preview buy 1") {
         CommandResult::Preview(lines) => {
             assert!(lines.iter().any(|line| line.contains("integration risk")));
-            assert!(lines.iter().any(|line| line.contains("underwriting")));
+            assert!(lines.iter().any(|line| line.contains("financing risk")));
             assert!(lines.iter().any(|line| line.contains("post debt/assets")));
             assert!(
                 lines

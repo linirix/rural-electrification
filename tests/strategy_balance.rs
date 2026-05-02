@@ -140,7 +140,7 @@ fn raider_strategy_exercises_acquisition_stress() {
     );
     assert!(
         summary.peak_acquisition_stress_range.max >= 0.80,
-        "raider should reach distressed underwriting in at least some seeds: max {:.0} pts",
+        "raider should reach distressed acquisition stress in at least some seeds: max {:.0} pts",
         summary.peak_acquisition_stress_range.max * 100.0
     );
     assert!(

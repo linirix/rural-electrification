@@ -1996,7 +1996,7 @@ fn risky_acquisition_creates_lender_stress_signal() {
     let score = game.acquisition_stress_score(0).unwrap();
     assert!(
         score >= ACQUISITION_STRESS_STRAINED,
-        "expected visibly strained underwriting score, got {score:.2}"
+        "expected visibly strained acquisition stress score, got {score:.2}"
     );
 
     let message = game
@@ -2005,7 +2005,7 @@ fn risky_acquisition_creates_lender_stress_signal() {
         })
         .unwrap();
 
-    assert!(message.contains("Underwriters"));
+    assert!(message.contains("Lenders"));
     assert!(game.acquisition_stress >= ACQUISITION_STRESS_STRAINED);
 }
 
