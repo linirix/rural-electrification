@@ -288,12 +288,12 @@ fn stable_dashboard_panels_keep_fixed_heights() {
         6
     );
     assert_eq!(
-        stable_panel_lines(project_lines(&game), 5, "board for planning context").len(),
-        5
+        stable_panel_lines(project_lines(&game), 6, "board for planning context").len(),
+        6
     );
     assert_eq!(
-        stable_panel_lines(compact_command_lines(&game), 5, "help for all commands").len(),
-        5
+        stable_panel_lines(compact_command_lines(&game), 6, "help for all commands").len(),
+        6
     );
 
     game.advance_quarter();
@@ -317,8 +317,8 @@ fn stable_dashboard_panels_keep_fixed_heights() {
         6
     );
     assert_eq!(
-        stable_panel_lines(project_lines(&game), 5, "board for planning context").len(),
-        5
+        stable_panel_lines(project_lines(&game), 6, "board for planning context").len(),
+        6
     );
 }
 
@@ -351,6 +351,46 @@ fn compact_commands_show_build_sizes_with_spaces() {
     assert!(commands.contains("lines 600"));
     assert!(!commands.contains("gen400"));
     assert!(!commands.contains("lines600"));
+}
+
+#[test]
+fn compact_commands_show_manager_examples_as_commands() {
+    let game = Game::with_seed(120);
+    let commands = compact_command_lines(&game).join(" ");
+
+    assert!(commands.contains("marketing 4"));
+    assert!(commands.contains("maint 6"));
+    assert!(commands.contains("hire maint 95%"));
+    assert!(commands.contains("hire marketing 90"));
+    assert!(commands.contains("fire maint"));
+    assert!(!commands.contains("operate"));
+    assert!(!commands.contains("capital"));
+}
+
+#[test]
+fn single_digit_operating_spend_means_thousands_only_for_operating_commands() {
+    let game = Game::with_seed(120);
+
+    match parse_decision(&game, &["maint", "1"]).unwrap() {
+        Decision::Maintenance { spend } => assert_eq!(spend, 1_000.0),
+        _ => panic!("maint 1 should parse as maintenance spend"),
+    }
+    match parse_decision(&game, &["marketing", "9"]).unwrap() {
+        Decision::Marketing { spend } => assert_eq!(spend, 9_000.0),
+        _ => panic!("marketing 9 should parse as marketing spend"),
+    }
+    match parse_decision(&game, &["maint", "10"]).unwrap() {
+        Decision::Maintenance { spend } => assert_eq!(spend, 10.0),
+        _ => panic!("maint 10 should stay literal before the spend floor"),
+    }
+    match parse_decision(&game, &["issue", "9"]).unwrap() {
+        Decision::IssueStock { amount } => assert_eq!(amount, 9.0),
+        _ => panic!("issue 9 should stay literal"),
+    }
+    match parse_decision(&game, &["borrow", "9"]).unwrap() {
+        Decision::Borrow { amount } => assert_eq!(amount, 9.0),
+        _ => panic!("borrow 9 should stay literal"),
+    }
 }
 
 #[test]
@@ -487,6 +527,14 @@ fn blank_input_detection_accepts_return_and_spaces_only() {
     assert!(is_blank_input("   \r\n"));
     assert!(!is_blank_input(" status\n"));
     assert!(!is_blank_input(" report\n"));
+}
+
+#[test]
+fn command_history_records_only_real_commands() {
+    assert!(should_record_command_history("next"));
+    assert!(should_record_command_history(" preview borrow max "));
+    assert!(!should_record_command_history(""));
+    assert!(!should_record_command_history("   "));
 }
 
 #[test]

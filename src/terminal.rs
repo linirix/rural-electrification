@@ -1,7 +1,4 @@
-use std::{
-    io::{self, Write},
-    sync::OnceLock,
-};
+use std::{io, sync::OnceLock};
 
 #[cfg(test)]
 use crate::sim::ActiveShock;
@@ -20,6 +17,7 @@ use crate::sim::{
     generation_project_duration, generation_reliability_after_new_capacity, money,
     public_rate_tolerance,
 };
+use rustyline::{DefaultEditor, error::ReadlineError};
 
 mod command;
 mod preview;
@@ -125,18 +123,16 @@ pub fn run() -> io::Result<()> {
     let mut game = Game::new();
     let mut current_screen = TerminalScreen::Start;
     let mut screen_entry = ScreenEntry::Cycle;
+    let mut command_reader = DefaultEditor::new().map_err(io::Error::other)?;
 
     clear_screen();
     print_start_screen(&game);
 
     loop {
-        print!("\n{}> ", game.date_label());
-        io::stdout().flush()?;
-
-        let mut line = String::new();
-        if io::stdin().read_line(&mut line)? == 0 {
+        let prompt = format!("\n{}> ", game.date_label());
+        let Some(line) = read_command_line(&mut command_reader, &prompt)? else {
             break;
-        }
+        };
 
         if is_blank_input(&line) {
             current_screen = current_screen.next_on_enter(screen_entry);
@@ -148,6 +144,12 @@ pub fn run() -> io::Result<()> {
         let command = line.trim();
         if command.is_empty() {
             continue;
+        }
+
+        if should_record_command_history(command) {
+            command_reader
+                .add_history_entry(command)
+                .map_err(io::Error::other)?;
         }
 
         match handle_command(&mut game, command) {
@@ -221,6 +223,14 @@ pub fn run() -> io::Result<()> {
     Ok(())
 }
 
+fn read_command_line(editor: &mut DefaultEditor, prompt: &str) -> io::Result<Option<String>> {
+    match editor.readline(prompt) {
+        Ok(line) => Ok(Some(line)),
+        Err(ReadlineError::Interrupted | ReadlineError::Eof) => Ok(None),
+        Err(error) => Err(io::Error::other(error)),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScreenEntry {
     Cycle,
@@ -259,6 +269,10 @@ impl TerminalScreen {
 fn is_blank_input(raw_line: &str) -> bool {
     let input = raw_line.trim_end_matches(['\n', '\r']);
     input.chars().all(char::is_whitespace)
+}
+
+fn should_record_command_history(command: &str) -> bool {
+    !command.trim().is_empty()
 }
 
 fn render_terminal_screen(game: &Game, screen: TerminalScreen) {

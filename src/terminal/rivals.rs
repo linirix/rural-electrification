@@ -37,7 +37,7 @@ pub(super) fn rival_overview_lines(game: &Game) -> Vec<String> {
             muted("Market cap"),
             styled(BOLD, money(game.player.market_cap()))
         ),
-        "Undiligenced buys use public estimates and close risk; diligence freezes exact terms but alerts the target.".to_string(),
+        "Undiligenced buys use public estimates and close risk; diligence freezes exact terms and can alert the target.".to_string(),
     ]
 }
 

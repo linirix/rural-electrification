@@ -125,9 +125,15 @@ Examples:
 preview borrow 10000 diligence 3 buy 3
 borrow max
 repay max
+marketing 4
+maint 6
 save campaign1
 load campaign1
 ```
+
+For `marketing` and `maint`, a single digit means thousands of dollars: `marketing 4`
+spends $4,000 and `maint 6` spends $6,000. Other money commands stay literal unless
+you use `k` notation.
 
 ## Game Systems
 
@@ -136,7 +142,7 @@ load campaign1
 - `dividend [amount]` pays a company-wide dividend pro rata to all shareholders. Company cash falls by the full amount, while founder wealth receives only the founder-owned share.
 - `borrow [amount|max]` is floating-rate and limited by borrowing room, which depends on asset base, current debt, and credit conditions.
 - `repay [amount|max]` is limited by cash on hand and outstanding debt.
-- `diligence <number>` reveals exact acquisition terms for a rival for three quarters and freezes that target's acquisition quote during the diligence window, but it alerts the target and can trigger defensive financing, retention, rate, and capacity moves.
+- `diligence <number>` reveals exact acquisition terms for a rival for three quarters and freezes that target's acquisition quote during the diligence window. It can leak to the target, triggering defensive financing, retention, rate, and capacity moves.
 - `buy <number>` can close with or without diligence, but no-diligence deals rely on public estimates and can surprise you at closing. You still need available cash for the closing price and no active integration cooldown.
 - `maintenance [amount]` has diminishing reliability and reputation impact as the asset base grows. After adjacent expansion, maintenance also helps work down regional integration burden.
 - `expand` starts adjacent-territory entry once the core platform is mature enough. Up to three adjacent entries are allowed, with each follow-on expansion costing more and creating temporary regional integration work.

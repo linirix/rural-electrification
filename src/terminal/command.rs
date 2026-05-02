@@ -154,6 +154,28 @@ pub(super) fn money_amount(value: Option<&str>, default: f64, usage: &str) -> Re
     }
 }
 
+pub(super) fn operating_spend_amount(
+    value: Option<&str>,
+    default: f64,
+    usage: &str,
+) -> Result<f64, String> {
+    match value {
+        Some(value) if is_single_digit_money_shorthand(value) => parse_money(value)
+            .map(|amount| amount * 1_000.0)
+            .filter(|amount| amount.is_finite() && *amount > 0.0)
+            .ok_or_else(|| format!("Use '{usage}' with a positive amount.")),
+        Some(value) => parse_money(value)
+            .filter(|amount| amount.is_finite() && *amount > 0.0)
+            .ok_or_else(|| format!("Use '{usage}' with a positive amount.")),
+        None => Ok(default),
+    }
+}
+
+fn is_single_digit_money_shorthand(value: &str) -> bool {
+    let trimmed = value.trim().trim_start_matches('$');
+    trimmed.len() == 1 && matches!(trimmed.as_bytes()[0], b'1'..=b'9')
+}
+
 pub(super) fn borrow_amount(game: &Game, value: Option<&str>) -> Result<f64, String> {
     match value {
         Some("max") => Ok(game.borrowing_room()),
@@ -207,7 +229,8 @@ pub(super) fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, St
         },
         "expand" | "adjacent" | "territory" => Ok(Decision::EnterAdjacentMarket),
         "marketing" | "market" | "advertise" => {
-            let spend = money_amount(parts.get(1).copied(), 4_000.0, "marketing [amount]")?;
+            let spend =
+                operating_spend_amount(parts.get(1).copied(), 4_000.0, "marketing [amount]")?;
             Ok(Decision::Marketing { spend })
         }
         "issue" => {
@@ -291,7 +314,8 @@ pub(super) fn parse_decision(game: &Game, parts: &[&str]) -> Result<Decision, St
             Ok(Decision::AdjustRate { delta_cents: delta })
         }
         "maintenance" | "maint" | "maintain" | "reliability" => {
-            let spend = money_amount(parts.get(1).copied(), 4_500.0, "maintenance [amount]")?;
+            let spend =
+                operating_spend_amount(parts.get(1).copied(), 4_500.0, "maintenance [amount]")?;
             Ok(Decision::Maintenance { spend })
         }
         "hire" => match parts.get(1).copied() {

@@ -144,6 +144,7 @@ pub(super) fn print_help() {
             "Adjacent expansion creates integration work.".to_string(),
             "Saves live in ~/.electrification.".to_string(),
             "Use the dashboard guide for live costs.".to_string(),
+            "For marketing/maintenance, 1-9 means $1k-$9k.".to_string(),
         ],
     );
 }
@@ -178,9 +179,9 @@ pub(super) fn print_status(game: &Game) {
     );
     print_box_pair(
         "Pipeline",
-        &stable_panel_lines(project_lines(game), 5, "board for planning context"),
+        &stable_panel_lines(project_lines(game), 6, "board for planning context"),
         "Commands",
-        &stable_panel_lines(compact_command_lines(game), 5, "help for all commands"),
+        &stable_panel_lines(compact_command_lines(game), 6, "help for all commands"),
     );
 }
 
@@ -471,69 +472,85 @@ pub(super) fn milestone_snapshot_lines(game: &Game) -> Vec<String> {
 }
 
 pub(super) fn compact_command_lines(game: &Game) -> Vec<String> {
-    let mut lines = vec![
-        compact_action_line("next/n", "finish quarter | preview <command>"),
-        compact_action_line(
-            "build",
-            format!(
-                "gen 400 {} | lines 600 {}",
-                project_quote_short("gen", 400.0),
-                project_quote_short("lines", 600.0)
-            ),
-        ),
-        compact_action_line(
-            "operate",
-            format!(
-                "rate {:.1} | marketing/maint | hire",
-                game.market.standard_rate_cents
-            ),
-        ),
-        compact_action_line(
-            "capital",
-            format!(
-                "borrow max {} | issue/buyback",
-                styled(
-                    borrowing_room_tone(game.borrowing_room()),
-                    money(game.borrowing_room())
-                )
-            ),
-        ),
-    ];
+    let (opportunity_command, opportunity_effect) = compact_opportunity_command(game);
 
-    let opportunity = if let Some((index, price)) = cheapest_diligenced_competitor(game) {
+    vec![
+        compact_command_pair_line("next / n", "finish", "preview <cmd>", "inspect"),
+        compact_command_pair_line(
+            "build gen 400",
+            project_quote_short("gen", 400.0),
+            "build lines 600",
+            project_quote_short("lines", 600.0),
+        ),
+        compact_command_pair_line(
+            format!("rate {:.1}", game.market.standard_rate_cents),
+            "set price",
+            "marketing 4",
+            "spend $4k",
+        ),
+        compact_command_pair_line("maint 6", "spend $6k", "hire maint 95%", "auto upkeep"),
+        compact_command_pair_line("hire marketing 90", "auto rep", "fire maint", "stop auto"),
+        compact_command_pair_line(
+            "borrow max",
+            styled(
+                borrowing_room_tone(game.borrowing_room()),
+                money(game.borrowing_room()),
+            ),
+            opportunity_command,
+            opportunity_effect,
+        ),
+    ]
+}
+
+fn compact_opportunity_command(game: &Game) -> (String, String) {
+    if let Some((index, price)) = cheapest_diligenced_competitor(game) {
         let rank = competitor_rank(game, index).unwrap_or(index + 1);
         if game.competitors.len() == 1 {
-            "buy blocked: final rival protected".to_string()
+            ("buy".to_string(), "blocked".to_string())
         } else if game.acquisition_cooldown > 0 {
-            format!("buy {rank} waits {}q", game.acquisition_cooldown)
+            (
+                format!("buy {rank}"),
+                format!("waits {}q", game.acquisition_cooldown),
+            )
         } else {
-            format!("buy {rank} needs {}", money(price))
+            (format!("buy {rank}"), format!("needs {}", money(price)))
         }
     } else if let Some((index, estimate)) = cheapest_public_acquisition_target(game) {
         let rank = competitor_rank(game, index).unwrap_or(index + 1);
-        format!("buy/diligence {rank} est {}", money(estimate))
+        (
+            format!("buy/diligence {rank}"),
+            format!("est {}", money(estimate)),
+        )
     } else if should_show_adjacent_expansion(game) {
-        format!("expand {}", adjacent_expansion_footer(game))
+        ("expand".to_string(), adjacent_expansion_footer(game))
     } else {
-        "rivals | board | report | save".to_string()
-    };
-
-    lines.push(compact_action_line("more", opportunity));
-    lines
+        ("rivals".to_string(), "details".to_string())
+    }
 }
 
-fn compact_action_line(command: impl std::fmt::Display, effect: impl std::fmt::Display) -> String {
-    compact_action_line_with_width(command, effect, 12)
+fn compact_command_pair_line(
+    left_command: impl std::fmt::Display,
+    left_effect: impl std::fmt::Display,
+    right_command: impl std::fmt::Display,
+    right_effect: impl std::fmt::Display,
+) -> String {
+    format!(
+        "{} {} | {} {}",
+        command_cell(left_command, 17),
+        effect_cell(left_effect, 11),
+        command_cell(right_command, 16),
+        effect_cell(right_effect, 12)
+    )
 }
 
 fn start_screen_command_line(
     command: impl std::fmt::Display,
     effect: impl std::fmt::Display,
 ) -> String {
-    compact_action_line_with_width(command, effect, START_SCREEN_COMMAND_WIDTH)
+    single_command_line_with_width(command, effect, START_SCREEN_COMMAND_WIDTH)
 }
 
-fn compact_action_line_with_width(
+fn single_command_line_with_width(
     command: impl std::fmt::Display,
     effect: impl std::fmt::Display,
     command_width: usize,
@@ -546,6 +563,19 @@ fn compact_action_line_with_width(
         " ".repeat(padding),
         effect
     )
+}
+
+fn command_cell(command: impl std::fmt::Display, width: usize) -> String {
+    let command = command.to_string();
+    let command = fit_line(&command, width);
+    let padding = width.saturating_sub(visible_width(&command));
+    format!("{}{}", styled(BOLD_CYAN, command), " ".repeat(padding))
+}
+
+fn effect_cell(effect: impl std::fmt::Display, width: usize) -> String {
+    let effect = fit_line(&effect.to_string(), width);
+    let padding = width.saturating_sub(visible_width(&effect));
+    format!("{effect}{}", " ".repeat(padding))
 }
 
 pub(super) fn project_quote_short(kind: &str, size: f64) -> String {
@@ -2021,7 +2051,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
         if game.regional_integration > 0.12 {
             "manual spend or hire managers; both work down regional integration"
         } else {
-            "marketing 4000, maint 6000, or hire maint/marketing"
+            "marketing 4, maint 6, or hire maint/marketing"
         },
     ));
     if should_show_adjacent_expansion(game) {

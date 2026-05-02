@@ -71,6 +71,7 @@ pub const DEFAULT_MAINTENANCE_MANAGER_TARGET: f64 = 0.85;
 pub const DEFAULT_MARKETING_MANAGER_TARGET: f64 = 90.0;
 pub const MAINTENANCE_MANAGER_PROFIT_SHARE: f64 = 0.50;
 pub const MARKETING_MANAGER_PROFIT_SHARE: f64 = 0.25;
+const MIN_MANUAL_OPERATING_SPEND: f64 = 1_000.0;
 const MIN_MANAGER_SPEND: f64 = 100.0;
 pub const REVIEW_MIN_RATE_SUPPORT_RATIO: f64 = 0.72;
 pub const REVIEW_MIN_INTEREST_COVERAGE: f64 = 1.0;
@@ -79,9 +80,16 @@ const REVIEW_MIN_PROFIT: f64 = -500.0;
 const BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO: f64 = 0.68;
 const PUBLIC_BALANCE_SHEET_DIVERGENCE_PROBABILITY: f64 = 0.25;
 const PUBLIC_BALANCE_SHEET_MAX_DIVERGENCE: f64 = 0.20;
+const DILIGENCE_ALERT_BASE_PROBABILITY: f64 = 0.66;
+const DILIGENCE_ALERT_MIN_PROBABILITY: f64 = 0.35;
+const DILIGENCE_ALERT_MAX_PROBABILITY: f64 = 0.94;
 
 fn default_public_balance_sheet_multiplier() -> f64 {
     1.0
+}
+
+fn default_diligence_target_alerted() -> bool {
+    true
 }
 
 mod attribution;
@@ -186,6 +194,8 @@ pub struct DiligenceReport {
     pub competitor_name: String,
     pub quarters_remaining: u32,
     pub quoted_terms: AcquisitionTerms,
+    #[serde(default = "default_diligence_target_alerted")]
+    pub target_alerted: bool,
 }
 
 /// Types of macro shocks that can be active during a quarter.
@@ -662,7 +672,7 @@ impl Game {
 
     fn apply_marketing(&mut self, spend: f64) -> Result<String, String> {
         let spend = positive_amount(spend, "marketing spend")?;
-        let spend = spend.clamp(1_000.0, 25_000.0);
+        let spend = spend.max(MIN_MANUAL_OPERATING_SPEND);
         self.require_cash(spend)?;
         self.player.cash -= spend;
         self.player.marketing_momentum += (spend / 5_000.0) * 0.13;
@@ -873,7 +883,15 @@ impl Game {
         {
             report.quarters_remaining = DILIGENCE_DURATION_QUARTERS;
         } else {
-            alert_message = Some(self.apply_diligence_alert_response(competitor_index));
+            let target_alerted = self.diligence_alert_leaks(competitor_index);
+            alert_message = Some(if target_alerted {
+                self.apply_diligence_alert_response(competitor_index)
+            } else {
+                format!(
+                    "The review appears to have stayed quiet; {} made no visible defensive move.",
+                    name
+                )
+            });
             let quoted_terms = self
                 .current_acquisition_terms(competitor_index)
                 .expect("competitor index checked before diligence terms quote");
@@ -883,6 +901,7 @@ impl Game {
                 competitor_name: name.clone(),
                 quarters_remaining: DILIGENCE_DURATION_QUARTERS,
                 quoted_terms,
+                target_alerted,
             });
         }
         let alert_suffix = alert_message
@@ -1101,7 +1120,7 @@ impl Game {
 
     fn apply_maintenance(&mut self, spend: f64) -> Result<String, String> {
         let spend = positive_amount(spend, "maintenance spend")?;
-        let spend = spend.clamp(1_500.0, 20_000.0);
+        let spend = spend.max(MIN_MANUAL_OPERATING_SPEND);
         let gain = maintenance_reliability_gain(&self.player, spend);
         let new_reliability = (self.player.reliability + gain).clamp(0.35, MAX_RELIABILITY);
         let actual_gain = new_reliability - self.player.reliability;
@@ -1693,8 +1712,37 @@ impl Game {
         };
 
         self.diligence_reports.iter().any(|report| {
-            report.quarters_remaining > 0 && report.competitor_name == competitor.name
+            report.quarters_remaining > 0
+                && report.target_alerted
+                && report.competitor_name == competitor.name
         })
+    }
+
+    fn diligence_alert_leaks(&mut self, competitor_index: usize) -> bool {
+        let probability = self.diligence_alert_probability(competitor_index);
+        self.rng.chance(probability)
+    }
+
+    fn diligence_alert_probability(&self, competitor_index: usize) -> f64 {
+        let Some(competitor) = self.competitors.get(competitor_index) else {
+            return 0.0;
+        };
+        let total_connected = self.total_connected_customers().max(1.0);
+        let target_share = (competitor.customers / total_connected).clamp(0.0, 1.0);
+        let concentration_pressure = (self.market_share() - 0.40).max(0.0) * 0.35;
+        let strategic_target_pressure = target_share * 0.38;
+        let serial_deal_pressure = self.acquisition_stress.clamp(0.0, 1.0) * 0.12;
+        let rate_pressure =
+            ((competitor.rate_cents - self.player.rate_cents) / 4.0).clamp(0.0, 0.12);
+        (DILIGENCE_ALERT_BASE_PROBABILITY
+            + strategic_target_pressure
+            + concentration_pressure
+            + serial_deal_pressure
+            + rate_pressure)
+            .clamp(
+                DILIGENCE_ALERT_MIN_PROBABILITY,
+                DILIGENCE_ALERT_MAX_PROBABILITY,
+            )
     }
 
     fn apply_diligence_alert_response(&mut self, competitor_index: usize) -> String {
@@ -1714,6 +1762,9 @@ impl Game {
         let starting_asset_base = competitor.asset_base;
         let starting_debt = competitor.debt;
         let starting_reliability = competitor.reliability;
+        let mut retention_spend = 0.0;
+        let mut capacity_spend = 0.0;
+        let mut maintenance_spend = 0.0;
 
         if competitor.debt_to_assets() < 0.78 {
             let backing = ((1_600.0 + competitor.asset_base * 0.009 + competitor.customers * 1.2)
@@ -1728,6 +1779,7 @@ impl Game {
             .min(competitor.cash * 0.08);
         if marketing_budget > 450.0 {
             competitor.cash -= marketing_budget;
+            retention_spend = marketing_budget;
             competitor.marketing_momentum =
                 (competitor.marketing_momentum + marketing_budget / 10_500.0).clamp(0.0, 1.75);
             competitor.reputation =
@@ -1739,6 +1791,7 @@ impl Game {
             .min(competitor.cash * 0.09);
         if capex_budget > 650.0 {
             competitor.cash -= capex_budget;
+            capacity_spend = capex_budget;
             competitor.asset_base += capex_budget;
             competitor.distribution_capacity += capex_budget / 85.0;
             competitor.generation_capacity_mwh += capex_budget / 420.0;
@@ -1749,6 +1802,7 @@ impl Game {
             .min(competitor.cash * 0.06);
         if competitor.reliability < 0.88 && maintenance_budget > 400.0 {
             competitor.cash -= maintenance_budget;
+            maintenance_spend = maintenance_budget;
             let gain = maintenance_reliability_gain(competitor, maintenance_budget);
             competitor.reliability = (competitor.reliability + gain).clamp(0.35, 0.98);
             competitor.reputation = (competitor.reputation
@@ -1769,14 +1823,56 @@ impl Game {
         let rate_cut = starting_rate - competitor.rate_cents;
         let reliability_gain = competitor.reliability - starting_reliability;
 
-        format!(
-            "{} noticed the review and mounted a defense: backing {}, capex {}, rate {:+.1}c, reliability {:+.1} pts.",
-            competitor.name,
-            money(raised_backing.max(0.0)),
-            money(capex.max(0.0)),
-            -rate_cut,
-            reliability_gain * 100.0
-        )
+        let mut actions = Vec::new();
+        if raised_backing > 100.0 {
+            actions.push(format!(
+                "raised {} in defensive financing",
+                money(raised_backing)
+            ));
+        }
+        if retention_spend > 100.0 {
+            actions.push(format!(
+                "spent {} on customer retention",
+                money(retention_spend)
+            ));
+        }
+        if capacity_spend > 100.0 {
+            actions.push(format!(
+                "invested {} in service capacity",
+                money(capacity_spend)
+            ));
+        }
+        if maintenance_spend > 100.0 {
+            actions.push(format!("spent {} on maintenance", money(maintenance_spend)));
+        }
+        if rate_cut > 0.01 {
+            actions.push(format!("cut rates {:.1}c", rate_cut));
+        }
+        if reliability_gain >= MIN_MAINTENANCE_RELIABILITY_GAIN {
+            actions.push(format!(
+                "improved service quality {:.1} pts",
+                reliability_gain * 100.0
+            ));
+        }
+        if actions.is_empty() && capex > 100.0 {
+            actions.push(format!(
+                "put {} into its operating base",
+                money(capex.max(0.0))
+            ));
+        }
+
+        if actions.is_empty() {
+            format!(
+                "{} picked up signs of the review, but made no visible operating move.",
+                competitor.name
+            )
+        } else {
+            format!(
+                "{} picked up signs of the review and responded: {}.",
+                competitor.name,
+                actions.join("; ")
+            )
+        }
     }
 
     pub fn acquisition_terms(&self, competitor_index: usize) -> Option<AcquisitionTerms> {

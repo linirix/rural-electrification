@@ -1770,6 +1770,46 @@ fn marketing_and_maintenance_reduce_regional_integration_burden() {
 }
 
 #[test]
+fn manual_marketing_and_maintenance_have_one_thousand_floor() {
+    let mut marketing = Game::with_seed(25);
+    marketing.player.cash = 20_000.0;
+    let starting_cash = marketing.player.cash;
+    marketing
+        .apply_decision(Decision::Marketing { spend: 1.0 })
+        .unwrap();
+    assert!((marketing.player.cash - (starting_cash - 1_000.0)).abs() < 0.01);
+
+    let mut maintenance = Game::with_seed(26);
+    maintenance.player.cash = 20_000.0;
+    maintenance.player.reliability = 0.72;
+    let starting_cash = maintenance.player.cash;
+    maintenance
+        .apply_decision(Decision::Maintenance { spend: 1.0 })
+        .unwrap();
+    assert!((maintenance.player.cash - (starting_cash - 1_000.0)).abs() < 0.01);
+}
+
+#[test]
+fn manual_marketing_and_maintenance_are_not_fixed_cap_limited() {
+    let mut marketing = Game::with_seed(27);
+    marketing.player.cash = 100_000.0;
+    let starting_cash = marketing.player.cash;
+    marketing
+        .apply_decision(Decision::Marketing { spend: 50_000.0 })
+        .unwrap();
+    assert!((marketing.player.cash - (starting_cash - 50_000.0)).abs() < 0.01);
+
+    let mut maintenance = Game::with_seed(28);
+    maintenance.player.cash = 100_000.0;
+    maintenance.player.reliability = 0.70;
+    let starting_cash = maintenance.player.cash;
+    maintenance
+        .apply_decision(Decision::Maintenance { spend: 50_000.0 })
+        .unwrap();
+    assert!((maintenance.player.cash - (starting_cash - 50_000.0)).abs() < 0.01);
+}
+
+#[test]
 fn regional_integration_burden_drags_service_until_resolved() {
     let mut game = Game::with_seed(66);
     game.player.reliability = 0.90;
@@ -2104,32 +2144,85 @@ fn public_acquisition_estimate_can_diverge_from_exact_balance_sheet() {
 }
 
 #[test]
-fn diligence_alerts_target_before_quote_is_frozen() {
-    let mut game = Game::with_seed(31);
-    game.player.cash = 500_000.0;
-    game.competitors[0].debt = 0.0;
-    game.competitors[0].rate_cents = game.player.rate_cents + 1.0;
-    let before = game.competitors[0].clone();
-    let live_before = game.current_acquisition_terms(0).unwrap();
+fn diligence_can_alert_target_before_quote_is_frozen() {
+    let mut observed_alert = false;
 
-    let message = game
-        .apply_decision(Decision::Diligence {
-            competitor_index: 0,
-        })
-        .unwrap();
+    for seed in 1..400 {
+        let mut game = Game::with_seed(seed);
+        game.player.cash = 500_000.0;
+        game.competitors[0].debt = 0.0;
+        game.competitors[0].rate_cents = game.player.rate_cents + 1.0;
+        let before = game.competitors[0].clone();
+        let live_before = game.current_acquisition_terms(0).unwrap();
 
-    let after = &game.competitors[0];
-    let quoted = game.acquisition_terms(0).unwrap();
-    assert!(message.contains("mounted a defense"));
-    assert!(after.debt > before.debt);
-    assert!(after.marketing_momentum > before.marketing_momentum);
-    assert!(after.asset_base > before.asset_base);
-    assert!(after.rate_cents < before.rate_cents);
+        let message = game
+            .apply_decision(Decision::Diligence {
+                competitor_index: 0,
+            })
+            .unwrap();
+
+        if !message.contains("picked up signs of the review") {
+            continue;
+        }
+
+        observed_alert = true;
+        let after = &game.competitors[0];
+        let quoted = game.acquisition_terms(0).unwrap();
+        assert!(message.contains("responded"));
+        assert!(message.contains("defensive financing"));
+        assert!(!message.contains("backing"));
+        assert!(after.debt > before.debt);
+        assert!(after.marketing_momentum > before.marketing_momentum);
+        assert!(after.asset_base > before.asset_base);
+        assert!(after.rate_cents < before.rate_cents);
+        assert!(
+            (quoted.price - live_before.price).abs() > 100.0,
+            "quote should reflect the target response before freezing: before {}, quoted {}",
+            live_before.price,
+            quoted.price
+        );
+        break;
+    }
+
     assert!(
-        (quoted.price - live_before.price).abs() > 100.0,
-        "quote should reflect the target response before freezing: before {}, quoted {}",
-        live_before.price,
-        quoted.price
+        observed_alert,
+        "expected at least one leaked diligence review"
+    );
+}
+
+#[test]
+fn diligence_can_stay_quiet_without_target_defense() {
+    let mut observed_quiet_review = false;
+
+    for seed in 1..400 {
+        let mut game = Game::with_seed(seed);
+        game.player.cash = 500_000.0;
+        let before = game.competitors[0].clone();
+
+        let message = game
+            .apply_decision(Decision::Diligence {
+                competitor_index: 0,
+            })
+            .unwrap();
+
+        if !message.contains("stayed quiet") {
+            continue;
+        }
+
+        observed_quiet_review = true;
+        let after = &game.competitors[0];
+        assert!(message.contains("made no visible defensive move"));
+        assert!(!game.diligence_reports[0].target_alerted);
+        assert!((after.debt - before.debt).abs() < 0.01);
+        assert!((after.asset_base - before.asset_base).abs() < 0.01);
+        assert!((after.marketing_momentum - before.marketing_momentum).abs() < 0.001);
+        assert!((after.rate_cents - before.rate_cents).abs() < 0.001);
+        break;
+    }
+
+    assert!(
+        observed_quiet_review,
+        "expected at least one quiet diligence review"
     );
 }
 

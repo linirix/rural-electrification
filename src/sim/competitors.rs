@@ -349,7 +349,7 @@ impl Game {
         }
 
         events.push(format!(
-            "{} secured outside backing for a counteroffensive: lower rates, new capacity, and heavier customer acquisition.",
+            "{} secured outside financing for a counteroffensive: lower rates, new capacity, and heavier customer acquisition.",
             competitor.name
         ));
         true
