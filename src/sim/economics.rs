@@ -30,7 +30,7 @@ pub(super) fn maintenance_reputation_gain(utility: &Utility, spend: f64) -> f64 
     spend / 5_500.0 * maintenance_asset_scale(utility)
 }
 
-fn maintenance_asset_scale(utility: &Utility) -> f64 {
+pub(super) fn maintenance_asset_scale(utility: &Utility) -> f64 {
     (MAINTENANCE_REFERENCE_ASSET_BASE / utility.asset_base.max(20_000.0))
         .sqrt()
         .clamp(0.35, 1.45)

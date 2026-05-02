@@ -138,6 +138,8 @@ pub(super) fn load_game_from_dir(raw_name: &str, root: &Path) -> Result<(Game, S
     let mut game = serde_json::from_str::<Game>(&json)
         .map_err(|error| format!("could not parse {}: {error}", path.display()))?;
     game.normalize_after_load();
+    game.validate_loaded_state()
+        .map_err(|error| format!("invalid save state in {}: {error}", path.display()))?;
     Ok((game, format!("Loaded game from {}.", path.display())))
 }
 

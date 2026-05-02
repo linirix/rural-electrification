@@ -596,12 +596,15 @@ pub(super) fn milestone_snapshot_lines(game: &Game) -> Vec<String> {
             styled(BOLD, next.label)
         ),
         format!(
-            "{} {:.0}% | {} {:.0}% | {} <= {:.0}%",
+            "{} {:.0}/{:.0}% | {} {:.0}/{:.0}% | {} {:.0}/{:.0}%",
             muted("share"),
+            game.market_share() * 100.0,
             SHARE_TARGET * 100.0,
             muted("reliability"),
+            game.player.reliability * 100.0,
             RELIABILITY_TARGET * 100.0,
             muted("debt/assets"),
+            game.player.debt_to_assets() * 100.0,
             LEVERAGE_LIMIT * 100.0
         ),
         format!(
@@ -2152,6 +2155,21 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
         push_line(
             25,
             signal_line("Reliability", GREEN, "strong; expansion can lead"),
+        );
+    }
+
+    let maintenance_scale = game.player_maintenance_response_scale();
+    if maintenance_scale < 0.70 {
+        push_line(
+            34,
+            signal_line(
+                "Maintenance",
+                YELLOW,
+                format!(
+                    "large asset base: upkeep dollars work at {:.0}% response",
+                    maintenance_scale * 100.0
+                ),
+            ),
         );
     }
 

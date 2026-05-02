@@ -376,7 +376,7 @@ impl Game {
             {
                 events.push(event);
             }
-            if let Some(event) = self.competitor_rate_decision(index, &context) {
+            if let Some(event) = self.competitor_rate_decision(index, &context, &rolls) {
                 events.push(event);
             }
             if let Some(event) = self.competitor_marketing_decision(index, &context, &rolls) {
@@ -461,6 +461,10 @@ impl Game {
             market: self.market.clone(),
             macro_state: self.macro_state.clone(),
             cost_multiplier: self.cost_shock_multiplier(),
+            reaction_active: self.rival_reaction.quarters_remaining > 0,
+            player_rate_move_cents: self.rival_reaction.rate_move_cents,
+            player_marketing_spend: self.rival_reaction.marketing_spend,
+            player_financing_amount: self.rival_reaction.financing_amount,
         }
     }
 
@@ -473,6 +477,9 @@ impl Game {
             expansion_gen_jitter: self.rng.range(0.0, 30.0),
             proactive_expansion_chance: self.rng.chance(0.22),
             strategic_debt_chance: self.rng.chance(0.32),
+            reactive_rate_chance: self.rng.chance(0.22),
+            reactive_marketing_chance: self.rng.chance(0.18),
+            reactive_financing_chance: self.rng.chance(0.12),
         }
     }
 
@@ -480,11 +487,16 @@ impl Game {
         &mut self,
         index: usize,
         context: &CompetitorPlanContext,
+        rolls: &CompetitorPlanRolls,
     ) -> Option<String> {
         let competitor = &mut self.competitors[index];
         let lost_share = competitor_lost_share(competitor, context);
         let player_undercutting = context.player_rate + 0.4 < competitor.rate_cents;
         let player_premium_pricing = context.player_rate > competitor.rate_cents + 0.5;
+        let reacting_to_rate_cut = context.reaction_active
+            && rolls.reactive_rate_chance
+            && context.player_rate_move_cents < 0.0
+            && context.player_rate + 0.60 < competitor.rate_cents;
         let near_capacity =
             competitor.capacity_headroom(&context.market) < competitor.customers * 0.06;
 
@@ -496,15 +508,25 @@ impl Game {
         );
         let dynamic_ceiling =
             (public_rate_tolerance(&context.market) + 2.0).max(defensive_floor + 0.30);
-        if lost_share && player_undercutting && competitor.rate_cents > defensive_floor + 0.05 {
+        if (lost_share && player_undercutting || reacting_to_rate_cut)
+            && competitor.rate_cents > defensive_floor + 0.05
+        {
             let target = (context.player_rate + 0.35).max(defensive_floor);
-            let cut = 0.4_f64.min((competitor.rate_cents - target).max(0.0));
+            let max_cut: f64 = if reacting_to_rate_cut { 0.12 } else { 0.40 };
+            let cut = max_cut.min((competitor.rate_cents - target).max(0.0));
             if cut > 0.0 {
                 competitor.rate_cents -= cut;
-                return Some(format!(
-                    "{} cut rates to {:.1}c/kWh to defend share.",
-                    competitor.name, competitor.rate_cents
-                ));
+                return Some(if reacting_to_rate_cut && !lost_share {
+                    format!(
+                        "{} matched Metro's price move, cutting rates to {:.1}c/kWh.",
+                        competitor.name, competitor.rate_cents
+                    )
+                } else {
+                    format!(
+                        "{} cut rates to {:.1}c/kWh to defend share.",
+                        competitor.name, competitor.rate_cents
+                    )
+                });
             }
         } else if !context.rate_frozen
             && player_premium_pricing
@@ -533,7 +555,23 @@ impl Game {
         let competitor = &mut self.competitors[index];
         let lost_share = competitor_lost_share(competitor, context);
 
-        if lost_share && competitor.cash > 4_500.0 {
+        let reacting_to_marketing = context.reaction_active
+            && rolls.reactive_marketing_chance
+            && context.player_marketing_spend > 0.0
+            && competitor.cash > 3_500.0;
+
+        if reacting_to_marketing && !lost_share {
+            let spend = (competitor.cash * 0.06)
+                .clamp(900.0, 2_400.0)
+                .min(competitor.cash * 0.14);
+            competitor.cash -= spend;
+            competitor.marketing_momentum += spend / 24_000.0;
+            competitor.reputation = (competitor.reputation + spend / 12_000.0).clamp(0.0, 100.0);
+            Some(format!(
+                "{} answered Metro's marketing push with a retention blitz.",
+                competitor.name
+            ))
+        } else if lost_share && competitor.cash > 4_500.0 {
             let spend = (competitor.cash * 0.18).clamp(2_500.0, 6_500.0);
             competitor.cash -= spend;
             competitor.marketing_momentum += spend / 12_000.0;
@@ -589,14 +627,32 @@ impl Game {
         let lost_share = competitor_lost_share(competitor, context);
         let leverage = competitor.debt / competitor.asset_base.max(1.0);
         let losing_to_player = context.player_share > 0.45 && lost_share;
-        if losing_to_player && leverage < 0.65 && rolls.strategic_debt_chance {
-            let raise = 12_000.0 + competitor.asset_base * 0.05;
+        let reacting_to_financing = context.reaction_active
+            && rolls.reactive_financing_chance
+            && context.player_financing_amount > 0.0
+            && context.player_share > 0.45;
+        if (losing_to_player || reacting_to_financing)
+            && leverage < 0.70
+            && rolls.strategic_debt_chance
+        {
+            let raise = if reacting_to_financing && !losing_to_player {
+                5_000.0 + competitor.asset_base * 0.018 + context.player_financing_amount * 0.035
+            } else {
+                12_000.0 + competitor.asset_base * 0.05
+            };
             competitor.cash += raise;
             competitor.debt += raise;
-            Some(format!(
-                "{} raised debt to fund a counter-expansion.",
-                competitor.name
-            ))
+            Some(if reacting_to_financing && !losing_to_player {
+                format!(
+                    "{} arranged financing after Metro raised capital.",
+                    competitor.name
+                )
+            } else {
+                format!(
+                    "{} raised debt to fund a counter-expansion.",
+                    competitor.name
+                )
+            })
         } else {
             None
         }
@@ -623,6 +679,10 @@ struct CompetitorPlanContext {
     market: Market,
     macro_state: MacroEnvironment,
     cost_multiplier: f64,
+    reaction_active: bool,
+    player_rate_move_cents: f64,
+    player_marketing_spend: f64,
+    player_financing_amount: f64,
 }
 
 struct CompetitorPlanRolls {
@@ -633,6 +693,9 @@ struct CompetitorPlanRolls {
     expansion_gen_jitter: f64,
     proactive_expansion_chance: bool,
     strategic_debt_chance: bool,
+    reactive_rate_chance: bool,
+    reactive_marketing_chance: bool,
+    reactive_financing_chance: bool,
 }
 
 fn competitor_lost_share(competitor: &Utility, context: &CompetitorPlanContext) -> bool {

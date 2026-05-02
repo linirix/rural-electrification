@@ -88,6 +88,9 @@ const PUBLIC_BALANCE_SHEET_DIVERGENCE_PROBABILITY: f64 = 0.25;
 const PUBLIC_BALANCE_SHEET_MAX_DIVERGENCE: f64 = 0.20;
 const DILIGENCE_ALERT_BASE_PROBABILITY: f64 = 0.48;
 const DILIGENCE_ALERT_MIN_PROBABILITY: f64 = 0.18;
+const RIVAL_REACTION_RATE_MOVE_CENTS: f64 = 0.60;
+const RIVAL_REACTION_MARKETING_SPEND: f64 = 15_000.0;
+const RIVAL_REACTION_FINANCING_AMOUNT: f64 = 45_000.0;
 const DILIGENCE_ALERT_MAX_PROBABILITY: f64 = 0.88;
 
 fn default_public_balance_sheet_multiplier() -> f64 {
@@ -110,9 +113,9 @@ use competitors::draw_competitor_name;
 use competitors::{COMPETITOR_NAME_POOL, StartupEntryReason};
 use economics::{
     bounded_rate_target, break_even_rate_cents, churn_for_market_with_floor, defensive_rate_floor,
-    high_rate_excess, maintenance_reliability_gain, maintenance_reputation_gain,
-    maintenance_spend_for_reliability_target, positive_amount, settle_utility, weighted_average,
-    weighted_rate,
+    high_rate_excess, maintenance_asset_scale, maintenance_reliability_gain,
+    maintenance_reputation_gain, maintenance_spend_for_reliability_target, positive_amount,
+    settle_utility, weighted_average, weighted_rate,
 };
 #[cfg(test)]
 use economics::{churn_rate_for, churn_rate_for_market};
@@ -160,7 +163,17 @@ pub struct Game {
     pub maintenance_manager_target: Option<f64>,
     #[serde(default)]
     pub marketing_manager_target: Option<f64>,
+    #[serde(default)]
+    rival_reaction: RivalReaction,
     rng: Rng,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+struct RivalReaction {
+    quarters_remaining: u32,
+    rate_move_cents: f64,
+    marketing_spend: f64,
+    financing_amount: f64,
 }
 
 /// Controls how much seeded starts vary around the baseline scenario.
@@ -528,6 +541,7 @@ impl Game {
             player_dividends_received: 0.0,
             maintenance_manager_target: None,
             marketing_manager_target: None,
+            rival_reaction: RivalReaction::default(),
             rng,
         }
     }
@@ -570,6 +584,77 @@ impl Game {
         self.marketing_manager_target = self
             .marketing_manager_target
             .and_then(|target| validate_marketing_manager_target(target).ok());
+        if !self.rival_reaction.rate_move_cents.is_finite()
+            || !self.rival_reaction.marketing_spend.is_finite()
+            || !self.rival_reaction.financing_amount.is_finite()
+        {
+            self.rival_reaction = RivalReaction::default();
+        }
+    }
+
+    pub fn validate_loaded_state(&self) -> Result<(), String> {
+        validate_loaded_utility("player", &self.player, true)?;
+        for (index, competitor) in self.competitors.iter().enumerate() {
+            validate_loaded_utility(&format!("competitor {}", index + 1), competitor, false)?;
+        }
+        if !self.market.addressable_customers.is_finite()
+            || self.market.addressable_customers <= 0.0
+        {
+            return Err("market addressable customers must be positive and finite".to_string());
+        }
+        if !self.market.avg_mwh_per_customer.is_finite() || self.market.avg_mwh_per_customer <= 0.0
+        {
+            return Err("market average usage must be positive and finite".to_string());
+        }
+        if !self.market.variable_cost_per_mwh.is_finite() || self.market.variable_cost_per_mwh < 0.0
+        {
+            return Err("market variable cost must be finite and nonnegative".to_string());
+        }
+        let connected = self.total_connected_customers();
+        let plausible_limit = self.market.addressable_customers * 1.25 + 250.0;
+        if connected > plausible_limit {
+            return Err(format!(
+                "connected customers {:.0} exceed plausible market size {:.0}",
+                connected, plausible_limit
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn player_maintenance_response_scale(&self) -> f64 {
+        maintenance_asset_scale(&self.player)
+    }
+
+    fn record_rival_reaction(
+        &mut self,
+        rate_move_cents: f64,
+        marketing_spend: f64,
+        financing_amount: f64,
+    ) {
+        self.rival_reaction.quarters_remaining = self.rival_reaction.quarters_remaining.max(1);
+        if rate_move_cents.abs() > self.rival_reaction.rate_move_cents.abs() {
+            self.rival_reaction.rate_move_cents = rate_move_cents;
+        }
+        self.rival_reaction.marketing_spend = self
+            .rival_reaction
+            .marketing_spend
+            .max(marketing_spend.max(0.0));
+        self.rival_reaction.financing_amount = self
+            .rival_reaction
+            .financing_amount
+            .max(financing_amount.max(0.0));
+    }
+
+    pub(super) fn decay_rival_reaction(&mut self) {
+        if self.rival_reaction.quarters_remaining == 0 {
+            self.rival_reaction = RivalReaction::default();
+            return;
+        }
+
+        self.rival_reaction.quarters_remaining -= 1;
+        if self.rival_reaction.quarters_remaining == 0 {
+            self.rival_reaction = RivalReaction::default();
+        }
     }
 
     pub fn apply_decision(&mut self, decision: Decision) -> Result<String, String> {
@@ -696,6 +781,9 @@ impl Game {
         self.player.cash -= spend;
         self.player.marketing_momentum += (spend / 5_000.0) * 0.13;
         self.player.reputation = (self.player.reputation + spend / 4_000.0).clamp(0.0, 100.0);
+        if spend >= RIVAL_REACTION_MARKETING_SPEND {
+            self.record_rival_reaction(0.0, spend, 0.0);
+        }
         let regional_relief = self.reduce_regional_integration(spend / 160_000.0, "marketing");
         Ok(format!(
             "Spent {} on customer acquisition, financing offers, and sales coverage.",
@@ -749,6 +837,9 @@ impl Game {
             (self.player.reputation - effective_pressure * 1.5 - effective_pressure_squared * 1.5)
                 .clamp(0.0, 100.0);
         self.equity_market_fatigue = (self.equity_market_fatigue + pressure * 0.80).clamp(0.0, 6.0);
+        if amount >= RIVAL_REACTION_FINANCING_AMOUNT {
+            self.record_rival_reaction(0.0, 0.0, amount);
+        }
         Ok(format!(
             "Issued {:.0} shares at ${:.2}. Gross {}, net cash {} after fees; dilution reset stock to ${:.2}.",
             new_shares,
@@ -848,6 +939,9 @@ impl Game {
         }
         self.player.cash += amount;
         self.player.debt += amount;
+        if amount >= RIVAL_REACTION_FINANCING_AMOUNT {
+            self.record_rival_reaction(0.0, 0.0, amount);
+        }
         let leverage = self.player.debt_to_assets();
         let annual_rate = self.macro_state.annual_interest_rate_for(&self.player);
         if leverage > 0.82 {
@@ -1076,6 +1170,9 @@ impl Game {
         }
         self.player.rate_cents = requested_rate;
         let actual_delta = self.player.rate_cents - old;
+        if actual_delta.abs() >= RIVAL_REACTION_RATE_MOVE_CENTS {
+            self.record_rival_reaction(actual_delta, 0.0, 0.0);
+        }
         if actual_delta > 0.0 {
             self.player.reputation =
                 (self.player.reputation - actual_delta * 1.8).clamp(0.0, 100.0);
@@ -1202,6 +1299,7 @@ impl Game {
         self.complete_projects(&mut events);
         self.grow_market(&mut events);
         self.competitor_plans(&mut events);
+        self.decay_rival_reaction();
         self.apply_integration_strain(&mut events);
         self.apply_regional_integration_strain(&mut events);
         let manager_spend = self.apply_operating_managers(&mut events);
@@ -3124,6 +3222,51 @@ fn project_clamp_note(requested: f64, actual: f64, min: f64, max: f64, unit: &st
         " Requested {:.0} {} was clamped to the buildable range of {:.0}-{:.0} {}.",
         requested, unit, min, max, unit
     )
+}
+
+fn validate_loaded_utility(
+    label: &str,
+    utility: &Utility,
+    require_public_shares: bool,
+) -> Result<(), String> {
+    let checks = [
+        ("cash", utility.cash, -1_000_000.0),
+        ("debt", utility.debt, 0.0),
+        ("customers", utility.customers, 0.0),
+        ("generation capacity", utility.generation_capacity_mwh, 0.0),
+        ("distribution capacity", utility.distribution_capacity, 0.0),
+        ("asset base", utility.asset_base, 0.0),
+        (
+            "last quarter customers",
+            utility.last_quarter_customers,
+            0.0,
+        ),
+    ];
+    for (field, value, minimum) in checks {
+        if !value.is_finite() || value < minimum {
+            return Err(format!(
+                "{label} {field} must be finite and at least {minimum:.0}"
+            ));
+        }
+    }
+    if !(0.0..=100.0).contains(&utility.reputation) {
+        return Err(format!("{label} reputation must be between 0 and 100"));
+    }
+    if !(0.0..=1.0).contains(&utility.reliability) {
+        return Err(format!("{label} reliability must be between 0 and 1"));
+    }
+    if utility.rate_cents <= 0.0 || !utility.rate_cents.is_finite() {
+        return Err(format!("{label} rate must be positive and finite"));
+    }
+    if require_public_shares && (!utility.shares.is_finite() || utility.shares <= 0.0) {
+        return Err(format!("{label} shares must be positive and finite"));
+    }
+    if !utility.stock_price.is_finite() || utility.stock_price < 0.0 {
+        return Err(format!(
+            "{label} stock price must be finite and nonnegative"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_maintenance_manager_target(target: f64) -> Result<f64, String> {

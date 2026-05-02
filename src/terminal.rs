@@ -27,8 +27,8 @@ mod screens;
 #[cfg(test)]
 mod tests;
 
-use command::handle_command;
-use render::{clear_screen, print_box};
+use command::{apply, handle_command, parse_decision};
+use render::{clear_screen, print_box, styled};
 use screens::{
     print_board_screen, print_help_screen, print_notice, print_outcome, print_quit_summary,
     print_report_screen, print_rivals_screen, print_start_screen, print_status,
@@ -123,6 +123,7 @@ pub fn run() -> io::Result<()> {
     let mut game = Game::new();
     let mut current_screen = TerminalScreen::Start;
     let mut screen_entry = ScreenEntry::Cycle;
+    let mut pending_confirmation: Option<PendingConfirmation> = None;
     let mut command_reader = DefaultEditor::new().map_err(io::Error::other)?;
 
     clear_screen();
@@ -146,81 +147,190 @@ pub fn run() -> io::Result<()> {
             continue;
         }
 
+        if let Some(pending) = pending_confirmation.take() {
+            match confirmation_response(command) {
+                ConfirmationResponse::Confirm => {
+                    let result = apply(&mut game, pending.decision);
+                    if render_command_result(&game, result, &mut current_screen, &mut screen_entry)
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                ConfirmationResponse::Cancel => {
+                    clear_screen();
+                    print_status(&game);
+                    current_screen = TerminalScreen::Dashboard;
+                    screen_entry = ScreenEntry::Cycle;
+                    print_notice(&format!("Cancelled '{}'.", pending.command));
+                    continue;
+                }
+                ConfirmationResponse::Other => {
+                    clear_screen();
+                    print_status(&game);
+                    println!();
+                    print_box("Confirm Action", &pending.lines);
+                    print_notice("Type 'y' to confirm this action, or 'n' to cancel it.");
+                    pending_confirmation = Some(pending);
+                    continue;
+                }
+            }
+        }
+
         if should_record_command_history(command) {
             command_reader
                 .add_history_entry(command)
                 .map_err(io::Error::other)?;
         }
 
-        match handle_command(&mut game, command) {
-            CommandResult::Continue(message) => {
-                clear_screen();
-                print_status(&game);
-                current_screen = TerminalScreen::Dashboard;
-                screen_entry = ScreenEntry::Cycle;
-                if !message.is_empty() {
-                    print_notice(&message);
-                }
-            }
-            CommandResult::Advanced(report) => {
-                clear_screen();
-                debug_assert!(!report.label.is_empty());
-                print_status(&game);
-                current_screen = TerminalScreen::Dashboard;
-                screen_entry = ScreenEntry::Cycle;
-                if let Some(outcome) = &game.outcome {
-                    print_outcome(outcome);
-                    if !outcome.can_continue {
-                        break;
-                    }
-                }
-            }
-            CommandResult::ShowStatus => {
-                clear_screen();
-                print_status(&game);
-                current_screen = TerminalScreen::Dashboard;
-                screen_entry = ScreenEntry::Cycle;
-            }
-            CommandResult::ShowHelp => {
-                clear_screen();
-                print_help_screen(&game);
-                current_screen = TerminalScreen::Help;
-                screen_entry = ScreenEntry::DirectCommand;
-            }
-            CommandResult::ShowRivals => {
-                clear_screen();
-                print_rivals_screen(&game);
-                current_screen = TerminalScreen::Rivals;
-                screen_entry = ScreenEntry::DirectCommand;
-            }
-            CommandResult::ShowBoard => {
-                clear_screen();
-                print_board_screen(&game);
-                current_screen = TerminalScreen::Board;
-                screen_entry = ScreenEntry::DirectCommand;
-            }
-            CommandResult::ShowReport => {
-                clear_screen();
-                print_report_screen(&game);
-                current_screen = TerminalScreen::Report;
-                screen_entry = ScreenEntry::DirectCommand;
-            }
-            CommandResult::Preview(lines) => {
-                clear_screen();
-                print_status(&game);
-                println!();
-                print_box("Command Preview", &lines);
-                current_screen = TerminalScreen::Preview;
-                screen_entry = ScreenEntry::DirectCommand;
-            }
-            CommandResult::Quit => {
-                print_quit_summary(&game);
-                break;
-            }
+        if let Some(pending) = confirmation_for_command(&game, command) {
+            clear_screen();
+            print_status(&game);
+            println!();
+            print_box("Confirm Action", &pending.lines);
+            pending_confirmation = Some(pending);
+            continue;
+        }
+
+        let result = handle_command(&mut game, command);
+        if render_command_result(&game, result, &mut current_screen, &mut screen_entry) {
+            break;
         }
     }
 
     Ok(())
+}
+
+fn render_command_result(
+    game: &Game,
+    result: CommandResult,
+    current_screen: &mut TerminalScreen,
+    screen_entry: &mut ScreenEntry,
+) -> bool {
+    match result {
+        CommandResult::Continue(message) => {
+            clear_screen();
+            print_status(game);
+            *current_screen = TerminalScreen::Dashboard;
+            *screen_entry = ScreenEntry::Cycle;
+            if !message.is_empty() {
+                print_notice(&message);
+            }
+        }
+        CommandResult::Advanced(report) => {
+            clear_screen();
+            debug_assert!(!report.label.is_empty());
+            print_status(game);
+            *current_screen = TerminalScreen::Dashboard;
+            *screen_entry = ScreenEntry::Cycle;
+            if let Some(outcome) = &game.outcome {
+                print_outcome(outcome);
+                if !outcome.can_continue {
+                    return true;
+                }
+            }
+        }
+        CommandResult::ShowStatus => {
+            clear_screen();
+            print_status(game);
+            *current_screen = TerminalScreen::Dashboard;
+            *screen_entry = ScreenEntry::Cycle;
+        }
+        CommandResult::ShowHelp => {
+            clear_screen();
+            print_help_screen(game);
+            *current_screen = TerminalScreen::Help;
+            *screen_entry = ScreenEntry::DirectCommand;
+        }
+        CommandResult::ShowRivals => {
+            clear_screen();
+            print_rivals_screen(game);
+            *current_screen = TerminalScreen::Rivals;
+            *screen_entry = ScreenEntry::DirectCommand;
+        }
+        CommandResult::ShowBoard => {
+            clear_screen();
+            print_board_screen(game);
+            *current_screen = TerminalScreen::Board;
+            *screen_entry = ScreenEntry::DirectCommand;
+        }
+        CommandResult::ShowReport => {
+            clear_screen();
+            print_report_screen(game);
+            *current_screen = TerminalScreen::Report;
+            *screen_entry = ScreenEntry::DirectCommand;
+        }
+        CommandResult::Preview(lines) => {
+            clear_screen();
+            print_status(game);
+            println!();
+            print_box("Command Preview", &lines);
+            *current_screen = TerminalScreen::Preview;
+            *screen_entry = ScreenEntry::DirectCommand;
+        }
+        CommandResult::Quit => {
+            print_quit_summary(game);
+            return true;
+        }
+    }
+
+    false
+}
+
+struct PendingConfirmation {
+    command: String,
+    decision: Decision,
+    lines: Vec<String>,
+}
+
+enum ConfirmationResponse {
+    Confirm,
+    Cancel,
+    Other,
+}
+
+fn confirmation_response(command: &str) -> ConfirmationResponse {
+    match command.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" | "confirm" => ConfirmationResponse::Confirm,
+        "n" | "no" | "cancel" => ConfirmationResponse::Cancel,
+        _ => ConfirmationResponse::Other,
+    }
+}
+
+fn confirmation_for_command(game: &Game, command: &str) -> Option<PendingConfirmation> {
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    let decision = parse_decision(game, &parts).ok()?;
+    if !decision_requires_confirmation(game, &decision) {
+        return None;
+    }
+
+    let mut preview_parts = vec!["preview"];
+    preview_parts.extend(parts.iter().copied());
+    let mut lines = match preview::preview_command(game, &preview_parts) {
+        CommandResult::Preview(lines) => lines,
+        _ => Vec::new(),
+    };
+    lines.push(styled(
+        BOLD_YELLOW,
+        "Type 'y' to commit this action, or 'n' to cancel.",
+    ));
+
+    Some(PendingConfirmation {
+        command: command.to_string(),
+        decision,
+        lines,
+    })
+}
+
+fn decision_requires_confirmation(game: &Game, decision: &Decision) -> bool {
+    match decision {
+        Decision::Acquire { .. } | Decision::EnterAdjacentMarket => true,
+        Decision::AdjustRate { delta_cents } => delta_cents.abs() >= 1.0,
+        Decision::DeclareDividend { amount } => *amount >= game.player.cash.max(1.0) * 0.05,
+        Decision::IssueStock { amount } | Decision::BuyBackStock { amount } => *amount >= 20_000.0,
+        Decision::Borrow { amount } => *amount >= 40_000.0,
+        _ => false,
+    }
 }
 
 fn read_command_line(editor: &mut DefaultEditor, prompt: &str) -> io::Result<Option<String>> {

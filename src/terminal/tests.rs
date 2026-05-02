@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use super::command::*;
 use super::render::*;
@@ -42,6 +42,21 @@ fn save_and_load_round_trip_from_directory() {
     assert!((loaded.player.cash - game.player.cash).abs() < 0.01);
     assert!((loaded.player.rate_cents - 5.5).abs() < 0.001);
     assert_eq!(loaded.competitors.len(), game.competitors.len());
+}
+
+#[test]
+fn load_rejects_impossible_customer_counts() {
+    let root = unique_test_save_dir("invalid-load");
+    fs::create_dir_all(&root).unwrap();
+    let mut game = Game::with_seed(131);
+    game.player.customers = game.market.addressable_customers * 2.0;
+    let json = serde_json::to_string_pretty(&game).unwrap();
+    fs::write(root.join("bad.json"), json).unwrap();
+
+    let error = load_game_from_dir("bad", &root).unwrap_err();
+
+    assert!(error.contains("invalid save state"));
+    assert!(error.contains("connected customers"));
 }
 
 #[test]
@@ -1116,6 +1131,24 @@ fn high_impact_direct_commands_remind_player_about_preview() {
         }
         _ => panic!("large borrow should apply with preview reminder"),
     }
+}
+
+#[test]
+fn dangerous_commands_request_interactive_confirmation() {
+    let mut game = Game::with_seed(110);
+    game.player.cash = 100_000.0;
+
+    let pending = confirmation_for_command(&game, "dividend 10000")
+        .expect("large dividend should require confirmation");
+
+    assert!(
+        pending
+            .lines
+            .iter()
+            .any(|line| line.contains("Preview only"))
+    );
+    assert!(pending.lines.iter().any(|line| line.contains("Type 'y'")));
+    assert!(confirmation_for_command(&game, "marketing 4000").is_none());
 }
 
 #[test]

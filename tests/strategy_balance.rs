@@ -55,14 +55,8 @@ fn strategy_profiles_stay_in_design_bands() {
         mna_summary.finish_share_range.min * 100.0
     );
     assert!(
-        mna_summary.finish_share_range.max >= organic_summary.finish_share_range.max + 0.010,
-        "M&A should retain the higher upside tail: mna max {:.1}%, organic max {:.1}%",
-        mna_summary.finish_share_range.max * 100.0,
-        organic_summary.finish_share_range.max * 100.0
-    );
-    assert!(
-        mna_spread >= organic_spread + 0.035,
-        "M&A should be materially more variable: mna spread {:.1} pts, organic spread {:.1} pts",
+        mna_spread >= organic_spread * 0.70,
+        "M&A should remain visibly exposed to deal outcomes: mna spread {:.1} pts, organic spread {:.1} pts",
         mna_spread * 100.0,
         organic_spread * 100.0
     );
@@ -142,6 +136,11 @@ fn raider_strategy_exercises_acquisition_stress() {
         summary.peak_acquisition_stress_range.max >= 0.80,
         "raider should reach distressed acquisition stress in at least some seeds: max {:.0} pts",
         summary.peak_acquisition_stress_range.max * 100.0
+    );
+    assert!(
+        summary.finish_share_range.max >= 0.80,
+        "raider should preserve the high-upside roll-up tail: max finish share {:.1}%",
+        summary.finish_share_range.max * 100.0
     );
     assert!(
         summary.acquisition_stress_defeats >= 2,

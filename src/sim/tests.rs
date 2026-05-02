@@ -2670,6 +2670,63 @@ fn rival_counteroffensive_handles_rates_below_old_floor() {
 }
 
 #[test]
+fn rivals_react_to_large_player_rate_cut_before_share_loss() {
+    let mut reactions = 0;
+    for seed in 92..132 {
+        let mut game = Game::with_seed(seed);
+        game.player.rate_cents = 10.0;
+        for competitor in &mut game.competitors {
+            competitor.rate_cents = 11.4;
+            competitor.cash = 30_000.0;
+        }
+
+        game.apply_decision(Decision::AdjustRate { delta_cents: -0.8 })
+            .unwrap();
+        let mut events = Vec::new();
+        game.competitor_plans(&mut events);
+
+        if events
+            .iter()
+            .any(|event| event.contains("matched Metro's price move"))
+        {
+            reactions += 1;
+        }
+    }
+
+    assert!(
+        reactions >= 4,
+        "expected visible rival rate reactions in a sample of seeds, got {reactions}"
+    );
+}
+
+#[test]
+fn rivals_answer_large_player_marketing_push() {
+    let mut game = Game::with_seed(93);
+    game.player.cash = 100_000.0;
+    for competitor in &mut game.competitors {
+        competitor.cash = 30_000.0;
+    }
+    let starting_momentum = game
+        .competitors
+        .iter()
+        .map(|competitor| competitor.marketing_momentum)
+        .sum::<f64>();
+
+    game.apply_decision(Decision::Marketing { spend: 18_000.0 })
+        .unwrap();
+    let mut events = Vec::new();
+    game.competitor_plans(&mut events);
+    let ending_momentum = game
+        .competitors
+        .iter()
+        .map(|competitor| competitor.marketing_momentum)
+        .sum::<f64>();
+
+    assert!(ending_momentum > starting_momentum);
+    assert!(events.iter().any(|event| event.contains("marketing push")));
+}
+
+#[test]
 fn low_rate_extended_market_advances_without_rate_bound_panic() {
     let mut game = Game::with_seed(91);
     game.review_completed = true;
