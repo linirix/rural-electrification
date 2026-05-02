@@ -137,6 +137,46 @@ Useful playtest flags:
 
 Playtest summaries include peak acquisition stress so reckless roll-up strategies can be evaluated separately from disciplined M&A. `stress_scan` accepts `--strategy`, `--seeds`, and `--variance`, and adds cross-strategy edge-case and defeat-mode coverage output. There is also a strategy regression test in `tests/strategy_balance.rs` that keeps the major automated strategies inside expected win-rate bands.
 
+## Release
+
+Before cutting a release, run the full local gate:
+
+```sh
+cargo fmt --check
+cargo clippy --release --all-targets -- -D warnings
+cargo test --release
+cargo run --release --bin playtest -- --all-strategies --seeds 500
+```
+
+Build a distributable package for the current machine:
+
+```sh
+./scripts/package_release.sh
+./scripts/smoke_release_bundle.sh dist/electrification-0.1.0-$(rustc -vV | awk '/^host:/ { print $2 }').tar.gz
+```
+
+The package includes:
+
+- `bin/electrification` for the interactive game
+- `bin/playtest` for balance sweeps
+- `bin/stress_scan` for edge-case scanning
+- `README.md`, `PLAYTEST_SEEDS.md`, `Cargo.lock`, and `RELEASE.txt`
+
+GitHub Actions are configured for:
+
+- `CI`: format, clippy, release tests, and a 500-seed all-strategy smoke run on pushes and pull requests.
+- `Release`: package and smoke-test macOS/Linux tarballs on `v*` tags or manual dispatch.
+
+Suggested first release flow:
+
+```sh
+git status
+./scripts/package_release.sh
+./scripts/smoke_release_bundle.sh dist/electrification-0.1.0-$(rustc -vV | awk '/^host:/ { print $2 }').tar.gz
+git tag v0.1.0
+git push origin main --tags
+```
+
 ## Project Layout
 
 ```text
@@ -155,6 +195,9 @@ src/sim/competitors.rs  rival behavior, startups, rival mergers
 src/sim/attribution.rs  quarter-result explanations
 src/strategy.rs         automated strategy policies and summaries
 src/bin/playtest.rs     strategy harness CLI
+src/bin/stress_scan.rs  broad edge-case scan CLI
+scripts/package_release.sh
+scripts/smoke_release_bundle.sh
 tests/strategy_balance.rs
 ```
 

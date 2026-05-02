@@ -1,6 +1,9 @@
 # Rust build output
 /target/
 
+# Local release packages
+/dist/
+
 # Local save files if a custom save root is pointed at the repository
 /.electrification/
 *.save

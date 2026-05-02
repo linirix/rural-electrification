@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  test:
+    name: Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --release --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --release
+      - name: Strategy smoke
+        run: cargo run --release --bin playtest -- --all-strategies --seeds 500

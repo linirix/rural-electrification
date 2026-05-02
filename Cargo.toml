@@ -2,6 +2,10 @@
 name = "electrification"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.87"
+description = "A terminal-first economic and management simulator about running an electric utility."
+readme = "README.md"
+publish = false
 default-run = "electrification"
 
 [lib]
@@ -19,3 +23,12 @@ path = "src/main.rs"
 [[bin]]
 name = "playtest"
 path = "src/bin/playtest.rs"
+
+[[bin]]
+name = "stress_scan"
+path = "src/bin/stress_scan.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
