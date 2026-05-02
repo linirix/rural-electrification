@@ -193,7 +193,7 @@ cargo run --bin stress_scan -- --strategy raider --seeds 2000
 
 Useful playtest flags:
 
-- `--strategy naive|organic|balanced|regional|mna|raider|landshark|costanza|glonzo|all`
+- `--strategy naive|organic|balanced|regional|ma|raider|landshark|costanza|glonzo|all`
 - `--all-strategies`
 - `--seeds <count>`
 - `--variance <amplitude>`

@@ -5,7 +5,7 @@ use crate::{
 
 use super::shared::cheapest_competitor;
 
-pub(super) fn mna_policy(game: &mut Game) {
+pub(super) fn ma_policy(game: &mut Game) {
     if let Some((index, price)) = cheapest_competitor(game) {
         let reserve = if game.quarter < 4 { 5_000.0 } else { 10_000.0 };
         let should_skip_diligence = should_skip_diligence_for_bolt_on(game, index);

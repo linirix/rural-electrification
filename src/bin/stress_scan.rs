@@ -91,7 +91,7 @@ fn parse_strategy(raw: &str) -> Option<Strategy> {
         "organic" | "growth" => Some(Strategy::Organic),
         "balanced" | "hybrid" => Some(Strategy::Balanced),
         "regional" | "expansion" | "platform" => Some(Strategy::Regional),
-        "mna" | "ma" | "m&a" | "acquire" | "acquisition" | "expert" => Some(Strategy::Mna),
+        "ma" | "m&a" | "acquire" | "acquisition" | "expert" => Some(Strategy::Ma),
         "raider" | "rollup" | "reckless" => Some(Strategy::Raider),
         "landshark" | "optimizer" | "ev" => Some(Strategy::Landshark),
         "costanza" | "opposite" | "contrarian" => Some(Strategy::Costanza),
@@ -218,7 +218,7 @@ fn print_cross_strategy_findings(scans: &[StrategyScan]) {
     let deliberate = [
         Strategy::Organic,
         Strategy::Balanced,
-        Strategy::Mna,
+        Strategy::Ma,
         Strategy::Landshark,
     ];
 
@@ -243,7 +243,7 @@ fn print_cross_strategy_findings(scans: &[StrategyScan]) {
         .values()
         .filter(|row| {
             trace_for(row, Strategy::Organic).is_some_and(|trace| !trace.victory)
-                && trace_for(row, Strategy::Mna)
+                && trace_for(row, Strategy::Ma)
                     .is_some_and(|trace| trace.victory && trace.final_share >= 0.50)
         })
         .take(12)
@@ -396,7 +396,7 @@ fn print_seed_rows(label: &str, rows: &[&Vec<&Trace>]) {
                     Strategy::Naive
                         | Strategy::Organic
                         | Strategy::Balanced
-                        | Strategy::Mna
+                        | Strategy::Ma
                         | Strategy::Landshark
                         | Strategy::Costanza
                 )

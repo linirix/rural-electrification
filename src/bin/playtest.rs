@@ -226,7 +226,7 @@ fn parse_options() -> Options {
     let mut verbose = false;
     let mut variance = None;
     let mut sweep_starts = false;
-    let mut strategy = StrategySelection::One(Strategy::Mna);
+    let mut strategy = StrategySelection::One(Strategy::Ma);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--seeds" => {
@@ -242,7 +242,7 @@ fn parse_options() -> Options {
                     if let Some(parsed) = parse_strategy(&raw) {
                         strategy = parsed;
                     } else {
-                        eprintln!("unknown strategy '{raw}'; using {}", Strategy::Mna.name());
+                        eprintln!("unknown strategy '{raw}'; using {}", Strategy::Ma.name());
                     }
                 }
             }
@@ -268,8 +268,8 @@ fn parse_strategy(raw: &str) -> Option<StrategySelection> {
         "organic" | "growth" => Some(StrategySelection::One(Strategy::Organic)),
         "balanced" | "hybrid" => Some(StrategySelection::One(Strategy::Balanced)),
         "regional" | "expansion" | "platform" => Some(StrategySelection::One(Strategy::Regional)),
-        "mna" | "ma" | "m&a" | "acquire" | "acquisition" | "expert" => {
-            Some(StrategySelection::One(Strategy::Mna))
+        "ma" | "m&a" | "acquire" | "acquisition" | "expert" => {
+            Some(StrategySelection::One(Strategy::Ma))
         }
         "raider" | "rollup" | "reckless" => Some(StrategySelection::One(Strategy::Raider)),
         "landshark" | "optimizer" | "ev" => Some(StrategySelection::One(Strategy::Landshark)),

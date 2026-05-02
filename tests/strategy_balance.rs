@@ -9,7 +9,7 @@ fn strategy_profiles_stay_in_design_bands() {
         (Strategy::Naive, 0.00, 0.05),
         (Strategy::Organic, 0.54, 0.70),
         (Strategy::Balanced, 0.60, 0.78),
-        (Strategy::Mna, 0.45, 0.68),
+        (Strategy::Ma, 0.45, 0.68),
     ];
 
     let summaries = cases
@@ -23,10 +23,10 @@ fn strategy_profiles_stay_in_design_bands() {
 
     let organic_summary = summary_for(&summaries, Strategy::Organic);
     let balanced_summary = summary_for(&summaries, Strategy::Balanced);
-    let mna_summary = summary_for(&summaries, Strategy::Mna);
+    let ma_summary = summary_for(&summaries, Strategy::Ma);
     let organic = organic_summary.win_rate();
     let balanced = balanced_summary.win_rate();
-    let mna = mna_summary.win_rate();
+    let ma = ma_summary.win_rate();
 
     assert!(
         balanced >= organic + 0.015,
@@ -35,10 +35,10 @@ fn strategy_profiles_stay_in_design_bands() {
         organic * 100.0
     );
     assert!(
-        balanced >= mna + 0.04,
-        "balanced play should outperform reckless M&A while still carrying deal risk: balanced {:.1}%, mna {:.1}%",
+        balanced >= ma + 0.04,
+        "balanced play should outperform reckless M&A while still carrying deal risk: balanced {:.1}%, ma {:.1}%",
         balanced * 100.0,
-        mna * 100.0
+        ma * 100.0
     );
     assert!(
         (0.455..=0.505).contains(&organic_summary.average_finish_share()),
@@ -47,24 +47,24 @@ fn strategy_profiles_stay_in_design_bands() {
     );
     let organic_spread =
         organic_summary.finish_share_range.max - organic_summary.finish_share_range.min;
-    let mna_spread = mna_summary.finish_share_range.max - mna_summary.finish_share_range.min;
+    let ma_spread = ma_summary.finish_share_range.max - ma_summary.finish_share_range.min;
     assert!(
-        organic_summary.finish_share_range.min >= mna_summary.finish_share_range.min + 0.015,
-        "organic should have the safer downside tail: organic min {:.1}%, mna min {:.1}%",
+        organic_summary.finish_share_range.min >= ma_summary.finish_share_range.min + 0.015,
+        "organic should have the safer downside tail: organic min {:.1}%, ma min {:.1}%",
         organic_summary.finish_share_range.min * 100.0,
-        mna_summary.finish_share_range.min * 100.0
+        ma_summary.finish_share_range.min * 100.0
     );
     assert!(
-        mna_spread >= organic_spread * 0.70,
-        "M&A should remain visibly exposed to deal outcomes: mna spread {:.1} pts, organic spread {:.1} pts",
-        mna_spread * 100.0,
+        ma_spread >= organic_spread * 0.70,
+        "M&A should remain visibly exposed to deal outcomes: ma spread {:.1} pts, organic spread {:.1} pts",
+        ma_spread * 100.0,
         organic_spread * 100.0
     );
     assert!(
-        mna_summary.average_peak_acquisition_stress()
+        ma_summary.average_peak_acquisition_stress()
             >= organic_summary.average_peak_acquisition_stress() + 0.20,
-        "M&A should carry visibly higher deal stress: mna avg peak {:.0} pts, organic avg peak {:.0} pts",
-        mna_summary.average_peak_acquisition_stress() * 100.0,
+        "M&A should carry visibly higher deal stress: ma avg peak {:.0} pts, organic avg peak {:.0} pts",
+        ma_summary.average_peak_acquisition_stress() * 100.0,
         organic_summary.average_peak_acquisition_stress() * 100.0
     );
 }

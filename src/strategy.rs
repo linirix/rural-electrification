@@ -1,7 +1,7 @@
 mod costanza;
 mod glonzo;
 mod landshark;
-mod mna;
+mod ma;
 mod naive;
 mod organic;
 mod raider;
@@ -12,7 +12,7 @@ use crate::{ACQUISITION_STRESS_STRAINED, Game, InitialVariance, OutcomeKind, Qua
 use costanza::costanza_policy;
 use glonzo::{GlonzoRng, glonzo_policy};
 use landshark::landshark_policy;
-use mna::mna_policy;
+use ma::ma_policy;
 use naive::naive_policy;
 use organic::{balanced_policy, organic_policy, regional_policy};
 use raider::raider_policy;
@@ -25,7 +25,7 @@ pub enum Strategy {
     Organic,
     Balanced,
     Regional,
-    Mna,
+    Ma,
     Raider,
     Landshark,
     Costanza,
@@ -39,7 +39,7 @@ impl Strategy {
             Strategy::Organic,
             Strategy::Balanced,
             Strategy::Regional,
-            Strategy::Mna,
+            Strategy::Ma,
             Strategy::Raider,
             Strategy::Landshark,
             Strategy::Costanza,
@@ -53,7 +53,7 @@ impl Strategy {
             Strategy::Organic => "organic",
             Strategy::Balanced => "balanced",
             Strategy::Regional => "regional",
-            Strategy::Mna => "mna",
+            Strategy::Ma => "ma",
             Strategy::Raider => "raider",
             Strategy::Landshark => "landshark",
             Strategy::Costanza => "costanza",
@@ -174,7 +174,7 @@ fn run_policy(strategy: Strategy, game: &mut Game, state: &mut StrategyState) {
         Strategy::Organic => organic_policy(game),
         Strategy::Balanced => balanced_policy(game),
         Strategy::Regional => regional_policy(game),
-        Strategy::Mna => mna_policy(game),
+        Strategy::Ma => ma_policy(game),
         Strategy::Raider => raider_policy(game),
         Strategy::Landshark => landshark_policy(game),
         Strategy::Costanza => costanza_policy(game),
