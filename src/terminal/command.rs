@@ -44,9 +44,13 @@ pub(super) fn handle_command(game: &mut Game, command: &str) -> CommandResult {
                 }
             }
         }
-        "continue" | "resume" | "sandbox" => match game.continue_after_review() {
+        "continue" | "resume" => match game.continue_after_review() {
             Ok(message) => CommandResult::Continue(message),
             Err(message) => CommandResult::Continue(format!("Cannot continue: {message}")),
+        },
+        "sandbox" => match game.enable_sandbox_mode() {
+            Ok(message) => CommandResult::Continue(message),
+            Err(message) => CommandResult::Continue(format!("Cannot enable sandbox: {message}")),
         },
         "quit" | "exit" => CommandResult::Quit,
         "preview" | "quote" | "plan" => preview_command(game, &parts),

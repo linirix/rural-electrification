@@ -391,6 +391,7 @@ fn last_quarter_wraps_driver_and_event_inside_dashboard_column() {
 fn start_screen_mentions_objectives_and_core_commands() {
     let game = Game::with_seed(120);
     let text = [
+        vec![start_screen_banner_line()],
         start_screen_overview_lines(&game),
         start_screen_metric_lines(),
         start_screen_command_lines(&game),
@@ -409,9 +410,73 @@ fn start_screen_mentions_objectives_and_core_commands() {
     assert!(text.contains("hire / fire"));
     assert!(text.contains("rivals / board"));
     assert!(text.contains("save / load"));
+    assert!(text.contains("sandbox"));
     assert!(text.contains("Press Return"));
     assert!(text.contains("Report -> Rivals -> Board -> Help"));
     assert!(text.contains("opened by command"));
+}
+
+#[test]
+fn start_screen_centers_banner_text() {
+    let line = start_screen_banner_line();
+
+    assert!(line.starts_with(' '));
+    assert!(line.contains("more corgi's rural electrification!"));
+}
+
+#[test]
+fn start_screen_overview_does_not_duplicate_banner_inside_box() {
+    let game = Game::with_seed(121);
+    let lines = start_screen_overview_lines(&game);
+
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("more corgi's rural electrification!"))
+    );
+    assert!(lines[0].contains("You run"));
+}
+
+#[test]
+fn start_screen_command_effects_share_one_column() {
+    let game = Game::with_seed(122);
+    let lines = start_screen_command_lines(&game);
+    let effects = [
+        "finish the quarter",
+        "inspect before acting",
+        "set price",
+        "growth; reliability",
+        "automate marketing",
+        "debt, equity",
+        "competitors; objectives",
+        "keep long campaigns",
+        "disable board reviews",
+    ];
+    let columns = lines
+        .iter()
+        .zip(effects)
+        .map(|(line, effect)| {
+            let index = line.find(effect).expect("effect text should be present");
+            visible_width(&line[..index])
+        })
+        .collect::<Vec<_>>();
+
+    assert!(columns.windows(2).all(|pair| pair[0] == pair[1]));
+}
+
+#[test]
+fn sandbox_command_enables_no_board_mode() {
+    let mut game = Game::with_seed(122);
+
+    match handle_command(&mut game, "sandbox") {
+        CommandResult::Continue(message) => {
+            assert!(message.contains("Sandbox mode enabled"));
+            assert!(message.contains("Board reviews"));
+        }
+        _ => panic!("sandbox should return a confirmation message"),
+    }
+
+    assert!(game.sandbox_mode);
 }
 
 #[test]
@@ -1112,6 +1177,19 @@ fn scorecard_uses_y5_review_before_formal_review() {
 }
 
 #[test]
+fn scorecard_shows_sandbox_mode_without_review_targets() {
+    let mut game = Game::with_seed(154);
+    game.enable_sandbox_mode().unwrap();
+
+    let joined = scorecard_lines(&game).join(" ");
+
+    assert!(joined.contains("Sandbox, no board reviews"));
+    assert!(joined.contains("50% leadership"));
+    assert!(!joined.contains("Next review"));
+    assert!(!joined.contains("45% target"));
+}
+
+#[test]
 fn initial_milestone_snapshot_waits_for_completed_quarter_before_coverage() {
     let game = Game::with_seed(153);
     let joined = milestone_snapshot_lines(&game).join(" ");
@@ -1141,6 +1219,25 @@ fn scorecard_uses_regional_review_after_continuation() {
     assert!(!joined.contains("Territories 100% / 2 needed"));
     assert!(!joined.contains("Rate support"));
     assert!(!joined.contains("review complete"));
+}
+
+#[test]
+fn board_lines_explain_sandbox_mode() {
+    let mut game = Game::with_seed(155);
+    game.enable_sandbox_mode().unwrap();
+
+    let text = [
+        board_overview_lines(&game),
+        board_milestone_lines(&game),
+        board_risk_lines(&game),
+        board_path_lines(&game),
+    ]
+    .concat()
+    .join(" ");
+
+    assert!(text.contains("Sandbox"));
+    assert!(text.contains("disabled"));
+    assert!(text.contains("Operating failures"));
 }
 
 #[test]

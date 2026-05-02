@@ -1211,6 +1211,87 @@ fn formal_review_can_be_continued_past_campaign_end() {
 }
 
 #[test]
+fn sandbox_mode_skips_formal_review_constraints() {
+    let mut game = Game::with_seed(521);
+    game.quarter = game.campaign_quarters;
+    game.player.customers = 200.0;
+    game.player.reliability = 0.80;
+    game.player.debt = 0.0;
+    game.enable_sandbox_mode().unwrap();
+    let finances = FirmFinances {
+        revenue: 2_000.0,
+        operating_cost: 1_900.0,
+        interest: 0.0,
+        profit: 100.0,
+        served_mwh: 200.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    assert!(game.outcome.is_none());
+    assert!(!game.review_completed);
+}
+
+#[test]
+fn sandbox_mode_skips_regional_mandate_constraints() {
+    let mut game = Game::with_seed(522);
+    game.review_completed = true;
+    game.quarter = REGIONAL_MANDATE_QUARTER;
+    game.adjacent_expansions = 0;
+    game.enable_sandbox_mode().unwrap();
+    let finances = FirmFinances {
+        revenue: 12_000.0,
+        operating_cost: 10_000.0,
+        interest: 0.0,
+        profit: 2_000.0,
+        served_mwh: 900.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    assert!(game.outcome.is_none());
+    assert!(!game.regional_mandate_completed);
+}
+
+#[test]
+fn sandbox_mode_keeps_terminal_operating_failures() {
+    let mut game = Game::with_seed(523);
+    game.enable_sandbox_mode().unwrap();
+    game.player.reliability = 0.30;
+    let finances = FirmFinances {
+        revenue: 1_000.0,
+        operating_cost: 1_000.0,
+        interest: 0.0,
+        profit: 0.0,
+        served_mwh: 100.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.check_outcome(&finances);
+
+    let outcome = game.outcome.as_ref().expect("expected terminal outcome");
+    assert_eq!(outcome.kind, OutcomeKind::Defeat);
+    assert!(!outcome.can_continue);
+    assert_eq!(outcome.headline, "Market Access Lost");
+}
+
+#[test]
+fn sandbox_mode_bypasses_board_gates_for_adjacent_expansion() {
+    let mut game = Game::with_seed(524);
+    game.quarter = 0;
+    game.player.cash = game.adjacent_expansion_cost() + 10_000.0;
+    game.player.reliability = 0.70;
+    game.player.customers = 50.0;
+
+    assert!(game.adjacent_expansion_blocker().is_some());
+    game.enable_sandbox_mode().unwrap();
+
+    assert!(game.adjacent_expansion_blocker().is_none());
+}
+
+#[test]
 fn formal_review_rejects_below_cost_market_lead() {
     let mut game = Game::with_seed(520);
     game.quarter = game.campaign_quarters;

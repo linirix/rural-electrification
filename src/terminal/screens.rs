@@ -10,7 +10,10 @@ pub(super) struct BoardTarget {
     leverage: f64,
 }
 
+const START_SCREEN_COMMAND_WIDTH: usize = 18;
+
 pub(super) fn print_start_screen(game: &Game) {
+    println!("{}", start_screen_banner_line());
     print_box(
         &format!("{} | Start", game.player.name),
         &start_screen_overview_lines(game),
@@ -24,9 +27,12 @@ pub(super) fn print_start_screen(game: &Game) {
     print_box("Begin", &start_screen_begin_lines());
 }
 
+pub(super) fn start_screen_banner_line() -> String {
+    centered_line(styled(BOLD_CYAN, "more corgi's rural electrification!"))
+}
+
 pub(super) fn start_screen_overview_lines(game: &Game) -> Vec<String> {
     vec![
-        styled(BOLD_CYAN, "more corgi's rural electrification!"),
         format!(
             "You run {} in {}.",
             styled(BOLD, &game.player.name),
@@ -52,20 +58,21 @@ pub(super) fn start_screen_metric_lines() -> Vec<String> {
 
 pub(super) fn start_screen_command_lines(game: &Game) -> Vec<String> {
     vec![
-        compact_action_line("next / n", "finish the quarter"),
-        compact_action_line("preview <cmd>", "inspect before acting"),
-        compact_action_line(
+        start_screen_command_line("next / n", "finish the quarter"),
+        start_screen_command_line("preview <cmd>", "inspect before acting"),
+        start_screen_command_line(
             "rate / build",
             format!(
                 "set price; add gen/lines near {:.1}c",
                 game.market.standard_rate_cents
             ),
         ),
-        compact_action_line("marketing / maint", "growth; reliability"),
-        compact_action_line("hire / fire", "automate marketing or upkeep"),
-        compact_action_line("capital", "debt, equity, buybacks"),
-        compact_action_line("rivals / board", "competitors; objectives"),
-        compact_action_line("save / load", "keep long campaigns"),
+        start_screen_command_line("marketing / maint", "growth; reliability"),
+        start_screen_command_line("hire / fire", "automate marketing or upkeep"),
+        start_screen_command_line("capital", "debt, equity, buybacks"),
+        start_screen_command_line("rivals / board", "competitors; objectives"),
+        start_screen_command_line("save / load", "keep long campaigns"),
+        start_screen_command_line("sandbox", "disable board reviews"),
     ]
 }
 
@@ -75,6 +82,7 @@ pub(super) fn start_screen_begin_lines() -> Vec<String> {
         "From the dashboard, Return cycles: Report -> Rivals -> Board -> Help -> Dashboard."
             .to_string(),
         "From a screen opened by command, Return goes back to the dashboard.".to_string(),
+        "Type sandbox to play without board review constraints.".to_string(),
         "Type help at any time for the full command reference.".to_string(),
     ]
 }
@@ -121,6 +129,7 @@ pub(super) fn print_help() {
             "Return         cycle screens / return".to_string(),
             "next / n / end finish quarter".to_string(),
             "continue       post-review play".to_string(),
+            "sandbox        disable board reviews".to_string(),
             "save [name]    write save file".to_string(),
             "load [name]    restore save file".to_string(),
             "help / ?       command reference".to_string(),
@@ -137,6 +146,11 @@ pub(super) fn print_help() {
             "Use the dashboard guide for live costs.".to_string(),
         ],
     );
+}
+
+fn centered_line(line: String) -> String {
+    let padding = content_width().saturating_sub(visible_width(&line)) / 2;
+    format!("{}{}", " ".repeat(padding), line)
 }
 
 pub(super) fn print_status(game: &Game) {
@@ -509,9 +523,27 @@ pub(super) fn compact_command_lines(game: &Game) -> Vec<String> {
 }
 
 fn compact_action_line(command: impl std::fmt::Display, effect: impl std::fmt::Display) -> String {
+    compact_action_line_with_width(command, effect, 12)
+}
+
+fn start_screen_command_line(
+    command: impl std::fmt::Display,
+    effect: impl std::fmt::Display,
+) -> String {
+    compact_action_line_with_width(command, effect, START_SCREEN_COMMAND_WIDTH)
+}
+
+fn compact_action_line_with_width(
+    command: impl std::fmt::Display,
+    effect: impl std::fmt::Display,
+    command_width: usize,
+) -> String {
+    let command = command.to_string();
+    let padding = command_width.saturating_sub(visible_width(&command));
     format!(
-        "{}  {}",
-        styled(BOLD_CYAN, format!("{command:<12}")),
+        "{}{}  {}",
+        styled(BOLD_CYAN, command),
+        " ".repeat(padding),
         effect
     )
 }
@@ -591,6 +623,10 @@ pub(super) fn quit_summary_line(game: &Game) -> String {
 }
 
 pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {
+    if game.sandbox_mode {
+        return sandbox_scorecard_lines(game);
+    }
+
     let share = game.market_share();
     let reliability = game.player.reliability;
     let leverage = game.player.debt_to_assets();
@@ -697,6 +733,78 @@ pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {
     }
 
     lines
+}
+
+fn sandbox_scorecard_lines(game: &Game) -> Vec<String> {
+    let share = game.market_share();
+    let reliability = game.player.reliability;
+    let leverage = game.player.debt_to_assets();
+    let rate_support = game.player_rate_support_ratio();
+
+    vec![
+        format!(
+            "{} {} | {} {} | {} {} | {} {}",
+            muted("Mode"),
+            styled(BOLD_CYAN, "Sandbox, no board reviews"),
+            muted("Rate"),
+            styled(BOLD_CYAN, format!("{:.1}c/kWh", game.player.rate_cents)),
+            muted("Avg"),
+            styled(CYAN, format!("{:.1}c", market_average_rate(game))),
+            muted("Tolerance"),
+            styled(
+                YELLOW,
+                format!("{:.1}c", public_rate_tolerance(&game.market))
+            )
+        ),
+        score_line(
+            "Share",
+            share,
+            0.50,
+            share_tone(share),
+            "50% leadership".to_string(),
+            if share >= 0.50 {
+                "market leader".to_string()
+            } else {
+                format!("{:.0} pts from lead", (0.50 - share) * 100.0)
+            },
+        ),
+        score_line(
+            "Reliability",
+            reliability,
+            0.80,
+            reliability_tone(reliability),
+            "80% service marker".to_string(),
+            if reliability >= 0.80 {
+                format!("{:.0} pts above", (reliability - 0.80) * 100.0)
+            } else {
+                format!("{:.0} pts short", (0.80 - reliability) * 100.0)
+            },
+        ),
+        score_line(
+            "Debt/assets",
+            leverage,
+            0.90,
+            leverage_tone(leverage),
+            "90% lender stress".to_string(),
+            if leverage <= 0.90 {
+                format!("{:.0} pts room", (0.90 - leverage) * 100.0)
+            } else {
+                format!("{:.0} pts over", (leverage - 0.90) * 100.0)
+            },
+        ),
+        score_line(
+            "Rate support",
+            rate_support.min(1.35),
+            1.0,
+            rate_support_tone(rate_support),
+            "break-even".to_string(),
+            if rate_support >= 1.0 {
+                "above break-even".to_string()
+            } else {
+                format!("{:.0}% of break-even", rate_support * 100.0)
+            },
+        ),
+    ]
 }
 
 struct ScorecardReviewTargets {
@@ -827,6 +935,21 @@ pub(super) fn quarters_remaining_label(game: &Game) -> String {
 }
 
 pub(super) fn board_overview_lines(game: &Game) -> Vec<String> {
+    if game.sandbox_mode {
+        return vec![
+            format!(
+                "{} {}   {} {}",
+                muted("Current"),
+                styled(BOLD_CYAN, game.date_label()),
+                muted("Mode"),
+                styled(BOLD, "Sandbox")
+            ),
+            "Board reviews and mandate checkpoints are disabled for this run.".to_string(),
+            "Operating failures still apply: service collapse, receivership, and hostile takeover."
+                .to_string(),
+        ];
+    }
+
     let next = next_board_target(game);
     vec![
         format!(
@@ -867,6 +990,14 @@ pub(super) fn board_overview_lines(game: &Game) -> Vec<String> {
 }
 
 pub(super) fn board_milestone_lines(game: &Game) -> Vec<String> {
+    if game.sandbox_mode {
+        return vec![
+            signal_line("Board", CYAN, "no active review milestones"),
+            signal_line("Growth", GREEN, "expand when cash and lenders permit"),
+            signal_line("Operations", GREEN, "service and solvency still matter"),
+        ];
+    }
+
     let target = next_board_target(game);
     vec![
         format!(
@@ -891,6 +1022,26 @@ pub(super) fn board_milestone_lines(game: &Game) -> Vec<String> {
 }
 
 pub(super) fn board_risk_lines(game: &Game) -> Vec<String> {
+    if game.sandbox_mode {
+        return vec![
+            signal_line(
+                "Service",
+                reliability_tone(game.player.reliability),
+                "market access still depends on reliability",
+            ),
+            signal_line(
+                "Capital",
+                leverage_tone(game.player.debt_to_assets()),
+                "lenders can still force receivership",
+            ),
+            signal_line(
+                "Control",
+                ownership_tone(game.player_ownership()),
+                "weak valuation can still invite a hostile bid",
+            ),
+        ];
+    }
+
     let target = next_board_target(game);
     let mut lines = Vec::new();
     let share_gap = target.share - game.market_share();
@@ -974,6 +1125,15 @@ pub(super) fn board_risk_lines(game: &Game) -> Vec<String> {
 }
 
 pub(super) fn board_path_lines(game: &Game) -> Vec<String> {
+    if game.sandbox_mode {
+        return vec![
+            styled(BOLD_CYAN, "Sandbox path"),
+            "No Year 5 or Year 10 board outcome will end this run.".to_string(),
+            "Use your own goals: durable profits, regional scale, founder wealth, or market leadership."
+                .to_string(),
+        ];
+    }
+
     board_targets()
         .iter()
         .map(|target| {
@@ -1004,7 +1164,9 @@ pub(super) fn board_path_lines(game: &Game) -> Vec<String> {
 }
 
 pub(super) fn should_show_regional_status(game: &Game) -> bool {
-    !game.regional_mandate_completed && game.quarter < REGIONAL_MANDATE_QUARTER
+    !game.sandbox_mode
+        && !game.regional_mandate_completed
+        && game.quarter < REGIONAL_MANDATE_QUARTER
 }
 
 #[cfg(test)]

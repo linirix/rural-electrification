@@ -132,6 +132,8 @@ pub struct Game {
     #[serde(default)]
     pub regional_mandate_completed: bool,
     pub review_completed: bool,
+    #[serde(default)]
+    pub sandbox_mode: bool,
     pub equity_market_fatigue: f64,
     pub diligence_reports: Vec<DiligenceReport>,
     pub last_report: Option<QuarterReport>,
@@ -501,6 +503,7 @@ impl Game {
             adjacent_expansions: 0,
             regional_mandate_completed: false,
             review_completed: false,
+            sandbox_mode: false,
             equity_market_fatigue: 0.0,
             diligence_reports: Vec::new(),
             last_report: None,
@@ -1303,6 +1306,29 @@ impl Game {
         Ok(format!("Continuing after {headline}.{next}"))
     }
 
+    pub fn enable_sandbox_mode(&mut self) -> Result<String, String> {
+        if let Some(outcome) = &self.outcome
+            && !outcome.can_continue
+        {
+            return Err(
+                "This outcome is terminal; the company cannot continue operating.".to_string(),
+            );
+        }
+
+        let prior_outcome = self.outcome.take().map(|outcome| outcome.headline);
+        let already_active = self.sandbox_mode;
+        self.sandbox_mode = true;
+
+        let suffix = " Board reviews, mandates, and checkpoint penalties are disabled; operating failures such as receivership, market-access loss, and hostile takeover still apply.";
+        if already_active {
+            Ok(format!("Sandbox mode is already active.{suffix}"))
+        } else if let Some(headline) = prior_outcome {
+            Ok(format!("Sandbox mode enabled after {headline}.{suffix}"))
+        } else {
+            Ok(format!("Sandbox mode enabled.{suffix}"))
+        }
+    }
+
     pub fn market_share(&self) -> f64 {
         let total = self.total_connected_customers();
         if total <= 0.0 {
@@ -1387,6 +1413,9 @@ impl Game {
     }
 
     pub fn regional_mandate_active(&self) -> bool {
+        if self.sandbox_mode {
+            return false;
+        }
         self.review_completed || self.adjacent_expansion_pending() || self.adjacent_expansions > 0
     }
 
@@ -1399,7 +1428,7 @@ impl Game {
     }
 
     pub fn adjacent_expansion_blocker(&self) -> Option<String> {
-        if self.quarter < 8 && !self.review_completed {
+        if self.quarter < 8 && !self.review_completed && !self.sandbox_mode {
             return Some("Adjacent expansion unlocks in Year 3.".to_string());
         }
         if self.adjacent_expansion_pending() {
@@ -1410,13 +1439,13 @@ impl Game {
                 "Metro has already entered {MAX_ADJACENT_EXPANSIONS} adjacent territories; broader regional expansion is not modeled yet."
             ));
         }
-        if self.player.reliability < 0.82 {
+        if self.player.reliability < 0.82 && !self.sandbox_mode {
             return Some(
                 "The board will not underwrite expansion until reliability is at least 82%."
                     .to_string(),
             );
         }
-        if self.market_share() < 0.34 {
+        if self.market_share() < 0.34 && !self.sandbox_mode {
             return Some(
                 "The board wants at least 34% core-market share before funding adjacent expansion."
                     .to_string(),
@@ -1997,7 +2026,8 @@ impl Game {
     }
 
     fn apply_board_checkpoint(&mut self, events: &mut Vec<String>) {
-        if self.quarter != BOARD_CHECKPOINT_QUARTER
+        if self.sandbox_mode
+            || self.quarter != BOARD_CHECKPOINT_QUARTER
             || self.review_completed
             || self.market_share() >= BOARD_CHECKPOINT_SHARE_TARGET
         {
@@ -2870,6 +2900,10 @@ impl Game {
                 ),
                 can_continue: false,
             });
+            return;
+        }
+
+        if self.sandbox_mode {
             return;
         }
 
