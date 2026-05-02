@@ -29,7 +29,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: electrification-${{ matrix.os }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
 
   publish:
     name: Publish GitHub Release
@@ -47,9 +49,15 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           shopt -s globstar nullglob
-          files=(release-artifacts/**/*.tar.gz)
-          if [[ ${#files[@]} -eq 0 ]]; then
+          packages=(release-artifacts/**/*.tar.gz)
+          checksums=(release-artifacts/**/*.tar.gz.sha256)
+          files=("${packages[@]}" "${checksums[@]}")
+          if [[ ${#packages[@]} -eq 0 ]]; then
             echo "no release packages found" >&2
+            exit 1
+          fi
+          if [[ ${#checksums[@]} -ne ${#packages[@]} ]]; then
+            echo "expected one checksum per release package" >&2
             exit 1
           fi
 

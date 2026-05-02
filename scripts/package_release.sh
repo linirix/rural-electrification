@@ -6,12 +6,20 @@ cd "$ROOT"
 
 VERSION="$(awk -F '"' '/^version =/ { print $2; exit }' Cargo.toml)"
 HOST="$(rustc -vV | awk '/^host:/ { host = $2 } END { print host }')"
-PACKAGE_NAME="electrification-${VERSION}-${HOST}"
+case "$HOST" in
+    aarch64-apple-darwin) PLATFORM="macos-arm64" ;;
+    x86_64-apple-darwin) PLATFORM="macos-x64" ;;
+    x86_64-unknown-linux-gnu) PLATFORM="linux-x64" ;;
+    x86_64-pc-windows-msvc) PLATFORM="windows-x64" ;;
+    *) PLATFORM="$HOST" ;;
+esac
+PACKAGE_NAME="electrification-${VERSION}-${PLATFORM}"
 DIST_DIR="$ROOT/dist"
 STAGE_DIR="$DIST_DIR/$PACKAGE_NAME"
 ARCHIVE="$DIST_DIR/$PACKAGE_NAME.tar.gz"
+CHECKSUM="$ARCHIVE.sha256"
 
-rm -rf "$STAGE_DIR" "$ARCHIVE"
+rm -rf "$STAGE_DIR" "$ARCHIVE" "$CHECKSUM"
 mkdir -p "$STAGE_DIR/bin"
 
 cargo build --release --locked --bins
@@ -41,7 +49,8 @@ cp "$ROOT/Cargo.lock" "$STAGE_DIR/"
 
 {
     printf 'Electrification %s\n' "$VERSION"
-    printf 'Target: %s\n' "$HOST"
+    printf 'Platform: %s\n' "$PLATFORM"
+    printf 'Rust target: %s\n' "$HOST"
     printf '\nRun the game:\n'
     if [[ -n "$EXE_SUFFIX" ]]; then
         printf '  .\\bin\\electrification.exe\n'
@@ -60,4 +69,12 @@ cp "$ROOT/Cargo.lock" "$STAGE_DIR/"
 
 tar -C "$DIST_DIR" -czf "$ARCHIVE" "$PACKAGE_NAME"
 
+ARCHIVE_BASENAME="$(basename "$ARCHIVE")"
+if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$DIST_DIR" && sha256sum "$ARCHIVE_BASENAME") > "$CHECKSUM"
+else
+    (cd "$DIST_DIR" && shasum -a 256 "$ARCHIVE_BASENAME") > "$CHECKSUM"
+fi
+
 printf 'Packaged %s\n' "$ARCHIVE"
+printf 'Checksum %s\n' "$CHECKSUM"

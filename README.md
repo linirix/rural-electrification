@@ -26,6 +26,65 @@ cargo run --release --bin electrification
 
 Set `NO_COLOR=1` or use `TERM=dumb` to disable ANSI color.
 
+## Install Release Binaries
+
+Download the archive for your platform from the latest GitHub Release:
+
+- macOS Apple Silicon: `electrification-0.1.1-macos-arm64.tar.gz`
+- Linux x64: `electrification-0.1.1-linux-x64.tar.gz`
+- Windows x64: `electrification-0.1.1-windows-x64.tar.gz`
+
+Each archive has a matching `.sha256` checksum file. To verify:
+
+```sh
+shasum -a 256 -c electrification-0.1.1-macos-arm64.tar.gz.sha256
+sha256sum -c electrification-0.1.1-linux-x64.tar.gz.sha256
+```
+
+On macOS or Linux:
+
+```sh
+tar -xzf electrification-0.1.1-macos-arm64.tar.gz
+cd electrification-0.1.1-macos-arm64
+./bin/electrification
+```
+
+Use the Linux archive and directory name on Linux:
+
+```sh
+tar -xzf electrification-0.1.1-linux-x64.tar.gz
+cd electrification-0.1.1-linux-x64
+./bin/electrification
+```
+
+On Windows PowerShell:
+
+```powershell
+tar -xzf electrification-0.1.1-windows-x64.tar.gz
+cd electrification-0.1.1-windows-x64
+.\bin\electrification.exe
+```
+
+To verify the Windows checksum, compare the hash printed by PowerShell with the value in the `.sha256` file:
+
+```powershell
+Get-FileHash electrification-0.1.1-windows-x64.tar.gz -Algorithm SHA256
+Get-Content electrification-0.1.1-windows-x64.tar.gz.sha256
+```
+
+If macOS blocks the downloaded binary, remove the quarantine attribute:
+
+```sh
+xattr -dr com.apple.quarantine bin
+```
+
+Known good terminal settings:
+
+- Use a modern UTF-8 terminal with ANSI color support: Terminal.app, iTerm2, GNOME Terminal, Konsole, or Windows Terminal.
+- A width of 120 columns or more gives the dashboard its intended layout.
+- If colors or box drawing are hard to read, run with `NO_COLOR=1`.
+- On Windows, prefer Windows Terminal over the legacy console.
+
 ## Core Commands
 
 ```text
@@ -152,7 +211,7 @@ Build a distributable package for the current machine:
 
 ```sh
 ./scripts/package_release.sh
-./scripts/smoke_release_bundle.sh dist/electrification-0.1.0-$(rustc -vV | awk '/^host:/ { print $2 }').tar.gz
+./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.1-*.tar.gz | head -n 1)"
 ```
 
 The package includes:
@@ -161,6 +220,7 @@ The package includes:
 - `bin/playtest` for balance sweeps
 - `bin/stress_scan` for edge-case scanning
 - `README.md`, `PLAYTEST_SEEDS.md`, `Cargo.lock`, and `RELEASE.txt`
+- a matching `.sha256` checksum file for the archive
 
 GitHub Actions are configured for:
 
@@ -174,8 +234,8 @@ Suggested first release flow:
 ```sh
 git status
 ./scripts/package_release.sh
-./scripts/smoke_release_bundle.sh dist/electrification-0.1.0-$(rustc -vV | awk '/^host:/ { print $2 }').tar.gz
-git tag v0.1.0
+./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.1-*.tar.gz | head -n 1)"
+git tag v0.1.1
 git push origin main --tags
 ```
 

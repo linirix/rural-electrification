@@ -15,6 +15,20 @@ if [[ -d "$INPUT" ]]; then
 else
     case "$INPUT" in
         *.tar.gz | *.tgz)
+            CHECKSUM_FILE="$INPUT.sha256"
+            if [[ -f "$CHECKSUM_FILE" ]]; then
+                expected="$(awk '{ print $1; exit }' "$CHECKSUM_FILE")"
+                if command -v sha256sum >/dev/null 2>&1; then
+                    actual="$(sha256sum "$INPUT" | awk '{ print $1 }')"
+                else
+                    actual="$(shasum -a 256 "$INPUT" | awk '{ print $1 }')"
+                fi
+                if [[ "$actual" != "$expected" ]]; then
+                    printf 'checksum mismatch for %s\n' "$INPUT" >&2
+                    printf 'expected: %s\nactual:   %s\n' "$expected" "$actual" >&2
+                    exit 1
+                fi
+            fi
             tar -C "$TMP_DIR" -xzf "$INPUT"
             ;;
         *)
