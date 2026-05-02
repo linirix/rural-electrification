@@ -30,46 +30,46 @@ Set `NO_COLOR=1` or use `TERM=dumb` to disable ANSI color.
 
 Download the archive for your platform from the latest GitHub Release:
 
-- macOS Apple Silicon: `electrification-0.1.1-macos-arm64.tar.gz`
-- Linux x64: `electrification-0.1.1-linux-x64.tar.gz`
-- Windows x64: `electrification-0.1.1-windows-x64.tar.gz`
+- macOS Apple Silicon: `electrification-0.1.2-macos-arm64.tar.gz`
+- Linux x64: `electrification-0.1.2-linux-x64.tar.gz`
+- Windows x64: `electrification-0.1.2-windows-x64.tar.gz`
 
 Each archive has a matching `.sha256` checksum file. To verify:
 
 ```sh
-shasum -a 256 -c electrification-0.1.1-macos-arm64.tar.gz.sha256
-sha256sum -c electrification-0.1.1-linux-x64.tar.gz.sha256
+shasum -a 256 -c electrification-0.1.2-macos-arm64.tar.gz.sha256
+sha256sum -c electrification-0.1.2-linux-x64.tar.gz.sha256
 ```
 
 On macOS or Linux:
 
 ```sh
-tar -xzf electrification-0.1.1-macos-arm64.tar.gz
-cd electrification-0.1.1-macos-arm64
+tar -xzf electrification-0.1.2-macos-arm64.tar.gz
+cd electrification-0.1.2-macos-arm64
 ./bin/electrification
 ```
 
 Use the Linux archive and directory name on Linux:
 
 ```sh
-tar -xzf electrification-0.1.1-linux-x64.tar.gz
-cd electrification-0.1.1-linux-x64
+tar -xzf electrification-0.1.2-linux-x64.tar.gz
+cd electrification-0.1.2-linux-x64
 ./bin/electrification
 ```
 
 On Windows PowerShell:
 
 ```powershell
-tar -xzf electrification-0.1.1-windows-x64.tar.gz
-cd electrification-0.1.1-windows-x64
+tar -xzf electrification-0.1.2-windows-x64.tar.gz
+cd electrification-0.1.2-windows-x64
 .\bin\electrification.exe
 ```
 
 To verify the Windows checksum, compare the hash printed by PowerShell with the value in the `.sha256` file:
 
 ```powershell
-Get-FileHash electrification-0.1.1-windows-x64.tar.gz -Algorithm SHA256
-Get-Content electrification-0.1.1-windows-x64.tar.gz.sha256
+Get-FileHash electrification-0.1.2-windows-x64.tar.gz -Algorithm SHA256
+Get-Content electrification-0.1.2-windows-x64.tar.gz.sha256
 ```
 
 If macOS blocks the downloaded binary, remove the quarantine attribute:
@@ -217,7 +217,7 @@ Build a distributable package for the current machine:
 
 ```sh
 ./scripts/package_release.sh
-./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.1-*.tar.gz | head -n 1)"
+./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.2-*.tar.gz | head -n 1)"
 ```
 
 The package includes:
@@ -240,8 +240,8 @@ Suggested first release flow:
 ```sh
 git status
 ./scripts/package_release.sh
-./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.1-*.tar.gz | head -n 1)"
-git tag v0.1.1
+./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.2-*.tar.gz | head -n 1)"
+git tag v0.1.2
 git push origin main --tags
 ```
 
