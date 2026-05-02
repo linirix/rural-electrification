@@ -72,10 +72,33 @@ pub(super) fn handle_command(game: &mut Game, command: &str) -> CommandResult {
 }
 
 pub(super) fn apply(game: &mut Game, decision: Decision) -> CommandResult {
+    let preview_hint = preview_hint_for_direct_decision(&decision);
     match game.apply_decision(decision) {
-        Ok(message) => CommandResult::Continue(message),
+        Ok(mut message) => {
+            if let Some(hint) = preview_hint {
+                message.push(' ');
+                message.push_str(hint);
+            }
+            CommandResult::Continue(message)
+        }
         Err(error) => CommandResult::Continue(format!("Cannot do that: {error}")),
     }
+}
+
+fn preview_hint_for_direct_decision(decision: &Decision) -> Option<&'static str> {
+    let high_impact = match decision {
+        Decision::Acquire { .. } | Decision::EnterAdjacentMarket => true,
+        Decision::IssueStock { amount }
+        | Decision::BuyBackStock { amount }
+        | Decision::DeclareDividend { amount }
+        | Decision::Borrow { amount } => *amount >= 20_000.0,
+        Decision::BuildGeneration { capacity_mwh } => *capacity_mwh >= 300.0,
+        Decision::BuildDistribution { customer_capacity } => *customer_capacity >= 500.0,
+        Decision::AdjustRate { delta_cents } => delta_cents.abs() >= 1.0,
+        _ => false,
+    };
+
+    high_impact.then_some("Tip: use 'preview <command>' before similar high-impact moves.")
 }
 
 pub(super) fn save_game(game: &Game, name: Option<&str>) -> Result<String, String> {

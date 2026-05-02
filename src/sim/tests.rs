@@ -900,6 +900,31 @@ fn interest_uses_current_macro_and_leverage_rate() {
 }
 
 #[test]
+fn player_cash_crunch_is_reported_when_overdraft_becomes_debt() {
+    let mut game = Game::with_seed(43);
+    game.player.cash = 100.0;
+    game.player.rate_cents = 0.5;
+    game.player.debt = 80_000.0;
+    let starting_debt = game.player.debt;
+    let mut events = Vec::new();
+
+    settle_utility(
+        &mut game.player,
+        &game.market,
+        &game.macro_state,
+        1.0,
+        true,
+        &mut events,
+    );
+
+    assert!(game.player.debt > starting_debt);
+    assert!(
+        events.iter().any(|event| event.contains("Cash crunch")),
+        "expected visible cash-crunch event, got {events:?}"
+    );
+}
+
+#[test]
 fn high_leverage_pays_higher_debt_rate() {
     let mut low = Game::with_seed(42);
     let mut high = Game::with_seed(42);
@@ -1586,6 +1611,26 @@ fn custom_generation_project_uses_requested_size_and_cost() {
 }
 
 #[test]
+fn oversized_generation_project_reports_clamped_size() {
+    let mut game = Game::with_seed(22);
+    game.player.cash = 500_000.0;
+
+    let message = game
+        .apply_decision(Decision::BuildGeneration {
+            capacity_mwh: MAX_GENERATION_PROJECT_MWH * 2.0,
+        })
+        .unwrap();
+
+    assert!(message.contains("clamped"));
+    match game.pending_projects[0].kind {
+        ProjectKind::Generation { capacity_mwh } => {
+            assert!((capacity_mwh - MAX_GENERATION_PROJECT_MWH).abs() < 0.01)
+        }
+        _ => panic!("expected generation project"),
+    }
+}
+
+#[test]
 fn generation_completion_lifts_reliability_from_new_equipment() {
     let mut game = Game::with_seed(23);
     game.player.reliability = 0.74;
@@ -2227,6 +2272,29 @@ fn diligence_can_stay_quiet_without_target_defense() {
 }
 
 #[test]
+fn diligence_leak_probability_is_modest_until_deal_pressure_builds() {
+    let mut game = Game::with_seed(41);
+    game.player.customers = 260.0;
+    game.acquisition_stress = 0.0;
+    game.competitors[0].customers = 120.0;
+    game.competitors[0].rate_cents = game.player.rate_cents + 0.25;
+
+    let routine_probability = game.diligence_alert_probability(0);
+    game.acquisition_stress = ACQUISITION_STRESS_DISTRESSED;
+    game.player.customers = 1_200.0;
+    let pressured_probability = game.diligence_alert_probability(0);
+
+    assert!(
+        routine_probability < 0.60,
+        "routine diligence should not be near-certain: {routine_probability:.2}"
+    );
+    assert!(
+        pressured_probability > routine_probability + 0.20,
+        "serial-deal pressure should materially raise leak odds: routine {routine_probability:.2}, pressured {pressured_probability:.2}"
+    );
+}
+
+#[test]
 fn renewing_active_diligence_does_not_stack_target_alerts() {
     let mut game = Game::with_seed(31);
     game.player.cash = 500_000.0;
@@ -2254,12 +2322,17 @@ fn renewing_active_diligence_does_not_stack_target_alerts() {
 
 #[test]
 fn active_diligence_target_accelerates_defense_over_quarter() {
-    let mut game = Game::with_seed(31);
-    game.player.cash = 500_000.0;
-    game.apply_decision(Decision::Diligence {
-        competitor_index: 0,
-    })
-    .unwrap();
+    let mut game = (1..400)
+        .find_map(|seed| {
+            let mut game = Game::with_seed(seed);
+            game.player.cash = 500_000.0;
+            game.apply_decision(Decision::Diligence {
+                competitor_index: 0,
+            })
+            .unwrap();
+            game.diligence_reports[0].target_alerted.then_some(game)
+        })
+        .expect("expected an alerted diligence target");
     let starting_momentum = game.competitors[0].marketing_momentum;
     let mut events = Vec::new();
 
@@ -2479,12 +2552,63 @@ fn high_share_makes_acquisitions_non_linearly_pricier() {
 }
 
 #[test]
+fn acquisition_reputation_value_scales_with_customer_book() {
+    let mut small_low = Game::with_seed(53);
+    small_low.competitors[0].customers = 80.0;
+    small_low.competitors[0].reputation = 20.0;
+    small_low.competitors[0].cash = 0.0;
+    small_low.competitors[0].debt = 0.0;
+    let mut small_high = small_low.clone();
+    small_high.competitors[0].reputation = 90.0;
+
+    let mut large_low = small_low.clone();
+    large_low.competitors[0].customers = 600.0;
+    let mut large_high = large_low.clone();
+    large_high.competitors[0].reputation = 90.0;
+
+    let small_reputation_spread = small_high.acquisition_price(0) - small_low.acquisition_price(0);
+    let large_reputation_spread = large_high.acquisition_price(0) - large_low.acquisition_price(0);
+
+    assert!(
+        small_reputation_spread < 5_000.0,
+        "standalone reputation should not dominate tiny target pricing: {small_reputation_spread}"
+    );
+    assert!(
+        large_reputation_spread > small_reputation_spread * 4.0,
+        "reputation should amplify customer-book value rather than act as a flat price add-on"
+    );
+}
+
+#[test]
 fn acquisitions_crossing_control_threshold_include_public_interest_concession() {
     let game = Game::with_seed(52);
     let terms = game.acquisition_terms(0).unwrap();
 
     assert!(terms.post_market_share > 0.50);
     assert!(terms.public_interest_concession > 0.0);
+}
+
+#[test]
+fn public_interest_concession_ramps_instead_of_fixed_cliff() {
+    let mut game = Game::with_seed(54);
+    game.competitors[0].customers = 120.0;
+    game.competitors[1].customers = 1_000.0;
+    for competitor in game.competitors.iter_mut().skip(2) {
+        competitor.customers = 0.0;
+    }
+    let acquired_customers = game.competitors[0].customers * 0.96;
+    let other_customers = game.competitors[1].customers;
+    game.player.customers = (0.51 * other_customers - 0.49 * acquired_customers) / 0.49;
+
+    let terms = game.acquisition_terms(0).unwrap();
+
+    assert!(terms.post_market_share > 0.50);
+    assert!(terms.post_market_share < 0.52);
+    assert!(
+        terms.public_interest_concession < terms.acquired_customers * 18.0,
+        "near-control deals should not immediately pay the full per-customer concession: {}",
+        terms.public_interest_concession
+    );
 }
 
 #[test]

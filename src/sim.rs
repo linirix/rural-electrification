@@ -21,8 +21,14 @@ pub const REGIONAL_MANDATE_EXPANSION_TARGET: u32 = 2;
 const BASE_ANNUAL_RATE: f64 = 0.052;
 const BASE_CREDIT_SPREAD: f64 = 0.018;
 const MAINTENANCE_REFERENCE_ASSET_BASE: f64 = 78_000.0;
-const ACQUISITION_CASH_ABSORPTION: f64 = 0.80;
-const ACQUISITION_DEBT_ASSUMPTION: f64 = 0.75;
+const ACQUISITION_CASH_ABSORPTION: f64 = 0.90;
+const ACQUISITION_DEBT_ASSUMPTION: f64 = 0.70;
+const ACQUISITION_CUSTOMER_BASE_VALUE: f64 = 66.0;
+const ACQUISITION_REPUTATION_CUSTOMER_VALUE: f64 = 0.30;
+const ACQUISITION_DISTRESSED_PREMIUM_DISCOUNT_MAX: f64 = 0.12;
+const PUBLIC_INTEREST_CONCESSION_EXPONENT: f64 = 0.85;
+const PUBLIC_INTEREST_CONCESSION_FULL_CONTROL_EXCESS: f64 = 0.50;
+const PUBLIC_INTEREST_CONCESSION_EV_MULTIPLIER: f64 = 0.24;
 const EQUITY_BASE_CASH_DISCOUNT: f64 = 0.60;
 const EQUITY_BASE_ASSET_SUPPORT: f64 = 0.65;
 const NEW_GENERATION_EQUIPMENT_RELIABILITY: f64 = 0.965;
@@ -80,9 +86,9 @@ const REVIEW_MIN_PROFIT: f64 = -500.0;
 const BELOW_COST_PRESSURE_RATE_SUPPORT_RATIO: f64 = 0.68;
 const PUBLIC_BALANCE_SHEET_DIVERGENCE_PROBABILITY: f64 = 0.25;
 const PUBLIC_BALANCE_SHEET_MAX_DIVERGENCE: f64 = 0.20;
-const DILIGENCE_ALERT_BASE_PROBABILITY: f64 = 0.66;
-const DILIGENCE_ALERT_MIN_PROBABILITY: f64 = 0.35;
-const DILIGENCE_ALERT_MAX_PROBABILITY: f64 = 0.94;
+const DILIGENCE_ALERT_BASE_PROBABILITY: f64 = 0.48;
+const DILIGENCE_ALERT_MIN_PROBABILITY: f64 = 0.18;
+const DILIGENCE_ALERT_MAX_PROBABILITY: f64 = 0.88;
 
 fn default_public_balance_sheet_multiplier() -> f64 {
     1.0
@@ -602,9 +608,9 @@ impl Game {
     }
 
     fn apply_build_generation(&mut self, capacity_mwh: f64) -> Result<String, String> {
-        let capacity_mwh = positive_amount(capacity_mwh, "generation project size")?;
+        let requested_capacity_mwh = positive_amount(capacity_mwh, "generation project size")?;
         let capacity_mwh =
-            capacity_mwh.clamp(MIN_GENERATION_PROJECT_MWH, MAX_GENERATION_PROJECT_MWH);
+            requested_capacity_mwh.clamp(MIN_GENERATION_PROJECT_MWH, MAX_GENERATION_PROJECT_MWH);
         let cost = generation_project_cost(capacity_mwh);
         let quarters = generation_project_duration(capacity_mwh);
         self.require_cash(cost)?;
@@ -620,12 +626,19 @@ impl Game {
             money(cost),
             capacity_mwh,
             quarters
+        ) + &project_clamp_note(
+            requested_capacity_mwh,
+            capacity_mwh,
+            MIN_GENERATION_PROJECT_MWH,
+            MAX_GENERATION_PROJECT_MWH,
+            "MWh/quarter",
         ))
     }
 
     fn apply_build_distribution(&mut self, customer_capacity: f64) -> Result<String, String> {
-        let customer_capacity = positive_amount(customer_capacity, "distribution project size")?;
-        let customer_capacity = customer_capacity.clamp(
+        let requested_customer_capacity =
+            positive_amount(customer_capacity, "distribution project size")?;
+        let customer_capacity = requested_customer_capacity.clamp(
             MIN_DISTRIBUTION_PROJECT_CUSTOMERS,
             MAX_DISTRIBUTION_PROJECT_CUSTOMERS,
         );
@@ -644,6 +657,12 @@ impl Game {
             money(cost),
             customer_capacity,
             quarters
+        ) + &project_clamp_note(
+            requested_customer_capacity,
+            customer_capacity,
+            MIN_DISTRIBUTION_PROJECT_CUSTOMERS,
+            MAX_DISTRIBUTION_PROJECT_CUSTOMERS,
+            "customers",
         ))
     }
 
@@ -1729,11 +1748,11 @@ impl Game {
         };
         let total_connected = self.total_connected_customers().max(1.0);
         let target_share = (competitor.customers / total_connected).clamp(0.0, 1.0);
-        let concentration_pressure = (self.market_share() - 0.40).max(0.0) * 0.35;
-        let strategic_target_pressure = target_share * 0.38;
-        let serial_deal_pressure = self.acquisition_stress.clamp(0.0, 1.0) * 0.12;
+        let concentration_pressure = (self.market_share() - 0.40).max(0.0) * 0.30;
+        let strategic_target_pressure = target_share * 0.30;
+        let serial_deal_pressure = self.acquisition_stress.clamp(0.0, 1.0) * 0.30;
         let rate_pressure =
-            ((competitor.rate_cents - self.player.rate_cents) / 4.0).clamp(0.0, 0.12);
+            ((competitor.rate_cents - self.player.rate_cents) / 4.0).clamp(0.0, 0.10);
         (DILIGENCE_ALERT_BASE_PROBABILITY
             + strategic_target_pressure
             + concentration_pressure
@@ -1900,16 +1919,20 @@ impl Game {
         let acquired_generation_capacity_mwh = competitor.generation_capacity_mwh * 0.90;
         let acquired_distribution_capacity = competitor.distribution_capacity * 0.94;
         let acquired_asset_base = competitor.asset_base * 0.76;
-        let customer_value = competitor.customers * 70.0;
+        let customer_value = competitor.customers
+            * (ACQUISITION_CUSTOMER_BASE_VALUE
+                + competitor.reputation * ACQUISITION_REPUTATION_CUSTOMER_VALUE);
         let generation_value = competitor.generation_capacity_mwh * 36.0;
         let line_value = competitor.distribution_capacity * 11.0;
-        let market_position_value = competitor.reputation * 90.0;
         let premium = 8_000.0 + competitor.reliability * 4_000.0;
         let share = self.market_share();
-        let consolidation_premium = acquisition_consolidation_premium(share);
+        let debt_load = competitor.debt_to_assets();
+        let distress_discount = ((debt_load - 0.55).max(0.0) * 0.20)
+            .clamp(0.0, ACQUISITION_DISTRESSED_PREMIUM_DISCOUNT_MAX);
+        let consolidation_premium =
+            acquisition_consolidation_premium(share) * (1.0 - distress_discount);
         let enterprise_value =
-            (customer_value + generation_value + line_value + market_position_value + premium)
-                * consolidation_premium;
+            (customer_value + generation_value + line_value + premium) * consolidation_premium;
         let total_connected = self.total_connected_customers().max(1.0);
         let post_player_customers = self.player.customers + acquired_customers;
         let post_total_connected = (total_connected - competitor.customers + acquired_customers)
@@ -1918,7 +1941,12 @@ impl Game {
         let post_market_share = post_player_customers / post_total_connected;
         let public_interest_concession = if post_market_share > 0.50 {
             let excess_share = post_market_share - 0.50;
-            enterprise_value * excess_share.powf(1.10) * 1.35 + acquired_customers * 18.0
+            let dominance_intensity = (excess_share
+                / PUBLIC_INTEREST_CONCESSION_FULL_CONTROL_EXCESS)
+                .clamp(0.0, 1.0)
+                .powf(PUBLIC_INTEREST_CONCESSION_EXPONENT);
+            enterprise_value * dominance_intensity * PUBLIC_INTEREST_CONCESSION_EV_MULTIPLIER
+                + acquired_customers * 18.0 * dominance_intensity
         } else {
             0.0
         };
@@ -3085,6 +3113,17 @@ fn acquisition_integration_strain(starting_customers: f64, acquired_customers: f
     let post_customers = (starting_customers + acquired_customers).max(1.0);
     let acquired_share = (acquired_customers / post_customers).clamp(0.0, 1.0);
     acquired_share * 1.35
+}
+
+fn project_clamp_note(requested: f64, actual: f64, min: f64, max: f64, unit: &str) -> String {
+    if (requested - actual).abs() < 0.01 {
+        return String::new();
+    }
+
+    format!(
+        " Requested {:.0} {} was clamped to the buildable range of {:.0}-{:.0} {}.",
+        requested, unit, min, max, unit
+    )
 }
 
 fn validate_maintenance_manager_target(target: f64) -> Result<f64, String> {

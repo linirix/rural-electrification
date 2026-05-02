@@ -1106,6 +1106,19 @@ fn borrow_max_uses_remaining_borrowing_room() {
 }
 
 #[test]
+fn high_impact_direct_commands_remind_player_about_preview() {
+    let mut game = Game::with_seed(110);
+
+    match handle_command(&mut game, "borrow 25000") {
+        CommandResult::Continue(message) => {
+            assert!(message.contains("Borrowed"));
+            assert!(message.contains("preview <command>"));
+        }
+        _ => panic!("large borrow should apply with preview reminder"),
+    }
+}
+
+#[test]
 fn repay_max_uses_lesser_of_cash_and_debt() {
     let mut game = Game::with_seed(111);
     game.player.cash = 7_500.0;
@@ -1138,6 +1151,20 @@ fn preview_debt_does_not_mutate_game() {
 
     assert_eq!(game.player.cash, starting_cash);
     assert_eq!(game.player.debt, starting_debt);
+}
+
+#[test]
+fn preview_build_reports_clamped_project_size() {
+    let mut game = Game::with_seed(105);
+
+    match handle_command(&mut game, "preview build gen 1500") {
+        CommandResult::Preview(lines) => {
+            let joined = lines.join(" ");
+            assert!(joined.contains("clamped"));
+            assert!(joined.contains("650"));
+        }
+        _ => panic!("preview build should show clamped project size"),
+    }
 }
 
 #[test]

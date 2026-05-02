@@ -266,16 +266,24 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                 game.player.generation_capacity_mwh,
                 size,
             );
-            vec![format!(
-                "{} generation: {} for {:.0} MWh/q, {}q, {} per MWh/q; reliability {:.0}% -> {:.0}% when online.",
-                muted("Quote:"),
-                styled(BOLD_YELLOW, money(cost)),
-                size,
-                generation_project_duration(size),
-                money(cost / size),
-                game.player.reliability * 100.0,
-                reliability_after * 100.0
-            )]
+            vec![
+                format!(
+                    "{} generation: {} for {:.0} MWh/q, {}q, {} per MWh/q; reliability {:.0}% -> {:.0}% when online.",
+                    muted("Quote:"),
+                    styled(BOLD_YELLOW, money(cost)),
+                    size,
+                    generation_project_duration(size),
+                    money(cost / size),
+                    game.player.reliability * 100.0,
+                    reliability_after * 100.0
+                ) + &preview_project_clamp_note(
+                    *capacity_mwh,
+                    size,
+                    MIN_GENERATION_PROJECT_MWH,
+                    MAX_GENERATION_PROJECT_MWH,
+                    "MWh/q",
+                ),
+            ]
         }
         Decision::BuildDistribution { customer_capacity } => {
             let size = customer_capacity.clamp(
@@ -283,14 +291,22 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
                 MAX_DISTRIBUTION_PROJECT_CUSTOMERS,
             );
             let cost = distribution_project_cost(size);
-            vec![format!(
-                "{} distribution: {} for {:.0} customers, {}q, {} per customer.",
-                muted("Quote:"),
-                styled(BOLD_YELLOW, money(cost)),
-                size,
-                distribution_project_duration(size),
-                money(cost / size)
-            )]
+            vec![
+                format!(
+                    "{} distribution: {} for {:.0} customers, {}q, {} per customer.",
+                    muted("Quote:"),
+                    styled(BOLD_YELLOW, money(cost)),
+                    size,
+                    distribution_project_duration(size),
+                    money(cost / size)
+                ) + &preview_project_clamp_note(
+                    *customer_capacity,
+                    size,
+                    MIN_DISTRIBUTION_PROJECT_CUSTOMERS,
+                    MAX_DISTRIBUTION_PROJECT_CUSTOMERS,
+                    "customers",
+                ),
+            ]
         }
         Decision::EnterAdjacentMarket => {
             let cost = game.adjacent_expansion_cost();
@@ -905,6 +921,23 @@ pub(super) fn signed_money(value: f64) -> String {
 
 pub(super) fn changed(before: f64, after: f64, epsilon: f64) -> bool {
     (after - before).abs() > epsilon
+}
+
+fn preview_project_clamp_note(
+    requested: f64,
+    actual: f64,
+    min: f64,
+    max: f64,
+    unit: &str,
+) -> String {
+    if (requested - actual).abs() < 0.01 {
+        String::new()
+    } else {
+        format!(
+            " Requested {:.0} {}, clamped to {:.0}-{:.0} {}.",
+            requested, unit, min, max, unit
+        )
+    }
 }
 
 pub(super) fn push_labeled_wrapped(lines: &mut Vec<String>, label: &str, style: &str, text: &str) {

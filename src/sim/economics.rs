@@ -60,9 +60,16 @@ pub(super) fn settle_utility(
 
     utility.cash += profit;
     if utility.cash < 0.0 {
-        utility.debt += -utility.cash;
+        let overdraft = -utility.cash;
+        utility.debt += overdraft;
         utility.cash = 0.0;
         utility.reputation = (utility.reputation - 1.8).clamp(0.0, 100.0);
+        if is_player {
+            events.push(format!(
+                "Cash crunch: {} overdraft converted to debt; reputation -1.8 pts.",
+                money(overdraft)
+            ));
+        }
     }
 
     utility.reliability = (utility.reliability - 0.014).clamp(0.35, 0.98);
