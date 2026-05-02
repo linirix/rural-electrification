@@ -585,6 +585,20 @@ fn enter_returns_from_command_opened_subscreens() {
 }
 
 #[test]
+fn dashboard_and_subscreens_use_matching_screen_titles() {
+    let game = Game::with_seed(113);
+
+    assert_eq!(
+        dashboard_title(&game),
+        format!("{} | {} | Dashboard", game.date_label(), game.player.name)
+    );
+    assert_eq!(
+        subscreen_title(&game, FramedScreen::Rivals),
+        format!("{} | {} | Rivals", game.date_label(), game.player.name)
+    );
+}
+
+#[test]
 fn subscreen_status_frame_shows_core_context() {
     let game = Game::with_seed(113);
     let joined = subscreen_status_lines(&game).join(" ");
@@ -596,6 +610,26 @@ fn subscreen_status_frame_shows_core_context() {
     assert!(joined.contains("Rate"));
     assert!(joined.contains("Review"));
     assert!(joined.contains("Tolerance"));
+}
+
+#[test]
+fn subscreen_frame_lines_fit_supported_widths() {
+    let game = Game::with_seed(113);
+    let lines = [
+        subscreen_status_lines(&game),
+        subscreen_navigation_lines(FramedScreen::Report),
+    ]
+    .concat();
+
+    for terminal_width in [MIN_SCREEN_WIDTH, DEFAULT_SCREEN_WIDTH, MAX_SCREEN_WIDTH] {
+        let content_limit = dashboard_width_for_columns(Some(terminal_width)).saturating_sub(4);
+        assert!(
+            lines
+                .iter()
+                .all(|line| visible_width(line) <= content_limit),
+            "subscreen frame should fit inside {terminal_width}-column terminals"
+        );
+    }
 }
 
 #[test]
@@ -628,6 +662,16 @@ fn subscreen_navigation_order_is_stable() {
     assert!(report < rivals);
     assert!(rivals < board);
     assert!(board < help);
+}
+
+#[test]
+fn help_lines_highlight_commands_and_keep_effects_aligned() {
+    let line = help_command_line("hire marketing 90", "auto reputation work");
+
+    assert_eq!(visible_width(&line), 23 + 2 + "auto reputation work".len());
+    if ansi_enabled() {
+        assert!(line.contains(BOLD_CYAN));
+    }
 }
 
 #[test]
@@ -754,6 +798,9 @@ fn rival_detail_includes_acquisition_economics() {
     assert!(lines.iter().any(|line| line.contains("cash")));
     assert!(lines.iter().any(|line| line.contains("assets")));
     assert!(lines.iter().any(|line| line.contains("reputation")));
+    assert!(lines.iter().any(|line| line.contains("diligence")));
+    assert!(lines.iter().any(|line| line.contains("option price")));
+    assert!(lines.iter().any(|line| line.contains("window")));
     assert!(
         lines
             .iter()
@@ -765,7 +812,7 @@ fn rival_detail_includes_acquisition_economics() {
             .any(|line| line.contains("post-close reliability"))
     );
     assert!(lines.iter().any(|line| line.contains("integration burden")));
-    assert!(lines.iter().any(|line| line.contains("underwriting")));
+    assert!(!lines.iter().any(|line| line.contains("underwriting")));
 }
 
 #[test]
@@ -786,6 +833,9 @@ fn rival_detail_hides_exact_deal_terms_before_diligence() {
             .iter()
             .any(|line| line.contains("exact service quality requires diligence"))
     );
+    assert!(!lines.iter().any(|line| line.contains("buy estimate")));
+    assert!(!lines.iter().any(|line| line.contains("terms")));
+    assert!(!lines.iter().any(|line| line.contains("underwriting")));
     assert!(!lines.iter().any(|line| line.contains("post debt/assets")));
     assert!(!lines.iter().any(|line| line.contains("reliability")));
     assert!(!lines.iter().any(|line| line.contains("headroom")));

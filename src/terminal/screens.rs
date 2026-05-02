@@ -119,48 +119,48 @@ pub(super) fn print_help() {
     print_box_pair(
         "Build + Operate",
         &[
-            "build gen [MWh]".to_string(),
-            "build lines [customers]".to_string(),
-            "marketing [amount]".to_string(),
-            "maint [amount]       maintenance".to_string(),
-            "hire maint 85%       auto service work".to_string(),
-            "hire marketing 90    auto reputation work".to_string(),
-            "fire maint/marketing dismiss manager".to_string(),
-            "expand               adjacent territory".to_string(),
-            "rate 10.0            set target".to_string(),
-            "rate up|down [cents] adjust rate".to_string(),
-            "preview <command>    inspect first".to_string(),
+            help_command_line("build gen [MWh]", "start generation project"),
+            help_command_line("build lines [accounts]", "expand distribution"),
+            help_command_line("marketing [amount]", "buy growth and reputation"),
+            help_command_line("maint [amount]", "fund reliability work"),
+            help_command_line("hire maint 85%", "automate service work"),
+            help_command_line("hire marketing 90", "automate reputation work"),
+            help_command_line("fire maint/marketing", "dismiss manager"),
+            help_command_line("expand", "enter adjacent territory"),
+            help_command_line("rate 10.0", "set target rate"),
+            help_command_line("rate up|down [cents]", "adjust rate"),
+            help_command_line("preview <command>", "inspect first"),
         ],
         "Capital",
         &[
-            "issue [amount]       issue stock".to_string(),
-            "buyback [amount]     repurchase shares".to_string(),
-            "dividend [amount]    pay owners pro rata".to_string(),
-            "borrow [amount|max]  raise debt".to_string(),
-            "repay [amount|max]   pay debt down".to_string(),
-            "diligence <number>   reveal deal terms".to_string(),
-            "buy <number>         acquire rival".to_string(),
-            "stock issue/buyback  aliases".to_string(),
-            "debt / debt repay    aliases".to_string(),
+            help_command_line("issue [amount]", "issue stock"),
+            help_command_line("buyback [amount]", "repurchase shares"),
+            help_command_line("dividend [amount]", "pay owners pro rata"),
+            help_command_line("borrow [amount|max]", "raise debt"),
+            help_command_line("repay [amount|max]", "pay debt down"),
+            help_command_line("diligence <number>", "reveal deal terms"),
+            help_command_line("buy <number>", "acquire rival"),
+            help_command_line("stock issue/buyback", "aliases"),
+            help_command_line("debt / debt repay", "aliases"),
         ],
     );
     print_box_pair(
         "Navigation",
         &[
-            "status / s     show dashboard".to_string(),
-            "rivals         competitor detail".to_string(),
-            "board          objectives".to_string(),
-            "region         regional mandate".to_string(),
-            "report         last quarter detail".to_string(),
-            "preview/quote  inspect command".to_string(),
-            "Return         cycle screens / return".to_string(),
-            "next / n / end finish quarter".to_string(),
-            "continue       post-review play".to_string(),
-            "sandbox        disable board reviews".to_string(),
-            "save [name]    write save file".to_string(),
-            "load [name]    restore save file".to_string(),
-            "help / ?       command reference".to_string(),
-            "quit / exit    leave game".to_string(),
+            help_command_line("status / s", "show dashboard"),
+            help_command_line("rivals", "competitor detail"),
+            help_command_line("board", "objectives"),
+            help_command_line("region", "regional mandate"),
+            help_command_line("report", "last quarter detail"),
+            help_command_line("preview / quote", "inspect command"),
+            help_command_line("Return", "cycle screens / return"),
+            help_command_line("next / n / end", "finish quarter"),
+            help_command_line("continue", "post-review play"),
+            help_command_line("sandbox", "disable board reviews"),
+            help_command_line("save [name]", "write save file"),
+            help_command_line("load [name]", "restore save file"),
+            help_command_line("help / ?", "command reference"),
+            help_command_line("quit / exit", "leave game"),
         ],
         "Input Notes",
         &[
@@ -188,7 +188,7 @@ fn centered_line(line: String) -> String {
 
 pub(super) fn print_status(game: &Game) {
     print_box(
-        &format!("{} | {}", game.date_label(), game.player.name),
+        &dashboard_title(game),
         &stable_panel_lines(scorecard_lines(game), 5, "board for full milestone path"),
     );
     print_box_pair(
@@ -264,15 +264,23 @@ pub(super) fn print_report_screen(game: &Game) {
 
 fn print_subscreen_frame(game: &Game, active: FramedScreen) {
     print_box(
-        &format!(
-            "{} | {} | {}",
-            game.date_label(),
-            game.player.name,
-            active.label()
-        ),
+        &subscreen_title(game, active),
         &subscreen_status_lines(game),
     );
-    print_box("Screen Navigation", &subscreen_navigation_lines(active));
+    print_box("Navigation", &subscreen_navigation_lines(active));
+}
+
+pub(super) fn dashboard_title(game: &Game) -> String {
+    format!("{} | {} | Dashboard", game.date_label(), game.player.name)
+}
+
+pub(super) fn subscreen_title(game: &Game, active: FramedScreen) -> String {
+    format!(
+        "{} | {} | {}",
+        game.date_label(),
+        game.player.name,
+        active.label()
+    )
 }
 
 pub(super) fn subscreen_status_lines(game: &Game) -> Vec<String> {
@@ -325,9 +333,9 @@ pub(super) fn subscreen_navigation_lines(active: FramedScreen) -> Vec<String> {
             nav_label(active, FramedScreen::Help)
         ),
         format!(
-            "{} cycles screens; from a command-opened screen, {} returns to the dashboard",
+            "{} cycles views | {} opens dashboard | direct-opened views return there",
             command_label("Return"),
-            command_label("Return")
+            command_label("status")
         ),
     ]
 }
@@ -345,6 +353,13 @@ fn nav_label(active: FramedScreen, screen: FramedScreen) -> String {
 
 fn command_label(label: impl std::fmt::Display) -> String {
     styled(BOLD_CYAN, label)
+}
+
+pub(super) fn help_command_line(
+    command: impl std::fmt::Display,
+    effect: impl std::fmt::Display,
+) -> String {
+    single_command_line_with_width(command, effect, 23)
 }
 
 fn subscreen_review_label(game: &Game) -> String {
@@ -456,7 +471,11 @@ pub(super) fn last_quarter_lines(game: &Game) -> Vec<String> {
                 muted("Market avg"),
                 styled(CYAN, format!("{:.1}c", market_average_rate(game)))
             ),
-            format!("{} use 'next' to complete the first quarter", muted("Next")),
+            format!(
+                "{} use {} to complete the first quarter",
+                muted("Next"),
+                command_label("next")
+            ),
         ];
     };
 

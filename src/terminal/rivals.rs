@@ -37,7 +37,7 @@ pub(super) fn rival_overview_lines(game: &Game) -> Vec<String> {
             muted("Market cap"),
             styled(BOLD, money(game.player.market_cap()))
         ),
-        "Undiligenced buys use public estimates and close risk; diligence freezes exact terms and can alert the target.".to_string(),
+        "Undiligenced buys use public estimates and close risk; diligence locks a time-limited purchase option.".to_string(),
     ]
 }
 
@@ -61,7 +61,6 @@ pub(super) fn rival_detail_lines(game: &Game) -> Vec<String> {
         } else {
             CYAN
         };
-        let (acquisition_note, acquisition_tone) = acquisition_status(game, index);
         let has_diligence = game.has_diligence(index);
 
         lines.push(format!(
@@ -119,15 +118,14 @@ pub(super) fn rival_detail_lines(game: &Game) -> Vec<String> {
                 muted("assets"),
                 styled(BOLD, money(competitor.asset_base))
             ));
+            lines.push(diligence_option_line(game, index, quarters));
             lines.push(format!(
-                "   {} {}   {} {}",
+                "   {} {}",
                 muted("reputation"),
                 styled(
                     reputation_tone(competitor.reputation),
                     format!("{:.0}", competitor.reputation)
-                ),
-                muted("diligence"),
-                styled(GREEN, format!("{quarters}q left"))
+                )
             ));
         } else {
             let cost = game.diligence_cost(index).unwrap_or(0.0);
@@ -142,11 +140,6 @@ pub(super) fn rival_detail_lines(game: &Game) -> Vec<String> {
                 styled(YELLOW, money(cost))
             ));
         }
-        lines.push(format!(
-            "   {} {}",
-            muted("buy"),
-            styled(acquisition_tone, acquisition_note)
-        ));
         lines.extend(rival_acquisition_lines(game, index));
         if let Some(event) = recent_rival_event(game, &competitor.name) {
             for (line_index, wrapped) in wrap_plain_text(&event, content_width().saturating_sub(12))
@@ -168,6 +161,30 @@ pub(super) fn rival_detail_lines(game: &Game) -> Vec<String> {
     lines
 }
 
+fn diligence_option_line(game: &Game, competitor_index: usize, quarters_remaining: u32) -> String {
+    let price = game
+        .acquisition_terms(competitor_index)
+        .map(|terms| terms.price)
+        .unwrap_or_else(|| game.acquisition_price(competitor_index));
+    format!(
+        "   {} {}   {} {}   {} {}",
+        muted("diligence"),
+        styled(GREEN, "complete"),
+        muted("option price"),
+        styled(BOLD_YELLOW, money(price)),
+        muted("window"),
+        styled(GREEN, diligence_window_label(quarters_remaining))
+    )
+}
+
+fn diligence_window_label(quarters_remaining: u32) -> String {
+    if quarters_remaining == 1 {
+        "1q left".to_string()
+    } else {
+        format!("{quarters_remaining}q left")
+    }
+}
+
 pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> Vec<String> {
     let Some(terms) = (if game.has_diligence(competitor_index) {
         game.acquisition_terms(competitor_index)
@@ -179,7 +196,6 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
 
     let mut lines = Vec::new();
     if !game.has_diligence(competitor_index) {
-        let cost = game.diligence_cost(competitor_index).unwrap_or(0.0);
         let (low, high) = public_acquisition_range(game, competitor_index);
         let rank = competitor_rank(game, competitor_index).unwrap_or(competitor_index + 1);
         lines.push(format!(
@@ -189,11 +205,6 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
             styled(YELLOW, money(high)),
             muted("next"),
             styled(BOLD_CYAN, format!("diligence {rank}"))
-        ));
-        lines.push(format!(
-            "   {} public estimate only; buy now accepts close risk, or diligence freezes exact terms ({})",
-            muted("terms"),
-            money(cost)
         ));
         lines.push(format!(
             "   {} net cost {}, est post cash {}, est leverage {}",
@@ -212,7 +223,6 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
         if let Some(line) = acquisition_rate_anchor_line(game, competitor_index) {
             lines.push(line);
         }
-        lines.push(acquisition_underwriting_line(game, competitor_index, false));
         return lines;
     }
 
@@ -258,7 +268,6 @@ pub(super) fn rival_acquisition_lines(game: &Game, competitor_index: usize) -> V
             terms.post_market_share * 100.0
         ));
     }
-    lines.push(acquisition_underwriting_line(game, competitor_index, true));
 
     if game.competitors.len() == 1 {
         lines.push(format!(
@@ -321,36 +330,6 @@ fn acquisition_service_line(game: &Game, competitor: &Utility, terms: &Acquisiti
             acquisition_integration_burden_label(burden)
         )
     )
-}
-
-fn acquisition_underwriting_line(
-    game: &Game,
-    competitor_index: usize,
-    exact_terms: bool,
-) -> String {
-    let score = game
-        .acquisition_stress_score(competitor_index)
-        .unwrap_or(0.0);
-    let label = Game::acquisition_stress_label(score);
-    let note = if exact_terms {
-        "terms reviewed"
-    } else {
-        "public file"
-    };
-    format!(
-        "   {} {} ({note})",
-        muted("underwriting"),
-        styled(acquisition_underwriting_tone(score), label)
-    )
-}
-
-fn acquisition_underwriting_tone(score: f64) -> &'static str {
-    match Game::acquisition_stress_label(score) {
-        "distressed" => BOLD_RED,
-        "strained" => BOLD_YELLOW,
-        "guarded" => YELLOW,
-        _ => GREEN,
-    }
 }
 
 fn acquisition_funding_line(game: &Game, terms: &AcquisitionTerms, exact_terms: bool) -> String {
