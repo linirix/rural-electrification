@@ -585,6 +585,52 @@ fn enter_returns_from_command_opened_subscreens() {
 }
 
 #[test]
+fn subscreen_status_frame_shows_core_context() {
+    let game = Game::with_seed(113);
+    let joined = subscreen_status_lines(&game).join(" ");
+
+    assert!(joined.contains("Cash"));
+    assert!(joined.contains("Share"));
+    assert!(joined.contains("Reliability"));
+    assert!(joined.contains("Debt/assets"));
+    assert!(joined.contains("Rate"));
+    assert!(joined.contains("Review"));
+    assert!(joined.contains("Tolerance"));
+}
+
+#[test]
+fn subscreen_navigation_highlights_active_screen_consistently() {
+    for screen in [
+        FramedScreen::Report,
+        FramedScreen::Rivals,
+        FramedScreen::Board,
+        FramedScreen::Help,
+    ] {
+        let joined = subscreen_navigation_lines(screen).join(" ");
+        assert!(joined.contains("status"));
+        assert!(joined.contains("["));
+        assert!(joined.contains(&screen.label().to_ascii_lowercase()));
+        assert!(joined.contains("Return"));
+        assert!(joined.contains("dashboard"));
+    }
+}
+
+#[test]
+fn subscreen_navigation_order_is_stable() {
+    let joined = subscreen_navigation_lines(FramedScreen::Board).join(" ");
+    let status = joined.find("status").expect("status command");
+    let report = joined.find("report").expect("report screen");
+    let rivals = joined.find("rivals").expect("rivals screen");
+    let board = joined.find("board").expect("board screen");
+    let help = joined.find("help").expect("help screen");
+
+    assert!(status < report);
+    assert!(report < rivals);
+    assert!(rivals < board);
+    assert!(board < help);
+}
+
+#[test]
 fn rival_overview_shows_acquisition_financing_context() {
     let game = Game::with_seed(113);
     let lines = rival_overview_lines(&game);

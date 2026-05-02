@@ -10,6 +10,25 @@ pub(super) struct BoardTarget {
     leverage: f64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FramedScreen {
+    Report,
+    Rivals,
+    Board,
+    Help,
+}
+
+impl FramedScreen {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Report => "Report",
+            Self::Rivals => "Rivals",
+            Self::Board => "Board",
+            Self::Help => "Help",
+        }
+    }
+}
+
 const START_SCREEN_COMMAND_WIDTH: usize = 18;
 
 pub(super) fn print_start_screen(game: &Game) {
@@ -88,7 +107,15 @@ pub(super) fn start_screen_begin_lines() -> Vec<String> {
 }
 
 pub(super) fn print_help() {
-    println!("{}", styled(BOLD_CYAN, "Electrification Command Reference"));
+    print_box(
+        "Command Reference",
+        &[
+            "Type the command shown at left; use preview <command> before major actions."
+                .to_string(),
+            "Return follows the screen navigation strip unless you are entering a command."
+                .to_string(),
+        ],
+    );
     print_box_pair(
         "Build + Operate",
         &[
@@ -149,6 +176,11 @@ pub(super) fn print_help() {
     );
 }
 
+pub(super) fn print_help_screen(game: &Game) {
+    print_subscreen_frame(game, FramedScreen::Help);
+    print_help();
+}
+
 fn centered_line(line: String) -> String {
     let padding = content_width().saturating_sub(visible_width(&line)) / 2;
     format!("{}{}", " ".repeat(padding), line)
@@ -190,6 +222,11 @@ pub(super) fn print_competitors(game: &Game) {
     print_box("Rival Detail", &rival_detail_lines(game));
 }
 
+pub(super) fn print_rivals_screen(game: &Game) {
+    print_subscreen_frame(game, FramedScreen::Rivals);
+    print_competitors(game);
+}
+
 pub(super) fn print_board(game: &Game) {
     print_box("Board Objectives", &board_overview_lines(game));
     print_box_pair(
@@ -204,6 +241,11 @@ pub(super) fn print_board(game: &Game) {
     }
 }
 
+pub(super) fn print_board_screen(game: &Game) {
+    print_subscreen_frame(game, FramedScreen::Board);
+    print_board(game);
+}
+
 pub(super) fn print_last_report(game: &Game) {
     if let Some(report) = &game.last_report {
         print_report(report);
@@ -212,6 +254,104 @@ pub(super) fn print_last_report(game: &Game) {
             "Quarter Results",
             &["No quarter has been completed yet.".to_string()],
         );
+    }
+}
+
+pub(super) fn print_report_screen(game: &Game) {
+    print_subscreen_frame(game, FramedScreen::Report);
+    print_last_report(game);
+}
+
+fn print_subscreen_frame(game: &Game, active: FramedScreen) {
+    print_box(
+        &format!(
+            "{} | {} | {}",
+            game.date_label(),
+            game.player.name,
+            active.label()
+        ),
+        &subscreen_status_lines(game),
+    );
+    print_box("Screen Navigation", &subscreen_navigation_lines(active));
+}
+
+pub(super) fn subscreen_status_lines(game: &Game) -> Vec<String> {
+    vec![
+        format!(
+            "{} {} | {} {} | {} {} | {} {} | {} {}",
+            muted("Cash"),
+            styled(cash_tone(game.player.cash), money(game.player.cash)),
+            muted("Share"),
+            styled(
+                share_tone(game.market_share()),
+                format!("{:.0}%", game.market_share() * 100.0)
+            ),
+            muted("Reliability"),
+            styled(
+                reliability_tone(game.player.reliability),
+                format!("{:.0}%", game.player.reliability * 100.0)
+            ),
+            muted("Debt/assets"),
+            styled(
+                leverage_tone(game.player.debt_to_assets()),
+                format!("{:.0}%", game.player.debt_to_assets() * 100.0)
+            ),
+            muted("Rate"),
+            styled(BOLD_CYAN, format!("{:.1}c", game.player.rate_cents))
+        ),
+        format!(
+            "{} {} | {} {} | {} {}",
+            muted("Review"),
+            styled(BOLD_CYAN, subscreen_review_label(game)),
+            muted("Avg rate"),
+            styled(CYAN, format!("{:.1}c", market_average_rate(game))),
+            muted("Tolerance"),
+            styled(
+                YELLOW,
+                format!("{:.1}c", public_rate_tolerance(&game.market))
+            )
+        ),
+    ]
+}
+
+pub(super) fn subscreen_navigation_lines(active: FramedScreen) -> Vec<String> {
+    vec![
+        format!(
+            "{}  {}  {}  {}  {}",
+            command_label("status"),
+            nav_label(active, FramedScreen::Report),
+            nav_label(active, FramedScreen::Rivals),
+            nav_label(active, FramedScreen::Board),
+            nav_label(active, FramedScreen::Help)
+        ),
+        format!(
+            "{} cycles screens; from a command-opened screen, {} returns to the dashboard",
+            command_label("Return"),
+            command_label("Return")
+        ),
+    ]
+}
+
+fn nav_label(active: FramedScreen, screen: FramedScreen) -> String {
+    if active == screen {
+        styled(
+            BOLD_CYAN,
+            format!("[{}]", screen.label().to_ascii_lowercase()),
+        )
+    } else {
+        command_label(screen.label().to_ascii_lowercase())
+    }
+}
+
+fn command_label(label: impl std::fmt::Display) -> String {
+    styled(BOLD_CYAN, label)
+}
+
+fn subscreen_review_label(game: &Game) -> String {
+    if game.sandbox_mode {
+        "sandbox, no board reviews".to_string()
+    } else {
+        next_review_status_label(game)
     }
 }
 

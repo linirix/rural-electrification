@@ -30,8 +30,8 @@ mod tests;
 use command::handle_command;
 use render::{clear_screen, print_box};
 use screens::{
-    print_board, print_competitors, print_help, print_last_report, print_notice, print_outcome,
-    print_quit_summary, print_start_screen, print_status,
+    print_board_screen, print_help_screen, print_notice, print_outcome, print_quit_summary,
+    print_report_screen, print_rivals_screen, print_start_screen, print_status,
 };
 
 const MIN_SCREEN_WIDTH: usize = 88;
@@ -183,25 +183,25 @@ pub fn run() -> io::Result<()> {
             }
             CommandResult::ShowHelp => {
                 clear_screen();
-                print_help();
+                print_help_screen(&game);
                 current_screen = TerminalScreen::Help;
                 screen_entry = ScreenEntry::DirectCommand;
             }
             CommandResult::ShowRivals => {
                 clear_screen();
-                print_competitors(&game);
+                print_rivals_screen(&game);
                 current_screen = TerminalScreen::Rivals;
                 screen_entry = ScreenEntry::DirectCommand;
             }
             CommandResult::ShowBoard => {
                 clear_screen();
-                print_board(&game);
+                print_board_screen(&game);
                 current_screen = TerminalScreen::Board;
                 screen_entry = ScreenEntry::DirectCommand;
             }
             CommandResult::ShowReport => {
                 clear_screen();
-                print_last_report(&game);
+                print_report_screen(&game);
                 current_screen = TerminalScreen::Report;
                 screen_entry = ScreenEntry::DirectCommand;
             }
@@ -280,10 +280,10 @@ fn render_terminal_screen(game: &Game, screen: TerminalScreen) {
     match screen {
         TerminalScreen::Start => print_start_screen(game),
         TerminalScreen::Dashboard | TerminalScreen::Preview => print_status(game),
-        TerminalScreen::Report => print_last_report(game),
-        TerminalScreen::Rivals => print_competitors(game),
-        TerminalScreen::Board => print_board(game),
-        TerminalScreen::Help => print_help(),
+        TerminalScreen::Report => print_report_screen(game),
+        TerminalScreen::Rivals => print_rivals_screen(game),
+        TerminalScreen::Board => print_board_screen(game),
+        TerminalScreen::Help => print_help_screen(game),
     }
 }
 
