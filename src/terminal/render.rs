@@ -273,6 +273,24 @@ pub(super) fn leverage_tone(leverage: f64) -> &'static str {
     }
 }
 
+pub(super) fn ownership_tone(ownership: f64) -> &'static str {
+    if ownership < 0.18 {
+        RED
+    } else if ownership < 0.26 {
+        YELLOW
+    } else {
+        GREEN
+    }
+}
+
+pub(super) fn format_coverage(coverage: f64) -> String {
+    if coverage.is_infinite() {
+        "no debt".to_string()
+    } else {
+        format!("{coverage:.1}x")
+    }
+}
+
 pub(super) fn headroom_tone(headroom: f64) -> &'static str {
     if headroom < 60.0 {
         BOLD_RED

@@ -19,6 +19,7 @@ use crate::sim::{
 };
 use rustyline::{DefaultEditor, error::ReadlineError};
 
+mod board;
 mod command;
 mod preview;
 mod render;

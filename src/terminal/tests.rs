@@ -1,5 +1,6 @@
 use std::{fs, path::PathBuf};
 
+use super::board::*;
 use super::command::*;
 use super::render::*;
 use super::rivals::*;
