@@ -1686,6 +1686,49 @@ fn dashboard_surfaces_integration_burden() {
 }
 
 #[test]
+fn dashboard_warns_when_share_alone_will_not_satisfy_review() {
+    let mut game = Game::with_seed(159);
+    game.player.customers = 2_000.0;
+    for competitor in &mut game.competitors {
+        competitor.customers = 120.0;
+    }
+    game.player.reliability = 0.61;
+    game.player.rate_cents = game.player_break_even_rate_cents() * 0.50;
+
+    let joined = signal_lines(&game).join("\n");
+
+    assert!(joined.contains("Review"));
+    assert!(joined.contains("share is not enough"));
+    assert!(joined.contains("service"));
+    assert!(joined.contains("rate support"));
+}
+
+#[test]
+fn dashboard_warns_when_market_access_is_in_danger() {
+    let mut game = Game::with_seed(160);
+    game.player.reliability = 0.47;
+
+    let joined = signal_lines(&game).join("\n");
+
+    assert!(joined.contains("Reliability"));
+    assert!(joined.contains("market access at risk"));
+}
+
+#[test]
+fn board_overview_uses_regional_targets_after_review_continues() {
+    let mut game = Game::with_seed(161);
+    game.review_completed = true;
+    game.quarter = 24;
+
+    let joined = board_overview_lines(&game).join(" ");
+
+    assert!(joined.contains("Y10 Mandate"));
+    assert!(joined.contains("58% share"));
+    assert!(joined.contains("82%+"));
+    assert!(joined.contains("<=90%"));
+}
+
+#[test]
 fn outcome_details_wrap_within_box_width() {
     let details = "Repeated outages pushed regulators and lenders to move the company into managed restructuring.";
 

@@ -41,7 +41,7 @@ These are good regression seeds for reckless-play failure messaging and market-a
 
 | playtest seed | game seed | strategy | notes |
 |---:|---:|---|---|
-| 49310 | 49457930 | mna | Max variance Q2 market-access loss after reliability falls to 41% |
+| 49310 | 49457930 | ma | Max variance Q2 market-access loss after reliability falls to 41% |
 | 99196 | 99493588 | glonzo | Max variance Q2 market-access loss |
 | 35291 | 35396873 | glonzo | Default variance Q3 market-access loss |
 | 41919 | 42044757 | glonzo | Default variance Q3 market-access loss with 52.7% share |
@@ -55,7 +55,7 @@ These are useful for testing tense but fair endings under the harshest start var
 | 73428 | 73648284 | naive | 45.5% share, 84% reliability, clean low-leverage win |
 | 44173 | 44305519 | organic | 45.5% share, $3.0k profit |
 | 96484 | 96773452 | balanced | 45.5% share, 83% reliability |
-| 54929 | 55093787 | mna | 45.5% share after 62.6% peak |
+| 54929 | 55093787 | ma | 45.5% share after 62.6% peak |
 | 6039 | 6057117 | regional | 58.5% Y10 share, 88% reliability |
 
 ### Balanced Challenge Seeds
@@ -129,7 +129,7 @@ These finish just over the review threshold and should feel tense.
 | 51767 | 51922301 | organic | 45.5% share, $1.9k profit |
 | 17518 | 17570554 | balanced | 45.5% share, $2.6k profit |
 | 3997 | 4008991 | landshark | 45.5% share, $1.4k profit |
-| 52936 | 53094808 | mna | 45.5% share after 62.3% peak |
+| 52936 | 53094808 | ma | 45.5% share after 62.3% peak |
 | 78765 | 79001295 | raider | 45.5% share after 70.7% peak |
 
 ### Close Year 10 Regional Wins
@@ -145,3 +145,24 @@ These hit the regional mandate very close to the share threshold.
 | 35386 | 35492158 | 58.5% share, high leverage but passes |
 | 7592 | 7614776 | 58.5% share, $368 profit |
 | 48776 | 48922328 | 58.5% share, reached $0 minimum cash |
+
+## 2026-05-02 Million-Game Scan Addendum
+
+Coverage:
+
+- `111,112` default-variance seeds across all 9 strategies (`1,000,008` playthroughs)
+
+These are the most useful curated seeds from the million-game scan.
+
+### Release Candidate Starts
+
+| playtest seed | game seed | category | notes |
+|---:|---:|---|---|
+| 106 | 106318 | forgiving | Naive wins; useful tutorial/easy opener candidate |
+| 131 | 131393 | forgiving but varied | Naive wins while landshark loses |
+| 7 | 7021 | hard but fair | Organic loses; balanced, ma, and landshark win close |
+| 9 | 9027 | high-risk payoff | Organic and balanced lose; ma wins |
+| 8 | 8024 | very hard | All deliberate Year 5 strategies lose |
+| 59109 | 59286327 | close naive victory | 45.5% share; useful for review-gate messaging |
+| 9150 | 9177450 | close regional win | 58.5% Y10 share, $31.1k profit |
+| 51615 | 51769845 | thin regional win | 58.5% Y10 share, $5.3k profit |

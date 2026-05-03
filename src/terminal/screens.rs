@@ -1153,12 +1153,12 @@ pub(super) fn board_overview_lines(game: &Game) -> Vec<String> {
         ),
         format!(
             "{} {} | {} {} | {} {}",
-            muted("Final"),
-            styled(BOLD_GREEN, format!("{:.0}% share", SHARE_TARGET * 100.0)),
+            muted("Target"),
+            styled(BOLD_GREEN, format!("{:.0}% share", next.share * 100.0)),
             muted("reliability"),
-            styled(BOLD_GREEN, format!("{:.0}%+", RELIABILITY_TARGET * 100.0)),
+            styled(BOLD_GREEN, format!("{:.0}%+", next.reliability * 100.0)),
             muted("debt/assets"),
-            styled(BOLD_GREEN, format!("<={:.0}%", LEVERAGE_LIMIT * 100.0))
+            styled(BOLD_GREEN, format!("<={:.0}%", next.leverage * 100.0))
         ),
         format!(
             "{} {} | {} {} | {} {}",
@@ -1236,6 +1236,9 @@ pub(super) fn board_risk_lines(game: &Game) -> Vec<String> {
 
     let target = next_board_target(game);
     let mut lines = Vec::new();
+    if let Some(warning) = review_gate_warning(game) {
+        lines.push(warning);
+    }
     let share_gap = target.share - game.market_share();
     if share_gap > 0.06 {
         lines.push(signal_line(
@@ -1258,7 +1261,13 @@ pub(super) fn board_risk_lines(game: &Game) -> Vec<String> {
         lines.push(signal_line("Capacity", GREEN, "room for customer growth"));
     }
 
-    if game.player.reliability < target.reliability {
+    if game.player.reliability < 0.50 {
+        lines.push(signal_line(
+            "Service",
+            RED,
+            "market access is at risk from outages",
+        ));
+    } else if game.player.reliability < target.reliability {
         lines.push(signal_line("Service", RED, "maintenance before review"));
     } else if game.player.reliability < target.reliability + 0.04 {
         lines.push(signal_line("Service", YELLOW, "thin reliability cushion"));
@@ -1566,6 +1575,45 @@ fn integration_strain_tone(value: f64) -> &'static str {
     }
 }
 
+fn review_gate_warning(game: &Game) -> Option<String> {
+    if game.sandbox_mode || game.regional_mandate_completed {
+        return None;
+    }
+
+    let targets = scorecard_review_targets(game);
+    let share = game.market_share();
+    let mut gaps = Vec::new();
+    if share < targets.share {
+        gaps.push("share");
+    }
+    if game.player.reliability < targets.reliability {
+        gaps.push("service");
+    }
+    if game.player.debt_to_assets() > targets.leverage {
+        gaps.push("leverage");
+    }
+    if !targets.regional && game.player_rate_support_ratio() < REVIEW_MIN_RATE_SUPPORT_RATIO {
+        gaps.push("rate support");
+    }
+    if gaps.is_empty() {
+        return None;
+    }
+
+    if share >= targets.share {
+        Some(signal_line(
+            "Review",
+            RED,
+            format!("share is not enough; {} short", gaps.join(", ")),
+        ))
+    } else {
+        Some(signal_line(
+            "Review",
+            YELLOW,
+            format!("active gates: {}", gaps.join(", ")),
+        ))
+    }
+}
+
 pub(super) fn board_metric_line(
     label: &str,
     current: f64,
@@ -1599,6 +1647,16 @@ pub(super) fn board_metric_line(
 }
 
 pub(super) fn next_board_target(game: &Game) -> BoardTarget {
+    if game.review_completed && !game.regional_mandate_completed {
+        return BoardTarget {
+            label: "Y10 Mandate",
+            quarter: REGIONAL_MANDATE_QUARTER,
+            share: REGIONAL_MANDATE_SHARE_TARGET,
+            reliability: REGIONAL_MANDATE_RELIABILITY_TARGET,
+            leverage: REGIONAL_MANDATE_LEVERAGE_LIMIT,
+        };
+    }
+
     if game.review_completed {
         return BoardTarget {
             label: "Continuation",
@@ -2114,6 +2172,13 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
             signal_line("Debt", YELLOW, "usable, but no longer cheap"),
         );
     }
+    let valuation_to_assets = game.player.market_cap() / game.player.asset_base.max(1.0);
+    if valuation_to_assets < 0.50 && leverage > 0.80 {
+        push_line(
+            82,
+            signal_line("Control", RED, "weak valuation invites hostile bid"),
+        );
+    }
 
     if game.acquisition_stress >= ACQUISITION_STRESS_STRAINED {
         push_line(
@@ -2146,7 +2211,9 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
         );
     }
 
-    if game.player.reliability < 0.74 {
+    if game.player.reliability < 0.50 {
+        push_line(91, signal_line("Reliability", RED, "market access at risk"));
+    } else if game.player.reliability < 0.74 {
         push_line(
             78,
             signal_line("Reliability", RED, "below target; fund maintenance"),
@@ -2156,6 +2223,10 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
             25,
             signal_line("Reliability", GREEN, "strong; expansion can lead"),
         );
+    }
+
+    if let Some(warning) = review_gate_warning(game) {
+        push_line(76, warning);
     }
 
     let maintenance_scale = game.player_maintenance_response_scale();

@@ -2167,6 +2167,54 @@ fn acquisition_stress_pressure_hits_cash_and_financing_flexibility() {
 }
 
 #[test]
+fn distressed_acquisition_stress_creates_visible_lender_controls() {
+    let mut game = Game::with_seed(33);
+    game.acquisition_stress = ACQUISITION_STRESS_DISTRESSED + 0.05;
+    game.player.cash = 30_000.0;
+    game.player.debt = 120_000.0;
+    game.player.asset_base = 210_000.0;
+    let starting_cash = game.player.cash;
+    let mut events = Vec::new();
+    let finances = FirmFinances {
+        revenue: 15_000.0,
+        operating_cost: 9_500.0,
+        interest: 1_500.0,
+        profit: 4_000.0,
+        served_mwh: 0.0,
+        unmet_demand_ratio: 0.0,
+    };
+
+    game.apply_acquisition_stress_pressure(&finances, &mut events);
+
+    assert!(game.player.cash < starting_cash);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("lender oversight"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("borrowing room narrowed"))
+    );
+}
+
+#[test]
+fn distressed_acquisition_stress_reduces_borrowing_limit_more_than_strained_stress() {
+    let mut strained = Game::with_seed(34);
+    strained.acquisition_stress = ACQUISITION_STRESS_STRAINED + 0.02;
+    strained.player.asset_base = 250_000.0;
+    strained.player.debt = 100_000.0;
+    strained.player.reliability = 0.88;
+    strained.player.reputation = 70.0;
+
+    let mut distressed = strained.clone();
+    distressed.acquisition_stress = ACQUISITION_STRESS_DISTRESSED + 0.20;
+
+    assert!(distressed.borrowing_limit_ratio() < strained.borrowing_limit_ratio() - 0.02);
+}
+
+#[test]
 fn public_acquisition_estimate_can_diverge_from_exact_balance_sheet() {
     let mut game = Game::with_seed(30);
     game.competitors[0].public_cash_multiplier = 1.20;

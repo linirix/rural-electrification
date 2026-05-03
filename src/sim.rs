@@ -1499,8 +1499,9 @@ impl Game {
         let macro_limit = self.macro_state.borrowing_limit_ratio();
         let service_drag = (0.78 - self.player.reliability).clamp(0.0, 0.20) * 0.42;
         let reputation_drag = ((50.0 - self.player.reputation) / 100.0).clamp(0.0, 0.18) * 0.48;
-        let stress_drag =
-            (self.acquisition_stress - ACQUISITION_STRESS_NOTICE).clamp(0.0, 0.80) * 0.10;
+        let stress_drag = (self.acquisition_stress - ACQUISITION_STRESS_NOTICE).clamp(0.0, 0.80)
+            * 0.10
+            + (self.acquisition_stress - ACQUISITION_STRESS_DISTRESSED).clamp(0.0, 0.60) * 0.06;
         let break_even_rate = self.player_break_even_rate_cents();
         let rate_support_drag = if break_even_rate <= 0.0 {
             0.0
@@ -2616,7 +2617,16 @@ impl Game {
         self.player.reputation =
             (self.player.reputation - self.acquisition_stress * 0.42).clamp(0.0, 100.0);
 
-        if self.acquisition_stress >= ACQUISITION_STRESS_STRAINED && weak_financing {
+        if self.acquisition_stress >= ACQUISITION_STRESS_DISTRESSED {
+            let oversight_cost =
+                (self.player.asset_base.max(1.0) * self.acquisition_stress * 0.0025)
+                    .clamp(1_200.0, 9_000.0);
+            self.player.cash -= oversight_cost;
+            events.push(format!(
+                "Acquisition stress forced lender oversight and integration controls; {} was diverted from cash and borrowing room narrowed.",
+                money(oversight_cost)
+            ));
+        } else if self.acquisition_stress >= ACQUISITION_STRESS_STRAINED && weak_financing {
             let amendment_cost = (self.player.debt.max(1.0) * self.acquisition_stress * 0.0045)
                 .clamp(850.0, 14_000.0);
             self.player.cash -= amendment_cost;
@@ -3379,12 +3389,12 @@ fn year_five_review_failure_details(
     };
 
     format!(
-        "After Year 5 you held {:.0}% of connected accounts. The board wanted durable leadership: share, service, leverage, and rates that can support the cost base. Current rate support was {:.0}% of break-even ({:.1}c) with {}. {}{}",
+        "{} After Year 5 you held {:.0}% of connected accounts. The board wanted durable leadership: share, service, leverage, and rates that can support the cost base. Current rate support was {:.0}% of break-even ({:.1}c) with {}.{}",
+        gap_summary,
         share * 100.0,
         sustainability.rate_support_ratio.min(9.99) * 100.0,
         sustainability.break_even_rate,
         review_interest_coverage_summary(game.player.debt, sustainability.interest_coverage),
-        gap_summary,
         scale_note
     )
 }
@@ -3434,14 +3444,14 @@ fn regional_mandate_failure_details(game: &Game) -> String {
     };
 
     format!(
-        "By Year 10 Metro held {:.0}% share with {} adjacent territories. The board wanted {:.0}% share, {} territories, {:.0}% reliability, and debt/assets below {:.0}%. {}{}",
+        "{} By Year 10 Metro held {:.0}% share with {} adjacent territories. The board wanted {:.0}% share, {} territories, {:.0}% reliability, and debt/assets below {:.0}%.{}",
+        gap_summary,
         share * 100.0,
         game.adjacent_expansions,
         REGIONAL_MANDATE_SHARE_TARGET * 100.0,
         REGIONAL_MANDATE_EXPANSION_TARGET,
         REGIONAL_MANDATE_RELIABILITY_TARGET * 100.0,
         REGIONAL_MANDATE_LEVERAGE_LIMIT * 100.0,
-        gap_summary,
         scale_note
     )
 }
