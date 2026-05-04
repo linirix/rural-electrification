@@ -19,4 +19,4 @@ jobs:
       - name: Tests
         run: cargo test --release
       - name: Strategy smoke
-        run: cargo run --release --bin playtest -- --all-strategies --seeds 500
+        run: cargo run --release --bin playtest -- --all-strategies --seeds 1000

@@ -5,6 +5,9 @@ const REGRESSION_SEEDS: u32 = 250;
 #[test]
 fn strategy_profiles_stay_in_design_bands() {
     let variance = InitialVariance::default();
+    // These bands encode the current design target: naive almost always fails,
+    // organic is viable but close-run, balanced should be strongest, and
+    // acquisition-first play should stay higher-variance than disciplined growth.
     let cases = [
         (Strategy::Naive, 0.00, 0.05),
         (Strategy::Organic, 0.54, 0.70),
@@ -85,6 +88,9 @@ fn glonzo_random_strategy_runs_to_completion_with_varied_outcomes() {
 
 #[test]
 fn test_player_personalities_exercise_distinct_edges() {
+    // Landshark and Costanza are diagnostic personalities rather than primary
+    // balance targets: one optimizes visible EV, the other avoids poor-player
+    // instincts. Their bands catch drift in the game's exploitable surface.
     let landshark = run_strategy_batch(250, InitialVariance::default(), Strategy::Landshark);
     let costanza = run_strategy_batch(250, InitialVariance::default(), Strategy::Costanza);
 

@@ -165,7 +165,8 @@ fn diligence_option_line(game: &Game, competitor_index: usize, quarters_remainin
     let price = game
         .acquisition_terms(competitor_index)
         .map(|terms| terms.price)
-        .unwrap_or_else(|| game.acquisition_price(competitor_index));
+        .or_else(|| game.acquisition_price(competitor_index))
+        .unwrap_or(0.0);
     format!(
         "   {} {}   {} {}   {} {}",
         muted("diligence"),
@@ -459,7 +460,12 @@ pub(super) fn acquisition_status(game: &Game, competitor_index: usize) -> (Strin
     } else if !game.has_diligence(competitor_index) {
         ("estimate".to_string(), YELLOW)
     } else {
-        (money(game.acquisition_price(competitor_index)), CYAN)
+        (
+            game.acquisition_price(competitor_index)
+                .map(money)
+                .unwrap_or_else(|| "unavailable".to_string()),
+            CYAN,
+        )
     }
 }
 

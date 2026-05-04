@@ -1,3 +1,9 @@
+//! Visible-mechanics optimizer.
+//!
+//! `landshark` is the adversarial test player that uses only player-visible
+//! state, but squeezes those signals aggressively: rates, financing, deal math,
+//! and equity actions are selected for expected value within the public model.
+
 use crate::sim::{
     MAX_PUBLIC_RATE_PREMIUM_CENTS, REVIEW_MIN_RATE_SUPPORT_RATIO, public_rate_tolerance,
 };

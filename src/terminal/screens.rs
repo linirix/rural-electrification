@@ -22,163 +22,6 @@ impl FramedScreen {
     }
 }
 
-const START_SCREEN_COMMAND_WIDTH: usize = 18;
-
-pub(super) fn print_start_screen(game: &Game) {
-    println!("{}", start_screen_banner_line());
-    print_box(
-        &format!("{} | Start", game.player.name),
-        &start_screen_overview_lines(game),
-    );
-    print_box_pair(
-        "How To Read It",
-        &start_screen_metric_lines(),
-        "Useful Commands",
-        &start_screen_command_lines(game),
-    );
-    print_box("Begin", &start_screen_begin_lines());
-}
-
-pub(super) fn start_screen_banner_line() -> String {
-    centered_line(styled(BOLD_CYAN, "more corgi's rural electrification!"))
-}
-
-pub(super) fn start_screen_overview_lines(game: &Game) -> Vec<String> {
-    vec![
-        format!(
-            "You run {} in {}.",
-            styled(BOLD, &game.player.name),
-            game.market.territory
-        ),
-        "Build a durable utility: enough customers, enough capacity, reliable service.".to_string(),
-        "Keep a balance sheet that can survive bad quarters.".to_string(),
-        "The Year 5 review tests share, reliability, leverage, and sustainable earnings."
-            .to_string(),
-        "Continued games add a Year 10 regional mandate.".to_string(),
-    ]
-}
-
-pub(super) fn start_screen_metric_lines() -> Vec<String> {
-    vec![
-        "Cash: projects and shock cushion.".to_string(),
-        "Rates: revenue, churn, public tolerance.".to_string(),
-        "Capacity: watts and customer hookups.".to_string(),
-        "Reliability: growth, churn, reputation.".to_string(),
-        "Debt/assets: lender room and failure risk.".to_string(),
-    ]
-}
-
-pub(super) fn start_screen_command_lines(game: &Game) -> Vec<String> {
-    vec![
-        start_screen_command_line("next / n", "finish the quarter"),
-        start_screen_command_line("preview <cmd>", "inspect before acting"),
-        start_screen_command_line(
-            "rate / build",
-            format!(
-                "set price; add gen/lines near {:.1}c",
-                game.market.standard_rate_cents
-            ),
-        ),
-        start_screen_command_line("marketing / maint", "growth; reliability"),
-        start_screen_command_line("hire / fire", "automate marketing or upkeep"),
-        start_screen_command_line("capital", "debt, equity, buybacks"),
-        start_screen_command_line("rivals / board", "competitors; objectives"),
-        start_screen_command_line("save / load", "keep long campaigns"),
-        start_screen_command_line("sandbox", "disable board reviews"),
-    ]
-}
-
-pub(super) fn start_screen_begin_lines() -> Vec<String> {
-    vec![
-        "Press Return to open the main dashboard.".to_string(),
-        "From the dashboard, Return cycles: Report -> Rivals -> Board -> Help -> Dashboard."
-            .to_string(),
-        "From a screen opened by command, Return goes back to the dashboard.".to_string(),
-        "Type sandbox to play without board review constraints.".to_string(),
-        "Type help at any time for the full command reference.".to_string(),
-    ]
-}
-
-pub(super) fn print_help() {
-    print_box(
-        "Command Reference",
-        &[
-            "Type the command shown at left; use preview <command> before major actions."
-                .to_string(),
-            "Return follows the screen navigation strip unless you are entering a command."
-                .to_string(),
-        ],
-    );
-    print_box_pair(
-        "Build + Operate",
-        &[
-            help_command_line("build gen [MWh]", "start generation project"),
-            help_command_line("build lines [accounts]", "expand distribution"),
-            help_command_line("marketing [amount]", "buy growth and reputation"),
-            help_command_line("maint [amount]", "fund reliability work"),
-            help_command_line("hire maint 85%", "automate service work"),
-            help_command_line("hire marketing 90", "automate reputation work"),
-            help_command_line("fire maint/marketing", "dismiss manager"),
-            help_command_line("expand", "enter adjacent territory"),
-            help_command_line("rate 10.0", "set target rate"),
-            help_command_line("rate up|down [cents]", "adjust rate"),
-            help_command_line("preview <command>", "inspect first"),
-        ],
-        "Capital",
-        &[
-            help_command_line("issue [amount]", "issue stock"),
-            help_command_line("buyback [amount]", "repurchase shares"),
-            help_command_line("dividend [amount]", "pay owners pro rata"),
-            help_command_line("borrow [amount|max]", "raise debt"),
-            help_command_line("repay [amount|max]", "pay debt down"),
-            help_command_line("diligence <number>", "reveal deal terms"),
-            help_command_line("buy <number>", "acquire rival"),
-            help_command_line("stock issue/buyback", "aliases"),
-            help_command_line("debt / debt repay", "aliases"),
-        ],
-    );
-    print_box_pair(
-        "Navigation",
-        &[
-            help_command_line("status / s", "show dashboard"),
-            help_command_line("rivals", "competitor detail"),
-            help_command_line("board", "objectives"),
-            help_command_line("region", "regional mandate"),
-            help_command_line("report", "last quarter detail"),
-            help_command_line("preview / quote", "inspect command"),
-            help_command_line("Return", "cycle screens / return"),
-            help_command_line("next / n / end", "finish quarter"),
-            help_command_line("continue", "post-review play"),
-            help_command_line("sandbox", "disable board reviews"),
-            help_command_line("save [name]", "write save file"),
-            help_command_line("load [name]", "restore save file"),
-            help_command_line("help / ?", "command reference"),
-            help_command_line("quit / exit", "leave game"),
-        ],
-        "Input Notes",
-        &[
-            "Money accepts 20000 or 20k.".to_string(),
-            "Invalid amounts are rejected.".to_string(),
-            "Build sizes are clamped to sane bounds.".to_string(),
-            "Large rate increases above public tolerance are rejected.".to_string(),
-            "Adjacent expansion creates integration work.".to_string(),
-            "Saves live in ~/.electrification.".to_string(),
-            "Use the dashboard guide for live costs.".to_string(),
-            "For marketing/maintenance, 1-9 means $1k-$9k.".to_string(),
-        ],
-    );
-}
-
-pub(super) fn print_help_screen(game: &Game) {
-    print_subscreen_frame(game, FramedScreen::Help);
-    print_help();
-}
-
-fn centered_line(line: String) -> String {
-    let padding = content_width().saturating_sub(visible_width(&line)) / 2;
-    format!("{}{}", " ".repeat(padding), line)
-}
-
 pub(super) fn print_status(game: &Game) {
     print_box(
         &dashboard_title(game),
@@ -239,23 +82,7 @@ pub(super) fn print_board_screen(game: &Game) {
     print_board(game);
 }
 
-pub(super) fn print_last_report(game: &Game) {
-    if let Some(report) = &game.last_report {
-        print_report(report);
-    } else {
-        print_box(
-            "Quarter Results",
-            &["No quarter has been completed yet.".to_string()],
-        );
-    }
-}
-
-pub(super) fn print_report_screen(game: &Game) {
-    print_subscreen_frame(game, FramedScreen::Report);
-    print_last_report(game);
-}
-
-fn print_subscreen_frame(game: &Game, active: FramedScreen) {
+pub(super) fn print_subscreen_frame(game: &Game, active: FramedScreen) {
     print_box(
         &subscreen_title(game, active),
         &subscreen_status_lines(game),
@@ -348,13 +175,6 @@ fn command_label(label: impl std::fmt::Display) -> String {
     styled(BOLD_CYAN, label)
 }
 
-pub(super) fn help_command_line(
-    command: impl std::fmt::Display,
-    effect: impl std::fmt::Display,
-) -> String {
-    single_command_line_with_width(command, effect, 23)
-}
-
 fn subscreen_review_label(game: &Game) -> String {
     if game.sandbox_mode {
         "sandbox, no board reviews".to_string()
@@ -366,73 +186,6 @@ fn subscreen_review_label(game: &Game) -> String {
 pub(super) fn print_notice(message: &str) {
     println!();
     print_box("Notice", &wrap_plain_text(message, content_width()));
-}
-
-pub(super) fn print_report(report: &QuarterReport) {
-    let mut lines = vec![
-        format!(
-            "{} {} | {} {} | {} {} | {} {}",
-            muted("Revenue"),
-            styled(BOLD_GREEN, money(report.revenue)),
-            muted("Costs"),
-            styled(YELLOW, money(report.operating_cost)),
-            muted("Interest"),
-            styled(YELLOW, money(report.interest)),
-            muted("Profit"),
-            styled(profit_tone(report.profit), money(report.profit))
-        ),
-        format!(
-            "{} {} gross, {} churn ({}) | {} {}",
-            muted("Customers:"),
-            styled(BOLD_GREEN, format!("+{:.0}", report.new_customers)),
-            styled(RED, format!("-{:.0}", report.lost_customers)),
-            styled(
-                churn_tone(report.lost_customer_rate),
-                format_churn_rate(report.lost_customer_rate)
-            ),
-            muted("Market share"),
-            styled(
-                share_tone(report.market_share),
-                format!(
-                    "{:.0}% ({:.0}%)",
-                    report.market_share * 100.0,
-                    report.prior_market_share * 100.0
-                )
-            )
-        ),
-    ];
-    if !report.attributions.is_empty() {
-        lines.push(styled(BOLD_CYAN, "Drivers"));
-        for attribution in &report.attributions {
-            for (index, wrapped) in wrap_plain_text(attribution, content_width().saturating_sub(4))
-                .iter()
-                .enumerate()
-            {
-                if index == 0 {
-                    lines.push(format!("  {wrapped}"));
-                } else {
-                    lines.push(format!("    {wrapped}"));
-                }
-            }
-        }
-    }
-    if !report.events.is_empty() {
-        lines.push(styled(BOLD_CYAN, "Events"));
-        for event in &report.events {
-            for (index, wrapped) in wrap_plain_text(event, content_width().saturating_sub(7))
-                .iter()
-                .enumerate()
-            {
-                if index == 0 {
-                    lines.push(format!("{} {wrapped}", styled(BOLD_YELLOW, "Event:")));
-                } else {
-                    lines.push(format!("       {wrapped}"));
-                }
-            }
-        }
-    }
-    println!();
-    print_box(&format!("{} Results", report.label), &lines);
 }
 
 pub(super) fn stable_panel_lines(
@@ -698,28 +451,6 @@ fn compact_command_pair_line(
     )
 }
 
-fn start_screen_command_line(
-    command: impl std::fmt::Display,
-    effect: impl std::fmt::Display,
-) -> String {
-    single_command_line_with_width(command, effect, START_SCREEN_COMMAND_WIDTH)
-}
-
-fn single_command_line_with_width(
-    command: impl std::fmt::Display,
-    effect: impl std::fmt::Display,
-    command_width: usize,
-) -> String {
-    let command = command.to_string();
-    let padding = command_width.saturating_sub(visible_width(&command));
-    format!(
-        "{}{}  {}",
-        styled(BOLD_CYAN, command),
-        " ".repeat(padding),
-        effect
-    )
-}
-
 fn command_cell(command: impl std::fmt::Display, width: usize) -> String {
     let command = command.to_string();
     let command = fit_line(&command, width);
@@ -753,58 +484,6 @@ pub(super) fn project_quote_short(kind: &str, size: f64) -> String {
         }
         _ => String::new(),
     }
-}
-
-pub(super) fn print_outcome(outcome: &Outcome) {
-    let (outcome_style, result) = match outcome.kind {
-        OutcomeKind::Victory => (BOLD_GREEN, "victory"),
-        OutcomeKind::Defeat => (BOLD_RED, "defeat"),
-    };
-    let mut lines = vec![styled(outcome_style, &outcome.headline)];
-    lines.extend(wrap_plain_text(&outcome.details, content_width()));
-    lines.push(format!(
-        "{} {}",
-        muted("Result:"),
-        styled(outcome_style, result)
-    ));
-    if outcome.can_continue {
-        lines.push("Type 'continue' to keep operating, or 'quit' to leave the game.".to_string());
-    }
-
-    println!();
-    print_box("Outcome", &lines);
-}
-
-pub(super) fn print_quit_summary(game: &Game) {
-    println!();
-    println!("{}", quit_summary_line(game));
-}
-
-pub(super) fn quit_summary_line(game: &Game) -> String {
-    let outcome = game
-        .outcome
-        .as_ref()
-        .map(|outcome| outcome.headline.as_str())
-        .unwrap_or("in progress");
-    format!(
-        "{} {} | {} {:.0}% | {} {:.0} | {} {:.0}% | {} {:.0}% | {} {} | {} {:.1}% | {} {}",
-        styled(BOLD_CYAN, "Summary:"),
-        styled(BOLD, outcome),
-        muted("share"),
-        game.market_share() * 100.0,
-        muted("customers"),
-        game.player.customers,
-        muted("reliability"),
-        game.player.reliability * 100.0,
-        muted("debt/assets"),
-        game.player.debt_to_assets() * 100.0,
-        muted("cash"),
-        styled(cash_tone(game.player.cash), money(game.player.cash)),
-        muted("founder"),
-        game.player_ownership() * 100.0,
-        muted("personal wealth"),
-        styled(BOLD_GREEN, money(game.player_wealth()))
-    )
 }
 
 pub(super) fn scorecard_lines(game: &Game) -> Vec<String> {

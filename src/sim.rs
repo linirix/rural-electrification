@@ -92,6 +92,7 @@ const RIVAL_REACTION_RATE_MOVE_CENTS: f64 = 0.60;
 const RIVAL_REACTION_MARKETING_SPEND: f64 = 15_000.0;
 const RIVAL_REACTION_FINANCING_AMOUNT: f64 = 45_000.0;
 const DILIGENCE_ALERT_MAX_PROBABILITY: f64 = 0.88;
+pub const CURRENT_SAVE_VERSION: u32 = 1;
 
 fn default_public_balance_sheet_multiplier() -> f64 {
     1.0
@@ -99,6 +100,10 @@ fn default_public_balance_sheet_multiplier() -> f64 {
 
 fn default_diligence_target_alerted() -> bool {
     true
+}
+
+fn default_save_version() -> u32 {
+    CURRENT_SAVE_VERSION
 }
 
 mod attribution;
@@ -132,6 +137,8 @@ use outcome::interest_coverage;
 /// outcome. Consumers normally mutate it through `apply_decision` and `advance_quarter`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Game {
+    #[serde(default = "default_save_version")]
+    pub save_version: u32,
     pub quarter: u32,
     pub campaign_quarters: u32,
     pub market: Market,
@@ -466,6 +473,7 @@ impl Game {
         let player_owned_shares = player.shares * STARTING_PLAYER_OWNERSHIP;
 
         Self {
+            save_version: CURRENT_SAVE_VERSION,
             quarter: 0,
             campaign_quarters: DEFAULT_CAMPAIGN_QUARTERS,
             market,
@@ -571,6 +579,7 @@ impl Game {
     }
 
     pub fn normalize_after_load(&mut self) {
+        self.migrate_after_load();
         if self.player_owned_shares <= 0.0 && self.player.shares > 0.0 {
             self.player_owned_shares = self.player.shares * STARTING_PLAYER_OWNERSHIP;
         }
@@ -594,7 +603,19 @@ impl Game {
         }
     }
 
+    fn migrate_after_load(&mut self) {
+        if self.save_version == 0 {
+            self.save_version = 1;
+        }
+    }
+
     pub fn validate_loaded_state(&self) -> Result<(), String> {
+        if self.save_version == 0 || self.save_version > CURRENT_SAVE_VERSION {
+            return Err(format!(
+                "save version {} is not supported by this build",
+                self.save_version
+            ));
+        }
         validate_loaded_utility("player", &self.player, true)?;
         for (index, competitor) in self.competitors.iter().enumerate() {
             validate_loaded_utility(&format!("competitor {}", index + 1), competitor, false)?;
@@ -986,7 +1007,7 @@ impl Game {
         }
         let cost = self
             .diligence_cost(competitor_index)
-            .expect("competitor index checked before diligence");
+            .ok_or_else(|| "No competitor has that number.".to_string())?;
         self.require_cash(cost)?;
         self.player.cash -= cost;
         let name = self.competitors[competitor_index].name.clone();
@@ -1009,7 +1030,7 @@ impl Game {
             });
             let quoted_terms = self
                 .current_acquisition_terms(competitor_index)
-                .expect("competitor index checked before diligence terms quote");
+                .ok_or_else(|| "No competitor has that number.".to_string())?;
             self.diligence_reports
                 .retain(|report| report.competitor_name != name);
             self.diligence_reports.push(DiligenceReport {
@@ -1057,7 +1078,7 @@ impl Game {
             .flatten();
         let terms = self
             .acquisition_terms(competitor_index)
-            .expect("competitor index checked before acquisition");
+            .ok_or_else(|| "No competitor has that number.".to_string())?;
         if !had_diligence && self.player.cash + 0.01 < terms.price {
             return Err(format!(
                 "The undiligenced close priced at {}, but cash on hand is only {}. Diligence would reveal and freeze exact terms before financing.",
@@ -1765,10 +1786,9 @@ impl Game {
             .map(|report| interest_coverage(report.profit, report.interest))
     }
 
-    pub fn acquisition_price(&self, competitor_index: usize) -> f64 {
+    pub fn acquisition_price(&self, competitor_index: usize) -> Option<f64> {
         self.acquisition_terms(competitor_index)
-            .expect("competitor index out of range")
-            .price
+            .map(|terms| terms.price)
     }
 
     pub fn acquisition_stress_score(&self, competitor_index: usize) -> Option<f64> {

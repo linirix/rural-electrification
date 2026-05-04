@@ -202,6 +202,8 @@ Useful playtest flags:
 
 Playtest summaries include peak acquisition stress so reckless roll-up strategies can be evaluated separately from disciplined M&A. `stress_scan` accepts `--strategy`, `--seeds`, and `--variance`, and adds cross-strategy edge-case and defeat-mode coverage output. There is also a strategy regression test in `tests/strategy_balance.rs` that keeps the major automated strategies inside expected win-rate bands.
 
+For deeper balance context, see `PLAYTEST_MEMO_1000008.md` for the million-game stress memo and `PLAYTEST_SEEDS.md` for interesting or useful seed notes. The main balance constants live near the top of `src/sim.rs`, grouped by domain so tuning changes are easy to audit.
+
 ## Release
 
 Before cutting a release, run the full local gate:
@@ -210,7 +212,7 @@ Before cutting a release, run the full local gate:
 cargo fmt --check
 cargo clippy --release --all-targets -- -D warnings
 cargo test --release
-cargo run --release --bin playtest -- --all-strategies --seeds 500
+cargo run --release --bin playtest -- --all-strategies --seeds 1000
 ```
 
 Build a distributable package for the current machine:

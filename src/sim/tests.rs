@@ -118,6 +118,7 @@ fn serialized_game_round_trip_preserves_next_quarter() {
     let json = serde_json::to_string(&original).unwrap();
     let mut loaded: Game = serde_json::from_str(&json).unwrap();
 
+    assert_eq!(loaded.save_version, CURRENT_SAVE_VERSION);
     let original_report = original.advance_quarter();
     let loaded_report = loaded.advance_quarter();
 
@@ -152,6 +153,30 @@ fn legacy_save_without_owner_fields_restores_founder_stake() {
 
     assert!((loaded.player_ownership() - 0.32).abs() < 0.0001);
     assert_eq!(loaded.player_dividends_received, 0.0);
+}
+
+#[test]
+fn legacy_save_without_version_migrates_to_current_save_version() {
+    let original = Game::with_seed(92);
+    let mut value = serde_json::to_value(&original).unwrap();
+    value.as_object_mut().unwrap().remove("save_version");
+
+    let mut loaded: Game = serde_json::from_value(value).unwrap();
+    loaded.normalize_after_load();
+
+    assert_eq!(loaded.save_version, CURRENT_SAVE_VERSION);
+    loaded.validate_loaded_state().unwrap();
+}
+
+#[test]
+fn unsupported_future_save_version_is_rejected() {
+    let mut game = Game::with_seed(93);
+    game.save_version = CURRENT_SAVE_VERSION + 1;
+
+    let error = game.validate_loaded_state().unwrap_err();
+
+    assert!(error.contains("save version"));
+    assert!(error.contains("not supported"));
 }
 
 fn prior_profit_report(profit: f64) -> QuarterReport {
@@ -2434,7 +2459,7 @@ fn diligence_freezes_acquisition_price_until_window_expires() {
         quoted.price,
         live_terms.price
     );
-    assert!((game.acquisition_price(0) - quoted.price).abs() < 0.01);
+    assert!((game.acquisition_price(0).unwrap() - quoted.price).abs() < 0.01);
     assert!((game.acquisition_terms(0).unwrap().absorbed_cash - quoted.absorbed_cash).abs() < 0.01);
     assert!((game.acquisition_terms(0).unwrap().assumed_debt - quoted.assumed_debt).abs() < 0.01);
 
@@ -2442,7 +2467,7 @@ fn diligence_freezes_acquisition_price_until_window_expires() {
     game.prune_diligence_reports();
 
     assert!(!game.has_diligence(0));
-    assert!((game.acquisition_price(0) - live_terms.price).abs() < 0.01);
+    assert!((game.acquisition_price(0).unwrap() - live_terms.price).abs() < 0.01);
 }
 
 #[test]
@@ -2590,8 +2615,8 @@ fn high_share_makes_acquisitions_non_linearly_pricier() {
     let mut high = Game::with_seed(50);
     high.player.customers = 1_500.0;
 
-    let low_price = low.acquisition_price(0);
-    let high_price = high.acquisition_price(0);
+    let low_price = low.acquisition_price(0).unwrap();
+    let high_price = high.acquisition_price(0).unwrap();
 
     assert!(
         high_price > low_price * 1.4,
@@ -2614,8 +2639,10 @@ fn acquisition_reputation_value_scales_with_customer_book() {
     let mut large_high = large_low.clone();
     large_high.competitors[0].reputation = 90.0;
 
-    let small_reputation_spread = small_high.acquisition_price(0) - small_low.acquisition_price(0);
-    let large_reputation_spread = large_high.acquisition_price(0) - large_low.acquisition_price(0);
+    let small_reputation_spread =
+        small_high.acquisition_price(0).unwrap() - small_low.acquisition_price(0).unwrap();
+    let large_reputation_spread =
+        large_high.acquisition_price(0).unwrap() - large_low.acquisition_price(0).unwrap();
 
     assert!(
         small_reputation_spread < 5_000.0,
@@ -2668,11 +2695,11 @@ fn acquisition_price_accounts_for_target_cash_and_debt() {
     debt_heavy.competitors[0].debt += 40_000.0;
 
     assert!(
-        cash_rich.acquisition_price(0) > base.acquisition_price(0) + 30_000.0,
+        cash_rich.acquisition_price(0).unwrap() > base.acquisition_price(0).unwrap() + 30_000.0,
         "cash-rich targets should cost more because that cash is acquired"
     );
     assert!(
-        debt_heavy.acquisition_price(0) < base.acquisition_price(0) - 25_000.0,
+        debt_heavy.acquisition_price(0).unwrap() < base.acquisition_price(0).unwrap() - 25_000.0,
         "debt-heavy targets should have lower equity purchase prices because debt is assumed"
     );
 }
@@ -2821,7 +2848,7 @@ fn acquisition_absorbs_target_cash_and_debt() {
     let mut game = Game::with_seed(60);
     game.player.cash = 250_000.0;
     let target = game.competitors[2].clone();
-    let starting_cash_after_payment_only = game.player.cash - game.acquisition_price(2);
+    let starting_cash_after_payment_only = game.player.cash - game.acquisition_price(2).unwrap();
     let starting_debt = game.player.debt;
     complete_diligence(&mut game, 2);
 
@@ -2844,7 +2871,7 @@ fn acquisition_terms_match_actual_close_effects() {
     complete_diligence(&mut game, 1);
     let terms = game.acquisition_terms(1).unwrap();
 
-    assert!((game.acquisition_price(1) - terms.price).abs() < 0.01);
+    assert!((game.acquisition_price(1).unwrap() - terms.price).abs() < 0.01);
 
     game.apply_decision(Decision::Acquire {
         competitor_index: 1,

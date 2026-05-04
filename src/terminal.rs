@@ -21,19 +21,24 @@ use rustyline::{DefaultEditor, error::ReadlineError};
 
 mod board;
 mod command;
+mod help;
+mod outcomes;
 mod preview;
 mod render;
+mod report;
 mod rivals;
 mod screens;
+mod start;
 #[cfg(test)]
 mod tests;
 
 use command::{apply, handle_command, parse_decision};
+use help::print_help_screen;
+use outcomes::{print_outcome, print_quit_summary};
 use render::{clear_screen, print_box, styled};
-use screens::{
-    print_board_screen, print_help_screen, print_notice, print_outcome, print_quit_summary,
-    print_report_screen, print_rivals_screen, print_start_screen, print_status,
-};
+use report::print_report_screen;
+use screens::{print_board_screen, print_notice, print_rivals_screen, print_status};
+use start::print_start_screen;
 
 const MIN_SCREEN_WIDTH: usize = 88;
 const DEFAULT_SCREEN_WIDTH: usize = 132;

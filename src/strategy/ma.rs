@@ -1,3 +1,9 @@
+//! Acquisition-heavy strategy.
+//!
+//! `ma` tests whether a deal-first player can still win after integration
+//! strain, financing pressure, diligence uncertainty, and acquisition stress.
+//! It should have a higher upside tail than organic play and a worse downside.
+
 use crate::{
     ACQUISITION_STRESS_NOTICE, DISTRIBUTION_PROJECT_CAPACITY, Decision,
     GENERATION_PROJECT_CAPACITY_MWH, Game,

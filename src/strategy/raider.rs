@@ -1,3 +1,9 @@
+//! Reckless roll-up stress strategy.
+//!
+//! `raider` intentionally pushes visible acquisition mechanics hard enough to
+//! exercise stress, market-access, hostile-takeover, and high-share edge cases.
+//! It is a probe for failure-mode coverage, not a model of good play.
+
 use crate::{
     AcquisitionTerms, DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH,
     Game,

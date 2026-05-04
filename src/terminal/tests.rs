@@ -2,9 +2,12 @@ use std::{fs, path::PathBuf};
 
 use super::board::*;
 use super::command::*;
+use super::help::*;
+use super::outcomes::*;
 use super::render::*;
 use super::rivals::*;
 use super::screens::*;
+use super::start::*;
 use super::*;
 
 fn unique_test_save_dir(label: &str) -> PathBuf {

@@ -420,9 +420,12 @@ pub(super) fn decision_preview_notes(game: &Game, decision: &Decision) -> Vec<St
         Decision::Acquire { competitor_index } => {
             if let Some(competitor) = game.competitors.get(*competitor_index) {
                 if game.has_diligence(*competitor_index) {
-                    let terms = game
-                        .acquisition_terms(*competitor_index)
-                        .expect("competitor exists for acquisition quote");
+                    let Some(terms) = game.acquisition_terms(*competitor_index) else {
+                        return vec![format!(
+                            "{} No rival has that number.",
+                            styled(BOLD_RED, "Quote:")
+                        )];
+                    };
                     let mut lines = vec![format!(
                         "{} buy {} for {}; net cost {}, assumes debt {}, adds {:.0} customers.",
                         muted("Quote:"),

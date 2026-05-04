@@ -1,3 +1,9 @@
+//! Contrarian poor-instinct strategy.
+//!
+//! `costanza` identifies the kind of late, under-capitalized, under-maintained
+//! play that a weak player might attempt, then does the opposite: finance early,
+//! build before constraints bind, maintain first, and avoid panic pricing.
+
 use crate::sim::{
     MAX_PUBLIC_RATE_PREMIUM_CENTS, REVIEW_MIN_RATE_SUPPORT_RATIO, public_rate_tolerance,
 };

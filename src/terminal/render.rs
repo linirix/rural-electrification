@@ -31,7 +31,7 @@ pub(super) fn competitor_rank(game: &Game, competitor_index: usize) -> Option<us
 pub(super) fn cheapest_diligenced_competitor(game: &Game) -> Option<(usize, f64)> {
     (0..game.competitors.len())
         .filter(|index| game.has_diligence(*index))
-        .map(|index| (index, game.acquisition_price(index)))
+        .filter_map(|index| game.acquisition_price(index).map(|price| (index, price)))
         .min_by(|left, right| left.1.total_cmp(&right.1))
 }
 

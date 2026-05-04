@@ -1,3 +1,9 @@
+//! Passive baseline strategy.
+//!
+//! `naive` represents a cautious first-time player who keeps the lights on,
+//! reacts late to capacity problems, and uses only light marketing. It should
+//! usually lose, but it should lose cleanly rather than by crashing the sim.
+
 use crate::{
     DISTRIBUTION_PROJECT_CAPACITY, Decision, GENERATION_PROJECT_CAPACITY_MWH, Game,
     distribution_project_cost, generation_project_cost,

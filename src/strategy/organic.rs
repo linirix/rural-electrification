@@ -1,3 +1,10 @@
+//! Disciplined growth strategies.
+//!
+//! This module holds the organic, balanced, and regional policies. Organic is
+//! the low-variance proof that pricing, service quality, and capital projects
+//! can win without deals. Balanced layers opportunistic acquisitions on top.
+//! Regional extends that operating posture into the post-review Y10 mandate.
+
 use crate::sim::{
     MAX_PUBLIC_RATE_PREMIUM_CENTS, REGIONAL_MANDATE_EXPANSION_TARGET,
     REGIONAL_MANDATE_LEVERAGE_LIMIT, REGIONAL_MANDATE_RELIABILITY_TARGET,

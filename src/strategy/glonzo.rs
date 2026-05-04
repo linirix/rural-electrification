@@ -1,3 +1,9 @@
+//! Randomized chaos strategy.
+//!
+//! `glonzo` is a bounded fuzzer for the game loop. It chooses visible actions
+//! almost at random while clamping to available resources, which makes it useful
+//! for finding panics, degenerate exploits, and unexpected survival paths.
+
 use crate::sim::{
     MAX_DISTRIBUTION_PROJECT_CUSTOMERS, MAX_GENERATION_PROJECT_MWH, MAX_PUBLIC_RATE_PREMIUM_CENTS,
     MIN_DISTRIBUTION_PROJECT_CUSTOMERS, MIN_GENERATION_PROJECT_MWH, public_rate_tolerance,
