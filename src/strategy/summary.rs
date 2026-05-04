@@ -31,6 +31,9 @@ pub struct StrategySummary {
     pub finish_debt: f64,
     pub finish_customers: f64,
     pub finish_reliability: f64,
+    pub finish_wealth: f64,
+    pub finish_dividends: f64,
+    pub finish_ownership: f64,
     pub peak_acquisition_stress: f64,
     pub peak_acquisition_stress_range: Range,
     pub acquisition_stress_defeats: u32,
@@ -63,6 +66,30 @@ impl StrategySummary {
             0.0
         } else {
             self.peak_acquisition_stress / self.runs as f64
+        }
+    }
+
+    pub fn average_finish_wealth(&self) -> f64 {
+        if self.runs == 0 {
+            0.0
+        } else {
+            self.finish_wealth / self.runs as f64
+        }
+    }
+
+    pub fn average_finish_ownership(&self) -> f64 {
+        if self.runs == 0 {
+            0.0
+        } else {
+            self.finish_ownership / self.runs as f64
+        }
+    }
+
+    pub fn average_finish_dividends(&self) -> f64 {
+        if self.runs == 0 {
+            0.0
+        } else {
+            self.finish_dividends / self.runs as f64
         }
     }
 

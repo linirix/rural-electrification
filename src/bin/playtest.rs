@@ -166,14 +166,17 @@ fn print_summary(
         summary.start_headroom_range.max
     );
     println!(
-        "avg finish: share {:.1}% (range {:.1}-{:.1}%), customers {:.0}, cash {}, debt {}, reliability {:.0}%",
+        "avg finish: share {:.1}% (range {:.1}-{:.1}%), customers {:.0}, cash {}, debt {}, reliability {:.0}%, founder wealth {}, dividends {}, ownership {:.1}%",
         summary.average_finish_share() * 100.0,
         summary.finish_share_range.min * 100.0,
         summary.finish_share_range.max * 100.0,
         summary.finish_customers / runs,
         money(summary.finish_cash / runs),
         money(summary.finish_debt / runs),
-        summary.finish_reliability / runs * 100.0
+        summary.finish_reliability / runs * 100.0,
+        money(summary.average_finish_wealth()),
+        money(summary.average_finish_dividends()),
+        summary.average_finish_ownership() * 100.0
     );
     println!(
         "finish share distribution: {}",
@@ -275,6 +278,19 @@ fn parse_strategy(raw: &str) -> Option<StrategySelection> {
         "landshark" | "optimizer" | "ev" => Some(StrategySelection::One(Strategy::Landshark)),
         "costanza" | "opposite" | "contrarian" => Some(StrategySelection::One(Strategy::Costanza)),
         "glonzo" | "random" | "chaos" => Some(StrategySelection::One(Strategy::Glonzo)),
+        "dividend" | "dividends" | "income" => Some(StrategySelection::One(Strategy::Dividend)),
+        "manager" | "managers" | "autopilot" => Some(StrategySelection::One(Strategy::Manager)),
+        "austerity" | "bootstrapped" | "cashfunded" => {
+            Some(StrategySelection::One(Strategy::Austerity))
+        }
+        "junkbond" | "junk" | "leveredorganic" => Some(StrategySelection::One(Strategy::Junkbond)),
+        "ratehawk" | "pricing" | "highrate" => Some(StrategySelection::One(Strategy::Ratehawk)),
+        "discountrunner" | "discount" | "lowrate" => {
+            Some(StrategySelection::One(Strategy::Discountrunner))
+        }
+        "distressedbuyer" | "distressed" | "distress" => {
+            Some(StrategySelection::One(Strategy::Distressedbuyer))
+        }
         _ => None,
     }
 }

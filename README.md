@@ -30,46 +30,46 @@ Set `NO_COLOR=1` or use `TERM=dumb` to disable ANSI color.
 
 Download the archive for your platform from the latest GitHub Release:
 
-- macOS Apple Silicon: `electrification-0.1.3-macos-arm64.tar.gz`
-- Linux x64: `electrification-0.1.3-linux-x64.tar.gz`
-- Windows x64: `electrification-0.1.3-windows-x64.tar.gz`
+- macOS Apple Silicon: `electrification-0.1.4-macos-arm64.tar.gz`
+- Linux x64: `electrification-0.1.4-linux-x64.tar.gz`
+- Windows x64: `electrification-0.1.4-windows-x64.tar.gz`
 
 Each archive has a matching `.sha256` checksum file. To verify:
 
 ```sh
-shasum -a 256 -c electrification-0.1.3-macos-arm64.tar.gz.sha256
-sha256sum -c electrification-0.1.3-linux-x64.tar.gz.sha256
+shasum -a 256 -c electrification-0.1.4-macos-arm64.tar.gz.sha256
+sha256sum -c electrification-0.1.4-linux-x64.tar.gz.sha256
 ```
 
 On macOS or Linux:
 
 ```sh
-tar -xzf electrification-0.1.3-macos-arm64.tar.gz
-cd electrification-0.1.3-macos-arm64
+tar -xzf electrification-0.1.4-macos-arm64.tar.gz
+cd electrification-0.1.4-macos-arm64
 ./bin/electrification
 ```
 
 Use the Linux archive and directory name on Linux:
 
 ```sh
-tar -xzf electrification-0.1.3-linux-x64.tar.gz
-cd electrification-0.1.3-linux-x64
+tar -xzf electrification-0.1.4-linux-x64.tar.gz
+cd electrification-0.1.4-linux-x64
 ./bin/electrification
 ```
 
 On Windows PowerShell:
 
 ```powershell
-tar -xzf electrification-0.1.3-windows-x64.tar.gz
-cd electrification-0.1.3-windows-x64
+tar -xzf electrification-0.1.4-windows-x64.tar.gz
+cd electrification-0.1.4-windows-x64
 .\bin\electrification.exe
 ```
 
 To verify the Windows checksum, compare the hash printed by PowerShell with the value in the `.sha256` file:
 
 ```powershell
-Get-FileHash electrification-0.1.3-windows-x64.tar.gz -Algorithm SHA256
-Get-Content electrification-0.1.3-windows-x64.tar.gz.sha256
+Get-FileHash electrification-0.1.4-windows-x64.tar.gz -Algorithm SHA256
+Get-Content electrification-0.1.4-windows-x64.tar.gz.sha256
 ```
 
 If macOS blocks the downloaded binary, remove the quarantine attribute:
@@ -186,6 +186,8 @@ cargo run --bin playtest -- --strategy organic --seeds 500
 cargo run --bin playtest -- --strategy regional --seeds 500
 cargo run --bin playtest -- --strategy raider --seeds 500
 cargo run --bin playtest -- --strategy glonzo --seeds 500
+cargo run --bin playtest -- --strategy dividend --seeds 500
+cargo run --bin playtest -- --strategy manager --seeds 500
 cargo run --bin playtest -- --all-strategies --seeds 500
 cargo run --bin playtest -- --sweep-starts --all-strategies --seeds 1000
 cargo run --bin stress_scan -- --strategy raider --seeds 2000
@@ -193,7 +195,7 @@ cargo run --bin stress_scan -- --strategy raider --seeds 2000
 
 Useful playtest flags:
 
-- `--strategy naive|organic|balanced|regional|ma|raider|landshark|costanza|glonzo|all`
+- `--strategy naive|organic|balanced|regional|ma|raider|landshark|costanza|glonzo|dividend|manager|austerity|junkbond|ratehawk|discountrunner|distressedbuyer|all`
 - `--all-strategies`
 - `--seeds <count>`
 - `--variance <amplitude>`
@@ -219,7 +221,7 @@ Build a distributable package for the current machine:
 
 ```sh
 ./scripts/package_release.sh
-./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.3-*.tar.gz | head -n 1)"
+./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.4-*.tar.gz | head -n 1)"
 ```
 
 The package includes:
@@ -232,18 +234,18 @@ The package includes:
 
 GitHub Actions are configured for:
 
-- `CI`: format, clippy, release tests, and a 500-seed all-strategy smoke run on pushes and pull requests.
+- `CI`: format, clippy, release tests, and a 1000-seed all-strategy smoke run on pushes and pull requests.
 - `Release`: package and smoke-test macOS, Linux, and Windows tarballs on `v*` tags or manual dispatch.
 
 On a `v*` tag push, the release workflow also creates or updates the matching GitHub Release and uploads all platform tarballs as release assets.
 
-Suggested first release flow:
+Suggested release flow:
 
 ```sh
 git status
 ./scripts/package_release.sh
-./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.3-*.tar.gz | head -n 1)"
-git tag v0.1.3
+./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.4-*.tar.gz | head -n 1)"
+git tag v0.1.4
 git push origin main --tags
 ```
 

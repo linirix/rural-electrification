@@ -1,4 +1,5 @@
 mod costanza;
+mod diagnostic;
 mod glonzo;
 mod landshark;
 mod ma;
@@ -10,6 +11,10 @@ mod summary;
 
 use crate::{ACQUISITION_STRESS_STRAINED, Game, InitialVariance, OutcomeKind, QuarterReport};
 use costanza::costanza_policy;
+use diagnostic::{
+    austerity_policy, discountrunner_policy, distressedbuyer_policy, dividend_policy,
+    junkbond_policy, manager_policy, ratehawk_policy,
+};
 use glonzo::{GlonzoRng, glonzo_policy};
 use landshark::landshark_policy;
 use ma::ma_policy;
@@ -30,10 +35,17 @@ pub enum Strategy {
     Landshark,
     Costanza,
     Glonzo,
+    Dividend,
+    Manager,
+    Austerity,
+    Junkbond,
+    Ratehawk,
+    Discountrunner,
+    Distressedbuyer,
 }
 
 impl Strategy {
-    pub fn all() -> [Strategy; 9] {
+    pub fn all() -> [Strategy; 16] {
         [
             Strategy::Naive,
             Strategy::Organic,
@@ -44,6 +56,13 @@ impl Strategy {
             Strategy::Landshark,
             Strategy::Costanza,
             Strategy::Glonzo,
+            Strategy::Dividend,
+            Strategy::Manager,
+            Strategy::Austerity,
+            Strategy::Junkbond,
+            Strategy::Ratehawk,
+            Strategy::Discountrunner,
+            Strategy::Distressedbuyer,
         ]
     }
 
@@ -58,6 +77,13 @@ impl Strategy {
             Strategy::Landshark => "landshark",
             Strategy::Costanza => "costanza",
             Strategy::Glonzo => "glonzo",
+            Strategy::Dividend => "dividend",
+            Strategy::Manager => "manager",
+            Strategy::Austerity => "austerity",
+            Strategy::Junkbond => "junkbond",
+            Strategy::Ratehawk => "ratehawk",
+            Strategy::Discountrunner => "discountrunner",
+            Strategy::Distressedbuyer => "distressedbuyer",
         }
     }
 
@@ -161,6 +187,9 @@ where
         summary.finish_debt += game.player.debt;
         summary.finish_customers += game.player.customers;
         summary.finish_reliability += game.player.reliability;
+        summary.finish_wealth += game.player_wealth();
+        summary.finish_dividends += game.player_dividends_received;
+        summary.finish_ownership += game.player_ownership();
         summary.finish_share_range.observe(finish_share);
         summary.finish_share_histogram.observe(finish_share);
     }
@@ -178,6 +207,13 @@ fn run_policy(strategy: Strategy, game: &mut Game, state: &mut StrategyState) {
         Strategy::Raider => raider_policy(game),
         Strategy::Landshark => landshark_policy(game),
         Strategy::Costanza => costanza_policy(game),
+        Strategy::Dividend => dividend_policy(game),
+        Strategy::Manager => manager_policy(game),
+        Strategy::Austerity => austerity_policy(game),
+        Strategy::Junkbond => junkbond_policy(game),
+        Strategy::Ratehawk => ratehawk_policy(game),
+        Strategy::Discountrunner => discountrunner_policy(game),
+        Strategy::Distressedbuyer => distressedbuyer_policy(game),
         Strategy::Glonzo => {
             if let StrategyState::Glonzo(rng) = state {
                 glonzo_policy(game, rng);

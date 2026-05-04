@@ -96,6 +96,13 @@ fn parse_strategy(raw: &str) -> Option<Strategy> {
         "landshark" | "optimizer" | "ev" => Some(Strategy::Landshark),
         "costanza" | "opposite" | "contrarian" => Some(Strategy::Costanza),
         "glonzo" | "random" | "chaos" => Some(Strategy::Glonzo),
+        "dividend" | "dividends" | "income" => Some(Strategy::Dividend),
+        "manager" | "managers" | "autopilot" => Some(Strategy::Manager),
+        "austerity" | "bootstrapped" | "cashfunded" => Some(Strategy::Austerity),
+        "junkbond" | "junk" | "leveredorganic" => Some(Strategy::Junkbond),
+        "ratehawk" | "pricing" | "highrate" => Some(Strategy::Ratehawk),
+        "discountrunner" | "discount" | "lowrate" => Some(Strategy::Discountrunner),
+        "distressedbuyer" | "distressed" | "distress" => Some(Strategy::Distressedbuyer),
         _ => None,
     }
 }

@@ -59,10 +59,10 @@ cp "$ROOT/Cargo.lock" "$STAGE_DIR/"
     fi
     printf '\nDeveloper balance tools included:\n'
     if [[ -n "$EXE_SUFFIX" ]]; then
-        printf '  .\\bin\\playtest.exe --all-strategies --seeds 500\n'
+        printf '  .\\bin\\playtest.exe --all-strategies --seeds 1000\n'
         printf '  .\\bin\\stress_scan.exe --seeds 10000\n'
     else
-        printf '  ./bin/playtest --all-strategies --seeds 500\n'
+        printf '  ./bin/playtest --all-strategies --seeds 1000\n'
         printf '  ./bin/stress_scan --seeds 10000\n'
     fi
 } > "$STAGE_DIR/RELEASE.txt"

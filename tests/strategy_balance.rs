@@ -119,6 +119,39 @@ fn test_player_personalities_exercise_distinct_edges() {
 }
 
 #[test]
+fn diagnostic_strategy_bots_run_to_completion() {
+    let cases = [
+        Strategy::Dividend,
+        Strategy::Manager,
+        Strategy::Austerity,
+        Strategy::Junkbond,
+        Strategy::Ratehawk,
+        Strategy::Discountrunner,
+        Strategy::Distressedbuyer,
+    ];
+
+    for strategy in cases {
+        let summary = run_strategy_batch(120, InitialVariance::default(), strategy);
+        assert_eq!(
+            summary.victories + summary.defeats(),
+            120,
+            "{} should always end in a classified outcome",
+            strategy.name()
+        );
+        assert!(
+            summary.average_finish_share().is_finite(),
+            "{} should produce finite share metrics",
+            strategy.name()
+        );
+        assert!(
+            summary.average_finish_wealth().is_finite(),
+            "{} should produce finite founder wealth metrics",
+            strategy.name()
+        );
+    }
+}
+
+#[test]
 fn glonzo_uses_policy_seed_even_from_fixed_starts() {
     let summary = run_strategy_batch(120, InitialVariance::fixed(), Strategy::Glonzo);
     assert!(
