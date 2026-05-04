@@ -7,6 +7,20 @@ Seed notes use two values:
 
 Use `game seed` if adding a curated release seed picker that calls `Game::with_seed`.
 
+## Recommended First Game
+
+For a forgiving first campaign, use playtest seed `106`, which maps to game seed
+`106318`:
+
+```sh
+./bin/electrification --seed 106318
+./bin/electrification --playtest-seed 106
+```
+
+This seed gives a new player room to learn the dashboard and review gates
+without removing the core rate, reliability, capital, and rival-pressure
+tradeoffs.
+
 ## 2026-04-27 Stress Pass
 
 Coverage:

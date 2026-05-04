@@ -1,12 +1,123 @@
 # Electrification
 
-A terminal-first economic and management simulator about running a small electric utility in a newly expanding power market.
+Electrification is a terminal-first strategy game about turning a fragile rural
+electric company into a regional power. You set rates, build generation and
+lines, borrow, issue stock, hire managers, pursue acquisitions, defend
+reliability, and answer to public reviews that care about more than market
+share.
 
-The current game is a local-market campaign. You raise equity, borrow, build generation, extend distribution capacity, adjust rates, market for customers, maintain reliability, investigate rivals, and acquire competitors while trying to build a solvent, reliable, dominant utility before the formal market review.
+The game is local, deterministic, and text-driven: every quarter turns finance,
+rates, reliability, reputation, customer churn, rivals, and public tolerance
+into a new management problem. Organic growth is reliable but close-run; M&A
+can be powerful but brittle; balanced play is usually best.
 
 Although the setting implies the early electrification era, the game intentionally avoids period-piece presentation. The core decisions are timeless management tradeoffs around dollars, watts, customers, reliability, rates, capital structure, and market power.
 
-## Run
+```text
+more corgi's rural electrification!
+
+Year 3 Q2> preview borrow 50000 diligence 2 buy 2
+Year 3 Q2> maint 8000
+Year 3 Q2> next
+```
+
+## Download
+
+Download the latest platform archive from
+[GitHub Releases](https://github.com/linirix/rural-electrification/releases/latest):
+
+- macOS Apple Silicon: `electrification-0.1.5-macos-arm64.tar.gz`
+- Linux x64: `electrification-0.1.5-linux-x64.tar.gz`
+- Windows x64: `electrification-0.1.5-windows-x64.tar.gz`
+
+Each archive has a matching `.sha256` checksum file.
+
+## Quick Start
+
+On macOS:
+
+```sh
+tar -xzf electrification-0.1.5-macos-arm64.tar.gz
+cd electrification-0.1.5-macos-arm64
+./bin/electrification
+```
+
+On Linux:
+
+```sh
+tar -xzf electrification-0.1.5-linux-x64.tar.gz
+cd electrification-0.1.5-linux-x64
+./bin/electrification
+```
+
+On Windows PowerShell:
+
+```powershell
+tar -xzf electrification-0.1.5-windows-x64.tar.gz
+cd electrification-0.1.5-windows-x64
+.\bin\electrification.exe
+```
+
+For a forgiving first campaign, start the curated release seed:
+
+```sh
+./bin/electrification --seed 106318
+```
+
+The same game can also be started from the playtest seed noted in
+`PLAYTEST_SEEDS.md`:
+
+```sh
+./bin/electrification --playtest-seed 106
+```
+
+Useful launch flags:
+
+```text
+--seed <game-seed>          start a deterministic game seed
+--playtest-seed <seed>      start the game seed used by a playtest seed
+--sandbox                   disable board review constraints
+```
+
+## Verify Downloads
+
+On macOS:
+
+```sh
+shasum -a 256 -c electrification-0.1.5-macos-arm64.tar.gz.sha256
+```
+
+On Linux:
+
+```sh
+sha256sum -c electrification-0.1.5-linux-x64.tar.gz.sha256
+```
+
+On Windows PowerShell, compare the printed hash with the `.sha256` file:
+
+```powershell
+Get-FileHash electrification-0.1.5-windows-x64.tar.gz -Algorithm SHA256
+Get-Content electrification-0.1.5-windows-x64.tar.gz.sha256
+```
+
+If macOS blocks the downloaded binary, remove the quarantine attribute from the
+extracted directory:
+
+```sh
+xattr -dr com.apple.quarantine .
+```
+
+## Terminal Notes And Known Issues
+
+- Use a modern UTF-8 terminal with ANSI color support: Terminal.app, iTerm2,
+  GNOME Terminal, Konsole, or Windows Terminal.
+- A width of 120 columns or more gives the dashboard its intended layout.
+- If colors or box drawing are hard to read, run with `NO_COLOR=1`.
+- On Windows, prefer Windows Terminal over the legacy console.
+- Save files live under `~/.electrification/` by default.
+- The game is intentionally terminal-first; there is no graphical frontend.
+
+## Run From Source
 
 ```sh
 cargo run
@@ -25,65 +136,6 @@ cargo run --release --bin electrification
 ```
 
 Set `NO_COLOR=1` or use `TERM=dumb` to disable ANSI color.
-
-## Install Release Binaries
-
-Download the archive for your platform from the latest GitHub Release:
-
-- macOS Apple Silicon: `electrification-0.1.4-macos-arm64.tar.gz`
-- Linux x64: `electrification-0.1.4-linux-x64.tar.gz`
-- Windows x64: `electrification-0.1.4-windows-x64.tar.gz`
-
-Each archive has a matching `.sha256` checksum file. To verify:
-
-```sh
-shasum -a 256 -c electrification-0.1.4-macos-arm64.tar.gz.sha256
-sha256sum -c electrification-0.1.4-linux-x64.tar.gz.sha256
-```
-
-On macOS or Linux:
-
-```sh
-tar -xzf electrification-0.1.4-macos-arm64.tar.gz
-cd electrification-0.1.4-macos-arm64
-./bin/electrification
-```
-
-Use the Linux archive and directory name on Linux:
-
-```sh
-tar -xzf electrification-0.1.4-linux-x64.tar.gz
-cd electrification-0.1.4-linux-x64
-./bin/electrification
-```
-
-On Windows PowerShell:
-
-```powershell
-tar -xzf electrification-0.1.4-windows-x64.tar.gz
-cd electrification-0.1.4-windows-x64
-.\bin\electrification.exe
-```
-
-To verify the Windows checksum, compare the hash printed by PowerShell with the value in the `.sha256` file:
-
-```powershell
-Get-FileHash electrification-0.1.4-windows-x64.tar.gz -Algorithm SHA256
-Get-Content electrification-0.1.4-windows-x64.tar.gz.sha256
-```
-
-If macOS blocks the downloaded binary, remove the quarantine attribute:
-
-```sh
-xattr -dr com.apple.quarantine bin
-```
-
-Known good terminal settings:
-
-- Use a modern UTF-8 terminal with ANSI color support: Terminal.app, iTerm2, GNOME Terminal, Konsole, or Windows Terminal.
-- A width of 120 columns or more gives the dashboard its intended layout.
-- If colors or box drawing are hard to read, run with `NO_COLOR=1`.
-- On Windows, prefer Windows Terminal over the legacy console.
 
 ## Core Commands
 
@@ -221,7 +273,7 @@ Build a distributable package for the current machine:
 
 ```sh
 ./scripts/package_release.sh
-./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.4-*.tar.gz | head -n 1)"
+./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.5-*.tar.gz | head -n 1)"
 ```
 
 The package includes:
@@ -229,7 +281,7 @@ The package includes:
 - `bin/electrification` for the interactive game
 - `bin/playtest` for balance sweeps
 - `bin/stress_scan` for edge-case scanning
-- `README.md`, `PLAYTEST_SEEDS.md`, `Cargo.lock`, and `RELEASE.txt`
+- `README.md`, `RELEASE_NOTES.md`, `PLAYTEST_SEEDS.md`, `Cargo.lock`, and `RELEASE.txt`
 - a matching `.sha256` checksum file for the archive
 
 GitHub Actions are configured for:
@@ -244,8 +296,8 @@ Suggested release flow:
 ```sh
 git status
 ./scripts/package_release.sh
-./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.4-*.tar.gz | head -n 1)"
-git tag v0.1.4
+./scripts/smoke_release_bundle.sh "$(ls -t dist/electrification-0.1.5-*.tar.gz | head -n 1)"
+git tag v0.1.5
 git push origin main --tags
 ```
 

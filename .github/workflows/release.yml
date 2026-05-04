@@ -60,12 +60,19 @@ jobs:
             echo "expected one checksum per release package" >&2
             exit 1
           fi
+          notes_args=(--notes "Release $TAG_NAME")
+          if [[ -f RELEASE_NOTES.md ]]; then
+            notes_args=(--notes-file RELEASE_NOTES.md)
+          fi
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" \
+              --title "Electrification $TAG_NAME" \
+              "${notes_args[@]}"
             gh release upload "$TAG_NAME" "${files[@]}" --clobber
           else
             gh release create "$TAG_NAME" "${files[@]}" \
               --title "Electrification $TAG_NAME" \
-              --notes "Release $TAG_NAME" \
+              "${notes_args[@]}" \
               --verify-tag
           fi

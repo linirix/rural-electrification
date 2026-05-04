@@ -126,7 +126,11 @@ fn acquisition_integration_burden_tone(value: f64) -> &'static str {
 }
 
 pub fn run() -> io::Result<()> {
-    let mut game = Game::new();
+    run_with_game(Game::new())
+}
+
+pub fn run_with_game(game: Game) -> io::Result<()> {
+    let mut game = game;
     let mut current_screen = TerminalScreen::Start;
     let mut screen_entry = ScreenEntry::Cycle;
     let mut pending_confirmation: Option<PendingConfirmation> = None;

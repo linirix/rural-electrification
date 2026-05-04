@@ -46,6 +46,9 @@ copy_binary stress_scan
 cp "$ROOT/README.md" "$STAGE_DIR/"
 cp "$ROOT/PLAYTEST_SEEDS.md" "$STAGE_DIR/"
 cp "$ROOT/Cargo.lock" "$STAGE_DIR/"
+if [[ -f "$ROOT/RELEASE_NOTES.md" ]]; then
+    cp "$ROOT/RELEASE_NOTES.md" "$STAGE_DIR/"
+fi
 
 {
     printf 'Electrification %s\n' "$VERSION"
@@ -56,6 +59,12 @@ cp "$ROOT/Cargo.lock" "$STAGE_DIR/"
         printf '  .\\bin\\electrification.exe\n'
     else
         printf '  ./bin/electrification\n'
+    fi
+    printf '\nRecommended first campaign:\n'
+    if [[ -n "$EXE_SUFFIX" ]]; then
+        printf '  .\\bin\\electrification.exe --seed 106318\n'
+    else
+        printf '  ./bin/electrification --seed 106318\n'
     fi
     printf '\nDeveloper balance tools included:\n'
     if [[ -n "$EXE_SUFFIX" ]]; then

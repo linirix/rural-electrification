@@ -61,9 +61,16 @@ if [[ ! -f "$PACKAGE_DIR/README.md" || ! -f "$PACKAGE_DIR/RELEASE.txt" ]]; then
     exit 1
 fi
 
-printf 'quit\n' | NO_COLOR=1 TERM=dumb "$GAME_BIN" > "$TMP_DIR/game.out"
+mkdir -p "$TMP_DIR/home"
+printf '\nsave smoke\nload smoke\nquit\n' | HOME="$TMP_DIR/home" NO_COLOR=1 TERM=dumb "$GAME_BIN" > "$TMP_DIR/game.out"
 grep -q "more corgi's rural electrification" "$TMP_DIR/game.out"
+grep -q "Saved game" "$TMP_DIR/game.out"
+grep -q "Loaded game" "$TMP_DIR/game.out"
 grep -q "Summary:" "$TMP_DIR/game.out"
+
+printf 'quit\n' | NO_COLOR=1 TERM=dumb "$GAME_BIN" --seed 106318 > "$TMP_DIR/seed.out"
+grep -q "more corgi's rural electrification" "$TMP_DIR/seed.out"
+grep -q "Summary:" "$TMP_DIR/seed.out"
 
 "$PLAYTEST_BIN" --strategy organic --seeds 5 > "$TMP_DIR/playtest.out"
 grep -q "strategy: organic" "$TMP_DIR/playtest.out"
