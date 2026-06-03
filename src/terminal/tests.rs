@@ -1034,6 +1034,26 @@ fn hire_and_fire_manager_commands_update_targets() {
 }
 
 #[test]
+fn hire_marketing_target_is_taken_literally() {
+    let mut game = Game::with_seed(104);
+
+    // A bare number is a literal reputation target (0-100), not a fraction that
+    // gets rescaled to 100. Previously "hire marketing 1" silently became 100.
+    match handle_command(&mut game, "hire marketing 1") {
+        CommandResult::Continue(message) => assert!(message.contains("marketing manager")),
+        _ => panic!("hire marketing 1 should apply"),
+    }
+    assert_eq!(game.marketing_manager_target, Some(1.0));
+
+    // A trailing percent is accepted but does not rescale: "75%" means 75.
+    match handle_command(&mut game, "hire marketing 75%") {
+        CommandResult::Continue(message) => assert!(message.contains("marketing manager")),
+        _ => panic!("hire marketing 75% should apply"),
+    }
+    assert_eq!(game.marketing_manager_target, Some(75.0));
+}
+
+#[test]
 fn issue_single_word_runs_stock_issuance() {
     let mut game = Game::with_seed(109);
     let starting_cash = game.player.cash;
@@ -1153,6 +1173,100 @@ fn dangerous_commands_request_interactive_confirmation() {
     );
     assert!(pending.lines.iter().any(|line| line.contains("Type 'y'")));
     assert!(confirmation_for_command(&game, "marketing 4000").is_none());
+}
+
+#[test]
+fn command_dispatch_and_recognition_stay_in_sync() {
+    // is_known_command must accept every verb handle_command dispatches and
+    // reject gibberish, so the confirmation flow cancels-and-runs real commands
+    // typed at a y/n prompt but still re-prompts on noise.
+    let known = [
+        "help",
+        "?",
+        "status",
+        "s",
+        "next",
+        "n",
+        "end",
+        "save",
+        "load",
+        "continue",
+        "resume",
+        "sandbox",
+        "quit",
+        "exit",
+        "preview",
+        "quote",
+        "plan",
+        "build",
+        "marketing",
+        "market",
+        "advertise",
+        "issue",
+        "stock",
+        "equity",
+        "buyback",
+        "repurchase",
+        "dividend",
+        "dividends",
+        "debt",
+        "borrow",
+        "loan",
+        "repay",
+        "paydown",
+        "buy",
+        "acquire",
+        "diligence",
+        "dilig",
+        "inspect",
+        "expand",
+        "adjacent",
+        "territory",
+        "rate",
+        "maintenance",
+        "maint",
+        "maintain",
+        "reliability",
+        "hire",
+        "fire",
+        "competitors",
+        "rivals",
+        "report",
+        "reports",
+        "result",
+        "results",
+        "events",
+        "board",
+        "goals",
+        "objectives",
+        "milestones",
+        "region",
+        "regional",
+    ];
+    for verb in known {
+        assert!(is_known_command(verb), "{verb} should be recognized");
+        assert!(
+            is_known_command(&format!("{verb} 3")),
+            "{verb} with an argument should be recognized"
+        );
+    }
+    assert!(!is_known_command(""));
+    assert!(!is_known_command("   "));
+    assert!(!is_known_command("xyzzy"));
+    // A near-miss for "yes" must not be treated as a command and cancel a deal.
+    assert!(!is_known_command("ye"));
+
+    // Anchor the two lists: a side-effect-free known verb dispatches normally,
+    // while gibberish lands on handle_command's Unknown arm.
+    let mut game = Game::with_seed(7);
+    assert!(matches!(
+        handle_command(&mut game, "status"),
+        CommandResult::ShowStatus
+    ));
+    match handle_command(&mut game, "xyzzy") {
+        CommandResult::Continue(message) => assert!(message.contains("Unknown command")),
+        _ => panic!("gibberish should be an unknown command"),
+    }
 }
 
 #[test]

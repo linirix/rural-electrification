@@ -32,7 +32,7 @@ mod start;
 #[cfg(test)]
 mod tests;
 
-use command::{apply, handle_command, parse_decision};
+use command::{apply, handle_command, is_known_command, parse_decision};
 use help::print_help_screen;
 use outcomes::{print_outcome, print_quit_summary};
 use render::{clear_screen, print_box, styled};
@@ -157,6 +157,11 @@ pub fn run_with_game(game: Game) -> io::Result<()> {
             continue;
         }
 
+        // Set when a recognized command typed at a y/n prompt cancels the
+        // pending action and runs in its place, so the supersession can be
+        // surfaced once the new command has rendered.
+        let mut superseded_pending: Option<String> = None;
+
         if let Some(pending) = pending_confirmation.take() {
             match confirmation_response(command) {
                 ConfirmationResponse::Confirm => {
@@ -174,6 +179,14 @@ pub fn run_with_game(game: Game) -> io::Result<()> {
                     screen_entry = ScreenEntry::Cycle;
                     print_notice(&format!("Cancelled '{}'.", pending.command));
                     continue;
+                }
+                ConfirmationResponse::Other if is_known_command(command) => {
+                    // A recognized command typed at the prompt supersedes the
+                    // pending action: cancel it and fall through to run the new
+                    // command (which raises its own confirmation if it is itself
+                    // high-impact). This avoids trapping the player in a modal
+                    // that silently swallows every non-y/n input.
+                    superseded_pending = Some(pending.command.clone());
                 }
                 ConfirmationResponse::Other => {
                     clear_screen();
@@ -198,12 +211,20 @@ pub fn run_with_game(game: Game) -> io::Result<()> {
             print_status(&game);
             println!();
             print_box("Confirm Action", &pending.lines);
+            if let Some(name) = &superseded_pending {
+                print_notice(&format!("Cancelled '{name}' for this action."));
+            }
             pending_confirmation = Some(pending);
             continue;
         }
 
         let result = handle_command(&mut game, command);
-        if render_command_result(&game, result, &mut current_screen, &mut screen_entry) {
+        let should_quit =
+            render_command_result(&game, result, &mut current_screen, &mut screen_entry);
+        if let Some(name) = &superseded_pending {
+            print_notice(&format!("Cancelled '{name}' to run '{command}'."));
+        }
+        if should_quit {
             break;
         }
     }

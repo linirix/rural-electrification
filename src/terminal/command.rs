@@ -71,6 +71,83 @@ pub(super) fn handle_command(game: &mut Game, command: &str) -> CommandResult {
     }
 }
 
+/// Whether `command`'s leading verb is one the game recognizes.
+///
+/// This mirrors the verb arms of [`handle_command`]; the two must stay in sync
+/// (the `command_dispatch_and_recognition_stay_in_sync` test guards that). It
+/// lets the confirmation flow treat a recognized command typed at a y/n prompt
+/// as "cancel the pending action and run this instead," while leaving genuine
+/// gibberish to re-prompt.
+pub(super) fn is_known_command(command: &str) -> bool {
+    let Some(first) = command.split_whitespace().next() else {
+        return false;
+    };
+    matches!(
+        first,
+        "help"
+            | "?"
+            | "status"
+            | "s"
+            | "next"
+            | "n"
+            | "end"
+            | "save"
+            | "load"
+            | "continue"
+            | "resume"
+            | "sandbox"
+            | "quit"
+            | "exit"
+            | "preview"
+            | "quote"
+            | "plan"
+            | "build"
+            | "marketing"
+            | "market"
+            | "advertise"
+            | "issue"
+            | "stock"
+            | "equity"
+            | "buyback"
+            | "repurchase"
+            | "dividend"
+            | "dividends"
+            | "debt"
+            | "borrow"
+            | "loan"
+            | "repay"
+            | "paydown"
+            | "buy"
+            | "acquire"
+            | "diligence"
+            | "dilig"
+            | "inspect"
+            | "expand"
+            | "adjacent"
+            | "territory"
+            | "rate"
+            | "maintenance"
+            | "maint"
+            | "maintain"
+            | "reliability"
+            | "hire"
+            | "fire"
+            | "competitors"
+            | "rivals"
+            | "report"
+            | "reports"
+            | "result"
+            | "results"
+            | "events"
+            | "board"
+            | "goals"
+            | "objectives"
+            | "milestones"
+            | "region"
+            | "regional"
+    )
+}
+
 pub(super) fn apply(game: &mut Game, decision: Decision) -> CommandResult {
     let preview_hint = preview_hint_for_direct_decision(&decision);
     match game.apply_decision(decision) {
@@ -436,18 +513,15 @@ fn manager_reputation_target(value: Option<&str>) -> Result<f64, String> {
         return Ok(DEFAULT_MARKETING_MANAGER_TARGET);
     };
     let trimmed = value.trim();
-    let has_percent = trimmed.ends_with('%');
-    let number = trimmed
+    // Reputation is a literal 0-100 scale, so a bare number is taken at face
+    // value. A trailing '%' is accepted and stripped for players who type it,
+    // but it does not rescale: "90" and "90%" both mean a target of 90. (Unlike
+    // the maintenance parser, there is no fraction shorthand here, so "1" means
+    // a reputation of 1, not 100.)
+    let target = trimmed
         .trim_end_matches('%')
         .parse::<f64>()
         .map_err(|_| "Use 'hire marketing 90' or 'hire marketing 90%'.".to_string())?;
-    let target = if has_percent {
-        number
-    } else if number <= 1.0 {
-        number * 100.0
-    } else {
-        number
-    };
     if !(0.0..=100.0).contains(&target) {
         return Err("Marketing manager target must be between 0 and 100.".to_string());
     }

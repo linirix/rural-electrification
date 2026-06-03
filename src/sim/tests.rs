@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn money_formats_negative_values_with_a_leading_sign() {
+    assert_eq!(money(5_000.0), "$5.0k");
+    assert_eq!(money(-5_000.0), "-$5.0k");
+    assert_eq!(money(500.0), "$500");
+    assert_eq!(money(-500.0), "-$500");
+    assert_eq!(money(0.0), "$0");
+    // A sub-dollar negative rounds to zero magnitude and must not show "-$0".
+    assert_eq!(money(-0.3), "$0");
+}
+
+#[test]
+fn next_index_stays_in_range() {
+    let mut rng = Rng::new(42);
+    for _ in 0..1_000 {
+        assert!(rng.next_index(4) < 4);
+        assert!(rng.next_index(7) < 7);
+    }
+    // Degenerate lengths must never index out of bounds.
+    assert_eq!(rng.next_index(1), 0);
+    assert_eq!(rng.next_index(0), 0);
+}
+
+#[test]
 fn stock_issuance_raises_cash_and_dilutes_shares() {
     let mut game = Game::with_seed(1);
     let starting_cash = game.player.cash;
@@ -2491,6 +2514,41 @@ fn frozen_diligence_quote_recalculates_current_financing_context() {
         (updated.post_cash - (game.player.cash - quoted.price + quoted.absorbed_cash)).abs() < 0.01
     );
     assert!((updated.post_debt - (game.player.debt + quoted.assumed_debt)).abs() < 0.01);
+}
+
+#[test]
+fn diligenced_acquisition_locks_price_but_delivers_the_live_company() {
+    let mut game = Game::with_seed(31);
+    game.player.cash = 500_000.0;
+    game.apply_decision(Decision::Diligence {
+        competitor_index: 0,
+    })
+    .unwrap();
+    let quoted = game.acquisition_terms(0).unwrap();
+
+    // The target grows materially during the diligence window.
+    game.competitors[0].customers += 500.0;
+    let live = game.current_acquisition_terms(0).unwrap();
+    let terms = game.acquisition_terms(0).unwrap();
+
+    // The negotiated price and financing stay locked to the quote...
+    assert!((terms.price - quoted.price).abs() < 0.01);
+    assert!((terms.absorbed_cash - quoted.absorbed_cash).abs() < 0.01);
+    assert!((terms.assumed_debt - quoted.assumed_debt).abs() < 0.01);
+    // ...but the delivered customers track the live (grown) company, not the
+    // smaller frozen quote, so they cannot diverge from the rival being removed.
+    assert!((terms.acquired_customers - live.acquired_customers).abs() < 0.01);
+    assert!(terms.acquired_customers > quoted.acquired_customers + 100.0);
+
+    // Closing conserves customers: removing the live rival and crediting the
+    // delivered base can only shrink the connected total by the integration
+    // haircut, never grow it (the old frozen-quote path could materialize them).
+    let total_before = game.total_connected_customers();
+    game.apply_decision(Decision::Acquire {
+        competitor_index: 0,
+    })
+    .unwrap();
+    assert!(game.total_connected_customers() <= total_before + 0.01);
 }
 
 #[test]
