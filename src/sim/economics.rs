@@ -310,10 +310,19 @@ pub(super) fn positive_amount(amount: f64, label: &str) -> Result<f64, String> {
 }
 
 pub fn money(value: f64) -> String {
-    if value.abs() >= 1_000.0 {
-        format!("${:.1}k", value / 1_000.0)
+    // Format the magnitude, then keep any sign in front of the dollar mark so
+    // negative figures read as "-$5.0k" rather than "$-5.0k". Guarding on the
+    // formatted body means a tiny negative value rounds to "$0", never "-$0".
+    let magnitude = value.abs();
+    let body = if magnitude >= 1_000.0 {
+        format!("${:.1}k", magnitude / 1_000.0)
     } else {
-        format!("${value:.0}")
+        format!("${magnitude:.0}")
+    };
+    if value < 0.0 && body != "$0" {
+        format!("-{body}")
+    } else {
+        body
     }
 }
 

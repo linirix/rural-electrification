@@ -2016,11 +2016,36 @@ impl Game {
     }
 
     pub fn acquisition_terms(&self, competitor_index: usize) -> Option<AcquisitionTerms> {
-        if let Some(report) = self.active_diligence_report(competitor_index) {
-            return Some(self.terms_with_current_financing_context(report.quoted_terms.clone()));
-        }
+        let live = self.current_acquisition_terms(competitor_index)?;
+        let Some(report) = self.active_diligence_report(competitor_index) else {
+            return Some(live);
+        };
 
-        self.current_acquisition_terms(competitor_index)
+        // Diligence locks the negotiated financial terms (price and how the deal
+        // is financed) for the window, but the company is still delivered as it
+        // stands at close: live customers, capacity, and asset base. Freezing the
+        // delivered customer count while the live rival is removed from the
+        // market would leak customers out of (or into) the connected total and
+        // distort market share, the central scored metric.
+        let quoted = &report.quoted_terms;
+        let post_debt = self.player.debt + quoted.assumed_debt;
+        let post_asset_base = self.player.asset_base + live.acquired_asset_base;
+        Some(AcquisitionTerms {
+            price: quoted.price,
+            absorbed_cash: quoted.absorbed_cash,
+            assumed_debt: quoted.assumed_debt,
+            net_cash_cost: quoted.net_cash_cost,
+            public_interest_concession: quoted.public_interest_concession,
+            acquired_customers: live.acquired_customers,
+            acquired_generation_capacity_mwh: live.acquired_generation_capacity_mwh,
+            acquired_distribution_capacity: live.acquired_distribution_capacity,
+            acquired_asset_base: live.acquired_asset_base,
+            post_market_share: live.post_market_share,
+            post_cash: self.player.cash - quoted.price + quoted.absorbed_cash,
+            post_debt,
+            post_asset_base,
+            post_debt_to_assets: post_debt / post_asset_base.max(1.0),
+        })
     }
 
     fn active_diligence_report(&self, competitor_index: usize) -> Option<&DiligenceReport> {
@@ -2099,17 +2124,6 @@ impl Game {
             post_asset_base,
             post_debt_to_assets,
         })
-    }
-
-    fn terms_with_current_financing_context(
-        &self,
-        mut terms: AcquisitionTerms,
-    ) -> AcquisitionTerms {
-        terms.post_cash = self.player.cash - terms.price + terms.absorbed_cash;
-        terms.post_debt = self.player.debt + terms.assumed_debt;
-        terms.post_asset_base = self.player.asset_base + terms.acquired_asset_base;
-        terms.post_debt_to_assets = terms.post_debt / terms.post_asset_base.max(1.0);
-        terms
     }
 
     fn require_cash(&self, amount: f64) -> Result<(), String> {
@@ -3445,7 +3459,13 @@ impl Rng {
     }
 
     fn next_index(&mut self, len: usize) -> usize {
-        (self.next_u64() as usize) % len.max(1)
+        // Derive the index from `next_f64`, which draws from the high 53 bits.
+        // Taking `% len` of the raw LCG output would use the low bits, whose
+        // period is only 2^k and would bias index selection (e.g. the utility
+        // chosen for an equipment fire). Consumes exactly one `next_u64` call,
+        // so the deterministic stream stays aligned with the prior behaviour.
+        let len = len.max(1);
+        ((self.next_f64() * len as f64) as usize).min(len - 1)
     }
 
     fn chance(&mut self, probability: f64) -> bool {
