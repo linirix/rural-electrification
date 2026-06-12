@@ -60,7 +60,7 @@ pub(super) fn start_screen_command_lines(game: &Game) -> Vec<String> {
         ),
         start_screen_command_line("marketing / maint", "growth; reliability"),
         start_screen_command_line("hire / fire", "automate marketing or upkeep"),
-        start_screen_command_line("capital", "debt, equity, buybacks"),
+        start_screen_command_line("borrow / issue", "debt, equity, buybacks"),
         start_screen_command_line("rivals / board", "competitors; objectives"),
         start_screen_command_line("save / load", "keep long campaigns"),
         start_screen_command_line("sandbox", "disable board reviews"),

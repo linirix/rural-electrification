@@ -10,6 +10,26 @@ use super::screens::*;
 use super::start::*;
 use super::*;
 
+/// Removes ANSI CSI sequences so assertions can span styled segments the way
+/// a player reads them (raw strings hide visible adjacency behind the codes).
+fn strip_ansi(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' && matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for code in chars.by_ref() {
+                if code.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            result.push(character);
+        }
+    }
+    result
+}
+
 fn unique_test_save_dir(label: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -473,6 +493,89 @@ fn start_screen_mentions_objectives_and_core_commands() {
     assert!(text.contains("Press Return"));
     assert!(text.contains("Report -> Rivals -> Board -> Help"));
     assert!(text.contains("opened by command"));
+    // Every advertised verb must parse as a real command; "capital" was a
+    // category label that read as a command and errored when typed.
+    assert!(!text.contains("capital"));
+    assert!(text.contains("borrow / issue"));
+    assert!(is_known_command("borrow"));
+    assert!(is_known_command("issue"));
+}
+
+#[test]
+fn dashboard_event_slot_prefers_player_crisis_over_rival_noise() {
+    let events = vec![
+        "Core Line Energy expanded generation and distribution capacity.".to_string(),
+        "Your sales and service teams captured 8 new connections.".to_string(),
+        "Overloaded generation left 33% of demand unmet and hurt public confidence.".to_string(),
+    ];
+    assert!(
+        most_urgent_event(&events)
+            .expect("events present")
+            .contains("Overloaded")
+    );
+
+    // Without a crisis, player operations beat rival routine moves; among
+    // equals the earliest log entry keeps the slot.
+    let routine = vec![
+        "Core Line Energy expanded generation and distribution capacity.".to_string(),
+        "Your sales and service teams captured 8 new connections.".to_string(),
+    ];
+    assert!(
+        most_urgent_event(&routine)
+            .expect("events present")
+            .contains("captured")
+    );
+    assert_eq!(most_urgent_event(&[]), None);
+}
+
+#[test]
+fn signals_escalate_negative_firm_reserve_and_prescribe_generation() {
+    let mut game = Game::with_seed(120);
+    game.player.customers = 800.0;
+    game.player.generation_capacity_mwh = 70.0;
+    game.player.reliability = 0.60;
+
+    let joined = signal_lines(&game).join("\n");
+
+    assert!(joined.contains("demand exceeds firm capacity"));
+    assert!(joined.contains("overloaded - build generation"));
+    assert!(!joined.contains("fund maintenance"));
+}
+
+#[test]
+fn signals_prescribe_maintenance_when_wear_drives_low_reliability() {
+    let mut game = Game::with_seed(120);
+    game.player.reliability = 0.60;
+
+    let joined = signal_lines(&game).join("\n");
+
+    assert!(joined.contains("fund maintenance"));
+    assert!(!joined.contains("demand exceeds firm capacity"));
+}
+
+#[test]
+fn milestone_panel_tracks_active_era_targets() {
+    let mut game = Game::with_seed(118);
+    let pre = strip_ansi(&milestone_snapshot_lines(&game).join(" "));
+    assert!(pre.contains("/45%"));
+
+    game.review_completed = true;
+    let post = strip_ansi(&milestone_snapshot_lines(&game).join(" "));
+    // After the Y5 review, the panel grades against the Y10 mandate targets,
+    // matching the scorecard, and the era label reads cleanly.
+    assert!(post.contains("/58%"));
+    assert!(!post.contains("/45%"));
+    assert!(post.contains("Y5 review complete"));
+    assert!(!post.contains("review review"));
+}
+
+#[test]
+fn operations_panel_labels_firm_reserve_with_units() {
+    let game = Game::with_seed(7);
+    let joined = operation_lines(&game).join(" ");
+
+    assert!(joined.contains("Firm reserve"));
+    assert!(joined.contains("MWh"));
 }
 
 #[test]

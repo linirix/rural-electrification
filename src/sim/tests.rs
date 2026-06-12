@@ -1509,7 +1509,7 @@ fn year_two_board_checkpoint_penalizes_low_share() {
 }
 
 #[test]
-fn year_two_board_checkpoint_ignores_adequate_share() {
+fn year_two_board_checkpoint_acknowledges_adequate_share_without_penalty() {
     let mut game = Game::with_seed(55);
     game.quarter = BOARD_CHECKPOINT_QUARTER;
     game.player.customers = 800.0;
@@ -1524,7 +1524,99 @@ fn year_two_board_checkpoint_ignores_adequate_share() {
 
     assert!((game.player.reputation - 70.0).abs() < 0.001);
     assert_eq!(game.equity_market_fatigue, 0.0);
-    assert!(events.is_empty());
+    // A pass is acknowledged rather than silent, but only at the checkpoint
+    // quarter itself.
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("checkpoint passed"))
+    );
+
+    let mut off_quarter_events = Vec::new();
+    game.quarter = BOARD_CHECKPOINT_QUARTER + 1;
+    game.apply_board_checkpoint(&mut off_quarter_events);
+    assert!(off_quarter_events.is_empty());
+}
+
+#[test]
+fn crisis_attributions_lead_the_quarter_explanation() {
+    let finances = FirmFinances {
+        revenue: 18_900.0,
+        operating_cost: 10_700.0,
+        interest: 404.0,
+        profit: 7_800.0,
+        served_mwh: 180.0,
+        unmet_demand_ratio: 0.33,
+    };
+    let attributions = quarter_attributions(AttributionContext {
+        starting: PointInTime {
+            customers: 1_160.0,
+            market_share: 0.34,
+            total_connected: 3_400.0,
+            reliability: 0.84,
+            headroom: 0.0,
+        },
+        ending: PointInTime {
+            customers: 1_152.0,
+            market_share: 0.32,
+            total_connected: 3_550.0,
+            reliability: 0.75,
+            headroom: 0.0,
+        },
+        lost_customer_rate: 0.0165,
+        rate_gap_to_rivals: 0.1,
+        finances: &finances,
+        active_shocks: &[],
+    });
+
+    // Severe unserved demand and the reliability collapse it causes outrank
+    // the routine share/churn/margin lines, and the prescription names
+    // generation, not maintenance, as the cure for overload.
+    assert!(attributions[0].contains("Unserved demand"));
+    assert!(attributions[1].contains("Reliability slipped"));
+    assert!(attributions[1].contains("generation capacity"));
+    assert!(!attributions[1].contains("maintenance"));
+}
+
+#[test]
+fn routine_attributions_keep_share_first() {
+    let finances = FirmFinances {
+        revenue: 4_700.0,
+        operating_cost: 3_300.0,
+        interest: 354.0,
+        profit: 961.0,
+        served_mwh: 40.0,
+        unmet_demand_ratio: 0.0,
+    };
+    let attributions = quarter_attributions(AttributionContext {
+        starting: PointInTime {
+            customers: 157.0,
+            market_share: 0.22,
+            total_connected: 720.0,
+            reliability: 0.85,
+            headroom: 120.0,
+        },
+        ending: PointInTime {
+            customers: 216.0,
+            market_share: 0.23,
+            total_connected: 930.0,
+            reliability: 0.84,
+            headroom: 67.0,
+        },
+        lost_customer_rate: 0.0113,
+        rate_gap_to_rivals: 0.2,
+        finances: &finances,
+        active_shocks: &[],
+    });
+
+    assert!(attributions[0].starts_with("Share"));
+    assert!(attributions[1].starts_with("Churn"));
+    // A routine 1-pt wear slip keeps the maintenance prescription.
+    assert!(
+        attributions
+            .iter()
+            .any(|line| line.contains("maintenance spending"))
+    );
 }
 
 #[test]

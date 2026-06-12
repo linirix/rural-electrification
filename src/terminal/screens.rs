@@ -269,7 +269,7 @@ pub(super) fn last_quarter_lines(game: &Game) -> Vec<String> {
         lines.push(format!("{} no unusual operating driver", muted("Driver")));
     }
 
-    if let Some(event) = report.events.first() {
+    if let Some(event) = most_urgent_event(&report.events) {
         lines.extend(dashboard_note_lines("Event", event, 2));
     } else {
         lines.push(format!("{} none", muted("Events")));
@@ -318,6 +318,70 @@ fn dashboard_pair_content_width() -> usize {
     paired_column_widths(dashboard_width()).0.saturating_sub(4)
 }
 
+/// Ranks a quarter event for the dashboard's single visible event slot.
+///
+/// The report screen keeps the full chronological log; this ranking only
+/// decides which one event the dashboard surfaces. Without it, rival routine
+/// moves (pushed earlier in the quarter than settlement) win the slot even in
+/// quarters where the player's own operations are in crisis.
+fn dashboard_event_priority(event: &str) -> u8 {
+    const PLAYER_CRISIS: [&str; 10] = [
+        "Overloaded generation",
+        "Cash crunch",
+        "Below-cost pricing",
+        "Acquisition stress forced",
+        "Lenders tightened acquisition covenants",
+        "Board confidence weakened",
+        "equipment fire at Metro",
+        "Rates above public tolerance",
+        "Acquisition integration strained",
+        "Regional expansion is absorbing",
+    ];
+    const MARKET_SHIFT_OR_MILESTONE: [&str; 9] = [
+        "rate freeze",
+        "regional slowdown",
+        "surge in industrial demand",
+        "costs spiked",
+        "Input costs moved",
+        "Public rate tolerance",
+        "Credit markets",
+        "Demand conditions",
+        "checkpoint passed",
+    ];
+    const RIVAL_ROUTINE: [&str; 9] = [
+        "expanded generation and distribution capacity",
+        "cut rates to",
+        "matched Metro's price move",
+        "raised rates to",
+        "launched a retention campaign",
+        "answered Metro's marketing push",
+        "raised debt to fund a counter-expansion",
+        "arranged financing after Metro",
+        "rival generation offline",
+    ];
+
+    if PLAYER_CRISIS.iter().any(|pattern| event.contains(pattern)) {
+        0
+    } else if MARKET_SHIFT_OR_MILESTONE
+        .iter()
+        .any(|pattern| event.contains(pattern))
+    {
+        1
+    } else if RIVAL_ROUTINE.iter().any(|pattern| event.contains(pattern)) {
+        3
+    } else {
+        2
+    }
+}
+
+pub(super) fn most_urgent_event(events: &[String]) -> Option<&String> {
+    events
+        .iter()
+        .enumerate()
+        .min_by_key(|(index, event)| (dashboard_event_priority(event), *index))
+        .map(|(_, event)| event)
+}
+
 fn report_margin(report: &QuarterReport) -> f64 {
     if report.revenue > 0.0 {
         report.profit / report.revenue * 100.0
@@ -341,18 +405,24 @@ pub(super) fn milestone_snapshot_lines(game: &Game) -> Vec<String> {
             muted("Next"),
             styled(BOLD, next.label)
         ),
-        format!(
-            "{} {:.0}/{:.0}% | {} {:.0}/{:.0}% | {} {:.0}/{:.0}%",
-            muted("share"),
-            game.market_share() * 100.0,
-            SHARE_TARGET * 100.0,
-            muted("reliability"),
-            game.player.reliability * 100.0,
-            RELIABILITY_TARGET * 100.0,
-            muted("debt/assets"),
-            game.player.debt_to_assets() * 100.0,
-            LEVERAGE_LIMIT * 100.0
-        ),
+        {
+            // Compare against the targets of the active era: Y5 review targets
+            // before the review, Y10 mandate targets after, matching the
+            // scorecard so the two panels never show different goalposts.
+            let targets = scorecard_review_targets(game);
+            format!(
+                "{} {:.0}/{:.0}% | {} {:.0}/{:.0}% | {} {:.0}/{:.0}%",
+                muted("share"),
+                game.market_share() * 100.0,
+                targets.share * 100.0,
+                muted("reliability"),
+                game.player.reliability * 100.0,
+                targets.reliability * 100.0,
+                muted("debt/assets"),
+                game.player.debt_to_assets() * 100.0,
+                targets.leverage * 100.0
+            )
+        },
         format!(
             "{} {}   {} {}",
             muted("Rate support"),
@@ -744,7 +814,9 @@ fn manager_tone(active: bool) -> &'static str {
 
 pub(super) fn quarters_remaining_label(game: &Game) -> String {
     if game.review_completed {
-        return "review complete".to_string();
+        // The caller prefixes this with the row label "Y5 review", so the
+        // status must not repeat the word ("Y5 review review complete").
+        return "complete".to_string();
     }
 
     let remaining = game.campaign_quarters.saturating_sub(game.quarter);
@@ -910,10 +982,10 @@ pub(super) fn operation_lines(game: &Game) -> Vec<String> {
         ),
         format!(
             "{} {}   {} {}",
-            muted("Firm"),
+            muted("Firm reserve"),
             styled(
                 reserve_tone(firm_generation_reserve),
-                format!("{:+.0}", firm_generation_reserve)
+                format!("{:+.0} MWh", firm_generation_reserve)
             ),
             muted("Limit"),
             styled(
@@ -1186,7 +1258,19 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
             signal_line("Capacity", GREEN, "growth headroom available"),
         );
     }
-    if firm_generation_reserve < 15.0 {
+    if firm_generation_reserve < 0.0 {
+        // A negative firm reserve is the reliability death spiral in motion:
+        // unmet demand erodes reliability, which cuts firm capacity further.
+        // "Thin" radically undersells it, so escalate above the other signals.
+        push_line(
+            90,
+            signal_line(
+                "Generation",
+                BOLD_RED,
+                "demand exceeds firm capacity; reliability eroding",
+            ),
+        );
+    } else if firm_generation_reserve < 15.0 {
         push_line(
             82,
             signal_line(
@@ -1253,10 +1337,14 @@ pub(super) fn signal_lines(game: &Game) -> Vec<String> {
     if game.player.reliability < 0.50 {
         push_line(91, signal_line("Reliability", RED, "market access at risk"));
     } else if game.player.reliability < 0.74 {
-        push_line(
-            78,
-            signal_line("Reliability", RED, "below target; fund maintenance"),
-        );
+        // Prescribe by cause: maintenance counters wear, but when demand
+        // exceeds firm capacity only added generation stops the erosion.
+        let prescription = if firm_generation_reserve < 0.0 {
+            "below target; overloaded - build generation"
+        } else {
+            "below target; fund maintenance"
+        };
+        push_line(78, signal_line("Reliability", RED, prescription));
     } else if game.player.reliability > 0.88 {
         push_line(
             25,
@@ -1345,7 +1433,7 @@ pub(super) fn command_footer_lines(game: &Game) -> Vec<String> {
         lines.push(action_line("expand", adjacent_expansion_footer(game)));
     }
     lines.push(action_line(
-        "rate | capital",
+        "rate | borrow",
         if dashboard_width() >= 112 {
             format!(
                 "rate {:.1} near market; borrow max {} at {}; issue/buyback/dividend",

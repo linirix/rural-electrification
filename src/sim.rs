@@ -2285,11 +2285,17 @@ impl Game {
     }
 
     fn apply_board_checkpoint(&mut self, events: &mut Vec<String>) {
-        if self.sandbox_mode
-            || self.quarter != BOARD_CHECKPOINT_QUARTER
-            || self.review_completed
-            || self.market_share() >= BOARD_CHECKPOINT_SHARE_TARGET
-        {
+        if self.sandbox_mode || self.quarter != BOARD_CHECKPOINT_QUARTER || self.review_completed {
+            return;
+        }
+
+        let share = self.market_share();
+        if share >= BOARD_CHECKPOINT_SHARE_TARGET {
+            events.push(format!(
+                "The board's Year 2 checkpoint passed: {:.0}% market share met the {:.0}% goal.",
+                share * 100.0,
+                BOARD_CHECKPOINT_SHARE_TARGET * 100.0
+            ));
             return;
         }
 
